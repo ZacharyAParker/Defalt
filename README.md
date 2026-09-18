@@ -14,7 +14,8 @@ it runs locally on Windows
 - Two decks with waveforms, cue points, tempo reset, pitch-preserving key lock,
   three-band EQ, filters, and stem controls.
 - Automatic transitions with beat matching, bass handoffs, filter sweeps, and
-  echo. Timing and effects are configurable in **Mix settings**.
+  echo. The planner checks the overlap for competing vocals, bass, and quiet
+  gaps. Timing and effects are configurable in **Mix settings**.
 - Radio that uses those same decks. Load songs first and it plays them before
   continuing the station. Playback keeps going when the window is minimized.
 - Transitions prepared ahead of time, with mix points marked on the decks.
@@ -83,6 +84,10 @@ duration into the request
 the station considers genre, artist, musical compatibility, and available
 lyric text when choosing songs. those are preferences, so it can still change
 direction. requests take priority over automatic picks
+
+it now looks three songs ahead by default, adjustable from one to four. try
+**wave** under energy direction if you want it to build for a few songs, then
+ease back. that uses measured loudness as a rough clue; it isn't a mood detector
 
 - [Radio controls and mixing](docs/RADIO.md)
 - [Requests, queue behavior, and API](docs/REQUESTS.md)

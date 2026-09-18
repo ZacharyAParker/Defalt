@@ -85,6 +85,13 @@ transitions:
   mid_song_cues: true
   max_entry_skip_fraction: 0.25
   adaptive_eq_fx: true
+  overlap_scoring: true
+  vocal_collision_weight: 1.0
+  energy_dip_weight: 0.6
+  bass_collision_weight: 0.5
+  vocal_handoff: true
+  vocal_eq_depth: 3.0
+  echo_in_blends: true
   feedback_enabled: true
   feedback_max_adjustment: 0.005
   feedback_tolerance_ms: 30.0
@@ -280,6 +287,14 @@ selection:
     explore_chance: 0.18
     fatigue_after: 4
     history_size: 10
+    lookahead_enabled: true
+    lookahead_depth: 3
+    lookahead_weight: 0.3
+    lookahead_candidates: 16
+    energy_direction: follow
+    energy_weight: 0.3
+    energy_arc_tracks: 3
+    energy_step_lufs: 2.0
   # How many tracks the station keeps queued and downloaded ahead of itself.
   # This is also how much queue there is to reorder, so a larger number gives
   # you more to work with at the cost of more disk held at once. Tracks you

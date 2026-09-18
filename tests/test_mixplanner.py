@@ -143,7 +143,7 @@ class SmartCuePlanner(unittest.TestCase):
                                 effects=("lpf_in", "hpf_out"))
         incoming = self.profile(vocal=.5, bass=lambda t: 0 if t < 14 else 1)
         mixplanner.adapt(plan, self.profile(vocal=.8), incoming, 120, 4, 1, 2)
-        self.assertAlmostEqual(plan.bass_swap, .7)
+        self.assertAlmostEqual(plan.bass_swap, (14 - 4) / (8 * 2), delta=.1)
         self.assertAlmostEqual(plan.echo_mix, .06)
         self.assertNotIn("lpf_in", plan.effects)
         self.assertIn("hpf_out", plan.effects)

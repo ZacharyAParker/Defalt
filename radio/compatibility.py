@@ -37,7 +37,8 @@ _DEFAULT_SETTINGS = {
     "lyrics_weight": .45, "mix_weight": .35, "energy_weight": .3,
     "energy_direction": "follow", "fatigue_after": 4, "variety_strength": .65,
     "explore_chance": .18, "history_size": 10, "lookahead_enabled": True,
-    "lookahead_weight": .3, "lookahead_candidates": 16,
+    "lookahead_weight": .3, "lookahead_candidates": 16, "lookahead_depth": 3,
+    "energy_arc_tracks": 3, "energy_step_lufs": 2.0,
 }
 
 
@@ -155,7 +156,45 @@ def mix_fit(a: Any, b: Any) -> float | None:
     return sum(values) / len(values) if values else None
 
 
-def energy_fit(a: Any, b: Any, settings: dict | None = None) -> float | None:
+def energy_target(history: list[dict], settings: dict) -> tuple[float, str]:
+    """A bounded loudness trajectory, recomputed for each hypothetical route.
+
+    Wave changes direction after a measured rise/fall rather than counting
+    songs with missing measurements as a completed arc. It never labels mood.
+    """
+    direction = settings.get("energy_direction", "follow")
+    step = setting("energy_step_lufs", 2, .5, 4, settings)
+    if direction != "wave":
+        return {"build": step, "ease": -step}.get(direction, 0), direction
+    span = int(setting("energy_arc_tracks", 3, 2, 6, settings))
+    measured = []
+    for track in history[-(span + 1):]:
+        try:
+            value = float(db.field(track, "lufs"))
+        except (TypeError, ValueError):
+            return 0.0, "wave awaiting loudness history"
+        if not math.isfinite(value):
+            return 0.0, "wave awaiting loudness history"
+        measured.append(value)
+    if len(measured) < 2:
+        return 0.0, "wave awaiting loudness history"
+    changes = [b - a for a, b in zip(measured, measured[1:])]
+    moving = [delta for delta in changes if abs(delta) >= .25]
+    if not moving:
+        return step, "wave building from a plateau"
+    sign = 1 if moving[-1] > 0 else -1
+    run = 0
+    for delta in reversed(changes):
+        if delta * sign < .25:
+            break
+        run += 1
+    if run >= span:
+        sign *= -1
+    return step * sign, "wave building" if sign > 0 else "wave easing"
+
+
+def energy_fit(a: Any, b: Any, settings: dict | None = None,
+               history: list[dict] | None = None) -> float | None:
     """Configured loudness trajectory; LUFS is only a rough energy clue."""
     try:
         outgoing, incoming = float(db.field(a, "lufs")), float(db.field(b, "lufs"))
@@ -163,10 +202,10 @@ def energy_fit(a: Any, b: Any, settings: dict | None = None) -> float | None:
         return None
     if not all(math.isfinite(value) for value in (outgoing, incoming)):
         return None
-    direction = str(settings.get("energy_direction", "follow") if settings is not None
-                    else config.station.get("selection.compatibility.energy_direction", "follow"))
+    settings = snapshot() if settings is None else settings
+    direction = str(settings.get("energy_direction", "follow"))
     difference = incoming - outgoing
-    target = {"follow": 0, "build": 2, "ease": -2}.get(direction, 0)
+    target, _ = energy_target(history or [], settings)
     distance = abs(abs(difference) - 4) if direction == "surprise" else abs(difference - target)
     return max(0.0, 1.0 - distance / 8.0)
 
@@ -188,15 +227,19 @@ def evaluate(track: dict, previous: dict | None, history: list[dict],
         artist = (1.0 if left & right else .5) if left and right else None
         lyric, themes = lyrics_fit(previous, track)
         mix = mix_fit(previous, track)
-        energy = energy_fit(previous, track, settings)
-        evidence = {"genre": genre, "artist": artist, "lyrics": lyric, "mix": mix, "energy": energy}
-        defaults = {"genre": .65, "artist": .25, "lyrics": .45, "mix": .35, "energy": .3}
+        evidence = {"genre": genre, "artist": artist, "lyrics": lyric, "mix": mix}
+        defaults = {"genre": .65, "artist": .25, "lyrics": .45, "mix": .35}
         signal = sum(setting(f"{name}_weight", defaults[name], 0, 2, settings) * (value - .5)
                      for name, value in evidence.items() if value is not None)
-        facts = genre, left, right, lyric, themes, mix, energy, evidence, signal
+        facts = genre, left, right, lyric, themes, mix, evidence, signal
         if pair_cache is not None:
             pair_cache[pair_key] = facts
-    genre, left, right, lyric, themes, mix, energy, evidence, signal = facts
+    genre, left, right, lyric, themes, mix, evidence, signal = facts
+    # Energy depends on the route history, so it must not enter the pair cache.
+    energy = energy_fit(previous, track, settings, history)
+    evidence = {**evidence, "energy": energy}
+    if energy is not None:
+        signal += setting("energy_weight", .3, 0, 2, settings) * (energy - .5)
 
     # A sustained comparable run gradually changes the goal from continuity
     # toward contrast. Unknown tags never count as 'same vibe'.
@@ -233,7 +276,7 @@ def evaluate(track: dict, previous: dict | None, history: list[dict],
     if mix is not None and mix >= .7:
         reasons.append("compatible tempo/key/level evidence")
     if energy is not None and setting("energy_weight", .3, settings=settings) > 0:
-        direction = settings.get("energy_direction", "follow")
+        _, direction = energy_target(history, settings)
         reasons.append(f"{direction} energy (loudness clue)")
     if fatigue:
         reasons.append("variety after a similar run")
@@ -247,25 +290,31 @@ def evaluate(track: dict, previous: dict | None, history: list[dict],
 
 def lookahead(scored: list[tuple[float, dict]], history: list[dict],
               settings: dict | None = None) -> list[tuple[float, dict]]:
-    """Soft two-song route score over a bounded beam, with no database work.
+    """Soft multi-song route score over a bounded beam, with no database work.
 
     Half the shortlist follows taste scores; half explores the remaining
     catalogue. Tracks outside it retain their full original sampling weight.
     A route is a feasibility hint, never a reservation or queue rewrite.
     """
     settings = snapshot() if settings is None else settings
-    if (len(scored) < 3 or not settings.get("enabled", True)
+    if (len(scored) < 2 or not settings.get("enabled", True)
             or not settings.get("lookahead_enabled", True)):
         return scored
     strength = setting("lookahead_weight", .3, settings=settings)
     if strength <= 0:
         return scored
     limit = int(setting("lookahead_candidates", 16, 4, 32, settings))
+    depth = int(setting("lookahead_depth", 3, 1, 4, settings))
     ranked = sorted(scored, key=lambda entry: entry[0], reverse=True)
     if len(ranked) > limit:
         keep = limit // 2
         ranked = ranked[:keep] + random.sample(ranked[keep:], limit - keep)
     shortlist = [track for _, track in ranked]
+    strongest = max(weight for weight, _ in ranked)
+    # A route through songs the listener is unlikely to want is a weak bridge.
+    # Retain the taste/vibe weights already calculated for this selection.
+    preference = {track["key"]: max(-.35, .25 * math.log(max(.001, weight) / max(.001, strongest)))
+                  for weight, track in ranked}
     separation = max(0, int(settings.get("artist_separation", 6) or 0))
 
     def separated(candidate: dict, context: list[dict]) -> bool:
@@ -279,23 +328,25 @@ def lookahead(scored: list[tuple[float, dict]], history: list[dict],
     pair_cache = {}
     for current in shortlist:
         context = history + [current]
-        # Rank one step first, then inspect two-step routes only from the
-        # strongest three bridges. Work is bounded even for huge libraries.
-        first_steps = []
-        for following in shortlist:
-            if following["key"] == current["key"] or not separated(following, context):
-                continue
-            score = math.log(evaluate(following, current, context, settings, pair_cache, False)["multiplier"])
-            first_steps.append((score, following))
-        first_steps.sort(key=lambda entry: entry[0], reverse=True)
-        routes = []
-        for first_score, following in first_steps[:3]:
-            for final in shortlist:
-                if (final["key"] in {current["key"], following["key"]}
-                        or not separated(final, context + [following])):
-                    continue
-                second_score = math.log(evaluate(final, following, context + [following], settings, pair_cache, False)["multiplier"])
-                routes.append(((first_score + second_score) / 2, following, final))
+        routes = [(0.0, [])]
+        for _ in range(min(depth, len(shortlist) - 1)):
+            expanded = []
+            for cumulative, route in routes:
+                previous = route[-1] if route else current
+                route_context = context + route
+                used = {current["key"], *(t["key"] for t in route)}
+                for following in shortlist:
+                    if following["key"] in used or not separated(following, route_context):
+                        continue
+                    score = math.log(evaluate(following, previous, route_context,
+                                              settings, pair_cache, False)["multiplier"])
+                    score += preference[following["key"]]
+                    expanded.append((cumulative + score, route + [following]))
+            if not expanded:
+                break
+            expanded.sort(key=lambda entry: entry[0], reverse=True)
+            routes = expanded[:3]
+        routes = [(score / len(route), route) for score, route in routes if route]
         if not routes:
             continue
         routes.sort(key=lambda entry: entry[0], reverse=True)
@@ -305,11 +356,12 @@ def lookahead(scored: list[tuple[float, dict]], history: list[dict],
         best = routes[0]
         explanation = dict(current.get("selection") or {})
         explanation.update(lookahead=[{"key": t["key"], "title": t.get("title"),
-                                      "artist": t.get("artist")} for t in best[1:]],
+                                      "artist": t.get("artist")} for t in best[1]],
                            lookahead_multiplier=adjustment)
+        label = "two-song" if len(best[1]) == 2 else f"{len(best[1])}-song"
         explanation["reason"] = (explanation.get("reason", "Taste and rotation")
-                                 + "; two-song outlook: "
-                                 + " → ".join(str(t.get("title") or t["key"]) for t in best[1:]))
+                                 + f"; {label} outlook: "
+                                 + " → ".join(str(t.get("title") or t["key"]) for t in best[1]))
         updates[current["key"]] = (adjustment, explanation)
     result = []
     for weight, track in scored:

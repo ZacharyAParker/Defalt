@@ -97,12 +97,7 @@ fn mix_settings(app: &mut Defalt, ctx: &egui::Context) {
                             field["value"] = value.into();
                         },
                         kind => {
-                            let percent = matches!(key.as_str(), "transitions.tempo_match_limit" | "transitions.tempo_tolerance"
-                                | "transitions.slam_distance" | "transitions.eq_strength" | "transitions.echo_mix"
-                                | "transitions.echo_feedback" | "ducking.target_gain"
-                                | "transitions.minimum_play_fraction" | "transitions.max_entry_skip_fraction"
-                                | "hosts.song_comment_chance" | "transitions.feedback_max_adjustment")
-                                || (key.starts_with("selection.compatibility.") && field["kind"] == "number");
+                            let percent = mix_percent(&key, kind);
                             let scale = if percent { 100.0 } else { 1.0 };
                             let mut value = field["value"].as_f64().unwrap_or(0.0);
                             value *= scale;
@@ -133,14 +128,26 @@ fn mix_settings(app: &mut Defalt, ctx: &egui::Context) {
     app.mix_settings_open = open;
 }
 
+fn mix_percent(key: &str, kind: &str) -> bool {
+    matches!(key, "transitions.tempo_match_limit" | "transitions.tempo_tolerance"
+        | "transitions.slam_distance" | "transitions.eq_strength" | "transitions.echo_mix"
+        | "transitions.echo_feedback" | "ducking.target_gain"
+        | "transitions.minimum_play_fraction" | "transitions.max_entry_skip_fraction"
+        | "hosts.song_comment_chance" | "transitions.feedback_max_adjustment")
+        || (key.starts_with("selection.compatibility.") && kind == "number"
+            && key != "selection.compatibility.energy_step_lufs")
+}
+
 fn mix_group(key: &str) -> &'static str {
     if key.starts_with("selection.") { return "Song choice and variety"; }
     if key.starts_with("ducking.") || key.starts_with("tts.") || key.starts_with("hosts.") { return "Hosts and speech"; }
     if key.starts_with("transitions.eq_") || key.starts_with("transitions.echo_")
+        || (key.starts_with("transitions.vocal_") && key != "transitions.vocal_collision_weight")
         || matches!(key, "transitions.adaptive_eq_fx" | "transitions.filters_enabled" | "transitions.lpf_floor_hz" | "transitions.hpf_ceiling_hz") {
         return "EQ and effects";
     }
     if key.starts_with("transitions.feedback_")
+        || matches!(key, "transitions.overlap_scoring" | "transitions.vocal_collision_weight" | "transitions.energy_dip_weight" | "transitions.bass_collision_weight")
         || matches!(key, "transitions.smart_cues" | "transitions.exit_search_seconds" | "transitions.max_intro_skip" | "transitions.minimum_play_fraction" | "transitions.mid_song_cues" | "transitions.max_entry_skip_fraction" | "transitions.prepare_tracks_ahead" | "skip.lead_in") {
         return "Musical timing and playback";
     }

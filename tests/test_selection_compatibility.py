@@ -20,6 +20,7 @@ def record(key, genre="", artist=None, lyrics="", **extra):
 class CompatibilityTests(unittest.TestCase):
     def setUp(self):
         self.settings = {"selection.compatibility.explore_chance": 0,
+                         "selection.compatibility.lookahead_depth": 2,
                          "selection.artist_separation": 0,
                          "selection.title_separation_hours": 0}
         patcher = patch.object(config.station, "get", side_effect=lambda k, d=None: self.settings.get(k, d))
@@ -99,6 +100,58 @@ class CompatibilityTests(unittest.TestCase):
         self.assertGreater(compatibility.energy_fit(current, record("jump", lufs=-10)),
                            compatibility.energy_fit(current, current))
         self.assertIsNone(compatibility.energy_fit(current, record("unknown", genre="Metal")))
+
+    def test_wave_reverses_after_a_measured_run_and_unknown_history_stays_neutral(self):
+        settings = {"energy_direction": "wave", "energy_arc_tracks": 3, "energy_step_lufs": 2}
+        rising = [record(str(i), lufs=value) for i, value in enumerate([-20, -18, -16, -14])]
+        falling = [record(str(i), lufs=value) for i, value in enumerate([-14, -16, -18, -20])]
+        self.assertEqual(compatibility.energy_target(rising, settings), (-2, "wave easing"))
+        self.assertEqual(compatibility.energy_target(falling, settings), (2, "wave building"))
+        self.assertEqual(compatibility.energy_target(rising[:2], settings), (2, "wave building"))
+        self.assertEqual(compatibility.energy_target([record("unknown")], settings)[0], 0)
+        plateau = [record(str(i), lufs=-18) for i in range(4)]
+        self.assertEqual(compatibility.energy_target(plateau, settings)[0], 2)
+
+    def test_cached_pair_does_not_reuse_energy_direction_from_another_route(self):
+        settings = {**compatibility.snapshot(), "energy_direction": "wave", "variety_strength": 0}
+        current, next_track = record("current", lufs=-14), record("next", lufs=-12)
+        rising = [record(str(i), lufs=value) for i, value in enumerate([-20, -18, -16])] + [current]
+        falling = [record(str(i), lufs=value) for i, value in enumerate([-8, -10, -12])] + [current]
+        cache = {}
+        ease = compatibility.evaluate(next_track, current, rising, settings, cache)
+        build = compatibility.evaluate(next_track, current, falling, settings, cache)
+        self.assertGreater(build["multiplier"], ease["multiplier"])
+        self.assertEqual(build, compatibility.evaluate(next_track, current, falling, settings))
+        self.assertIn("wave building", build["reason"])
+
+    def test_four_song_outlook_uses_unique_routes_and_bounded_work(self):
+        self.settings["selection.compatibility.lookahead_depth"] = 4
+        pool = [(1, record(key)) for key in "ABCDEF"]
+        preferred = {("A", "B"), ("B", "C"), ("C", "D"), ("D", "E")}
+        def score(track, previous, *_):
+            return {"multiplier": math.exp(1 if (previous["key"], track["key"]) in preferred else -1)}
+        with patch.object(compatibility, "evaluate", side_effect=score) as evaluate:
+            result = {track["key"]: (weight, track) for weight, track in compatibility.lookahead(pool, [])}
+        route = result["A"][1]["selection"]["lookahead"]
+        self.assertEqual([track["key"] for track in route], list("BCDE"))
+        self.assertLessEqual(evaluate.call_count, 6 * (5 + 3 * 3 * 4))
+        self.assertGreater(result["A"][0], result["F"][0])
+        self.assertTrue(all(weight > 0 for weight, _ in result.values()))
+        self.assertTrue(all("selection" not in track for _, track in pool))
+
+    def test_short_catalogue_uses_the_available_outlook_without_repeating_tracks(self):
+        self.settings["selection.compatibility.lookahead_depth"] = 4
+        result = compatibility.lookahead([(1, record("a")), (1, record("b"))], [])
+        for _, track in result:
+            route = track["selection"]["lookahead"]
+            self.assertEqual(len(route), 1)
+            self.assertNotEqual(route[0]["key"], track["key"])
+
+    def test_default_outlook_is_three_future_songs_and_profiles_keep_wave_preferences(self):
+        self.settings.pop("selection.compatibility.lookahead_depth")
+        self.assertEqual(compatibility.snapshot()["lookahead_depth"], 3)
+        for profile in mixconfig.PROFILES.values():
+            self.assertNotIn("selection.compatibility.energy_arc_tracks", profile)
 
     def test_lookahead_rewards_viable_two_song_routes_without_reserving_them(self):
         pool = [(1.0, record(key)) for key in "ABCD"]

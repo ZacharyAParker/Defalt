@@ -649,7 +649,7 @@ class Schedule:
                 if plan_out.echo_mix > 0:
                     bpm = float(item.meta.get("bpm") or 120) * playback.rate_at(
                         item.meta.get("rate_curve"), tail_at, item.meta.get("playback_rate", 1))
-                    item.meta["echo"] = {"start": tail_at, "end": item.duration,
+                    item.meta["echo"] = {"start": tail_at + plan_out.overlap * plan_out.echo_start, "end": item.duration,
                                          "seconds": 60 / max(40, bpm) * plan_out.echo_beats,
                                          "mix": plan_out.echo_mix, "feedback": plan_out.echo_feedback}
                 else:

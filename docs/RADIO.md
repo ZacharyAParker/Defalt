@@ -98,11 +98,37 @@ rules still work.
 
 **Song choice and variety** adds soft genre, credited-artist, embedded-lyric
 and musical compatibility weights. No genre is a gate. Repetition fatigue,
-exploration and an optional two-song outlook make room for changes in mood.
-Energy direction can follow, build, ease or surprise; loudness is only a rough
+exploration and an optional one-to-four-song outlook make room for changes in mood.
+The default looks three songs ahead and considers taste/vibe weights as well
+as the possible joins. It does not reserve those songs or replace requests.
+Energy direction can follow, build, ease, surprise or wave; loudness is only a rough
 energy clue. Missing tags or lyrics stay neutral. Hover a queue row for why it
 was picked; that explanation is historical if you later reorder the queue.
 Style profiles leave these song-choice preferences alone.
+
+**Wave** builds or eases until the configured number of consecutive measured
+changes, then favors the other direction. **Wave: songs before changing
+direction** defaults to three; **Build/ease target step** defaults to 2 LUFS.
+Missing loudness history does not count as completing an arc. Every preference
+is still a sampling weight, so a request or a change of vibe can steer the set.
+
+**Check vocals, bass and dips throughout each mix** compares simultaneous
+samples of the cached audio profile with the planned gain and EQ curves.
+Singers taking turns are treated differently from singers overlapping. The
+search also compares shorter handoffs when a long blend would leave a hole.
+The vocal, bass and dip weights are separately adjustable. These are estimates
+from coarse audio evidence, not a rendered preview or verified phrase analysis.
+
+With **Adapt bass handoff and effects to local audio**, both bass envelopes
+influence the swap point. **Make room for the incoming singer with mid EQ**
+adds a mild handoff when existing vocal stems show a clash; its default maximum
+cut is 3 dB. This is broad EQ, not stem isolation. Manual EQ holds still win.
+
+**Add late echo to sparse instrumental blends** can put a short echo on the
+back half of a fading instrumental exit. It needs known vocal-free evidence
+and room in the incoming track. Brief vocals near the exit reduce existing
+echo too. Echo level, feedback, beat length and the main enable switch still
+apply. Unknown vocal activity never enables this extra effect.
 
 **Avoid clean/censored song versions** is on by default in Song choice settings.
 Automatic rotation skips tracks labeled clean/censored in their title or album;

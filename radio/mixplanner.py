@@ -51,6 +51,49 @@ def _safe_entry(profile, offset, cue):
             or (energy is not None and energy < 0.025))
 
 
+def _options():
+    defaults = {"overlap_scoring": True, "vocal_collision_weight": 1.0,
+                "energy_dip_weight": 0.6, "bass_collision_weight": 0.5,
+                "adaptive_eq_fx": True, "vocal_handoff": True, "vocal_eq_depth": 3.0,
+                "echo_in_blends": True, "echo_enabled": True, "echo_mix": 0.18}
+    return {key: config.station.get(f"transitions.{key}", value)
+            for key, value in defaults.items()}
+
+
+def overlap_risk(plan, outgoing, incoming, out_at, cue, in_rate):
+    """Estimate audible clashes using the gain/EQ curves we will actually send.
+
+    Cached amplitudes are relative within each song, not calibrated loudness.
+    This is a bounded ranking heuristic, not an audio render or vocal detector.
+    Simultaneous samples matter: alternating singers are not a vocal clash.
+    """
+    out_auto, in_auto = transitions.render(plan, plan.overlap)
+    totals = {"vocal": [], "bass": [], "dip": []}
+    for i in range(transitions.STEPS + 1):
+        x = i / transitions.STEPS
+        t = min(plan.overlap - 1e-6, plan.overlap * x)
+        left = structure.at(outgoing, out_at(max(0.0, t)))
+        right = structure.at(incoming, cue + max(0.0, t) * in_rate)
+        a, b = out_auto.gain[i][1], in_auto.gain[i][1]
+        for field, band in (("vocal", "mid"), ("bass", "low")):
+            av, bv = left.get(field), right.get(field)
+            if av is not None and bv is not None:
+                ga = a * 10 ** (getattr(out_auto, band)[i][1] / 20)
+                gb = b * 10 ** (getattr(in_auto, band)[i][1] / 20)
+                if field == "vocal":
+                    # A mid cut cannot remove a singer's full spectrum. Never
+                    # score broad EQ as though it were isolated stem muting.
+                    ga, gb = .6 * a + .4 * ga, .6 * b + .4 * gb
+                totals[field].append(av * bv * ga * gb)
+        av, bv = left.get("energy"), right.get("energy")
+        if av is not None and bv is not None:
+            expected = (1 - x) * av + x * bv
+            actual = math.hypot(av * a, bv * b)
+            totals["dip"].append(max(0.0, expected - actual))
+    return {key: sum(values) / len(values) * plan.overlap if len(values) >= 11 else None
+            for key, values in totals.items()}
+
+
 def refine(outgoing: dict, incoming: dict, plan: transitions.Plan, *,
            out_start: float, out_offset: float, out_duration: float,
            out_rate: float, in_offset: float, in_duration: float, in_rate: float,
@@ -65,6 +108,7 @@ def refine(outgoing: dict, incoming: dict, plan: transitions.Plan, *,
     if (not out_profile or not in_profile
             or not out_profile.get("complete") or not in_profile.get("complete")):
         return baseline
+    options = _options()
 
     initial_rate = out_initial_rate or out_rate
     def source_at(wall):
@@ -109,6 +153,16 @@ def refine(outgoing: dict, incoming: dict, plan: transitions.Plan, *,
     presets = [plan.preset]
     if not forced:
         presets += [p for p in ("fade", "blend", "melt", "slam") if p != plan.preset]
+    # Settings and preset construction are invariant across cue combinations.
+    templates = {}
+    for preset in presets:
+        template = replace(plan)
+        if preset != plan.preset:
+            template.preset = preset
+            template.volume, template.eq, template.effects = transitions.preset_spec(preset)
+            template.echo_mix = 0.0
+            transitions.configured(template)
+        templates[preset] = template
 
     best = None
     count = 0
@@ -116,7 +170,7 @@ def refine(outgoing: dict, incoming: dict, plan: transitions.Plan, *,
         out_length = wall_at(end)
         for cue, entry_quality in entries:
             in_length = (in_end - cue) / in_rate
-            for scale in (1.0, 0.5):
+            for scale in ((1.0, 0.75, 0.5, 0.25) if options["overlap_scoring"] else (1.0, 0.5)):
                 # The compatibility planner already bounded beat drift and
                 # the intro. Acoustic evidence may shorten that limit, never
                 # expand it into a blend whose drums will drift apart.
@@ -158,12 +212,7 @@ def refine(outgoing: dict, incoming: dict, plan: transitions.Plan, *,
                 out_bass = _window(out_profile, out_local, end, "bass")
                 in_bass = _window(in_profile, cue, cue + overlap * in_rate, "bass")
                 for preset in presets:
-                    candidate = replace(plan, overlap=overlap)
-                    if preset != plan.preset:
-                        candidate.preset = preset
-                        candidate.volume, candidate.eq, candidate.effects = transitions.preset_spec(preset)
-                        candidate.echo_mix = 0.0
-                        transitions.configured(candidate)
+                    candidate = replace(templates[preset], overlap=overlap)
                     # Start from compatibility-based preference. Structural
                     # evidence can outweigh it, but random stylistic churn cannot.
                     score = 0.35 if preset == plan.preset else 0.0
@@ -173,10 +222,22 @@ def refine(outgoing: dict, incoming: dict, plan: transitions.Plan, *,
                     score -= 0.2 * abs(scale - 1.0)
                     if out_energy is not None and in_energy is not None:
                         score -= abs(out_energy - in_energy) * (0.3 if preset == "slam" else 0.8)
-                    if out_vocal is not None and in_vocal is not None:
+                    if options["overlap_scoring"]:
+                        preview = replace(candidate)
+                        if options["adaptive_eq_fx"]:
+                            adapt(preview, out_profile, in_profile, end, cue, out_rate, in_rate,
+                                  options=options)
+                        risk = overlap_risk(preview, out_profile, in_profile,
+                            lambda t: source_at(out_length - overlap + t), cue, in_rate)
+                        for field, setting in (("vocal", "vocal_collision_weight"),
+                                               ("bass", "bass_collision_weight"),
+                                               ("dip", "energy_dip_weight")):
+                            if risk[field] is not None:
+                                score -= risk[field] * max(0, min(2, _number(options[setting]))) * (2 if field == "vocal" else 1)
+                    elif out_vocal is not None and in_vocal is not None:
                         collision = out_vocal * in_vocal
                         score -= collision * overlap * (0.1 if preset == "slam" else 0.7)
-                    if out_bass is not None and in_bass is not None and candidate.eq == "none":
+                    if not options["overlap_scoring"] and out_bass is not None and in_bass is not None and candidate.eq == "none":
                         score -= out_bass * in_bass * (0.1 if preset == "slam" else 0.8)
                     # A long unmatched drum blend remains unsafe even if both
                     # songs happen to have sparse sections at this instant.
@@ -192,17 +253,19 @@ def refine(outgoing: dict, incoming: dict, plan: transitions.Plan, *,
         return baseline
     best.candidates = count
     best.plan.reason = (f"compared {count} cue/style options; {best.plan.preset}"
+                        + ("; checked overlap dynamics" if options["overlap_scoring"] else "")
                         + ("; earlier structural exit" if best.out_duration < out_duration - 0.01 else "")
                         + ("; structural entry cue" if best.in_offset > in_offset + 0.01 else "")
                         + f"; {plan.reason}")
     return best
 
 
-def adapt(plan, outgoing, incoming, end, cue, out_rate, in_rate):
+def adapt(plan, outgoing, incoming, end, cue, out_rate, in_rate, *, options=None):
     """Use local evidence to position bass handoff and leave room for vocals."""
     overlap = plan.overlap
     if overlap <= 0:
         return
+    options = _options() if options is None else options
     bass = [structure.at(incoming, cue + overlap * in_rate * i / 10).get("bass")
             for i in range(11)]
     if all(v is not None and math.isfinite(_number(v, math.nan)) for v in bass):
@@ -212,12 +275,50 @@ def adapt(plan, outgoing, incoming, end, cue, out_rate, in_rate):
         if top > 0.05:
             entry = next((i for i, value in enumerate(bass) if value >= top * 0.65), 5)
             plan.bass_swap = min(0.8, max(0.2, entry / 10))
+            out_bass = [structure.at(outgoing, max(0, end - overlap * out_rate)
+                                    + min(overlap * i / 10, overlap - 1e-6) * out_rate).get("bass")
+                        for i in range(11)]
+            if all(v is not None for v in out_bass):
+                preferred = plan.bass_swap if entry > 0 else 0.5
+                def cost(point):
+                    out_eq, in_eq = transitions._bass_swap(point)
+                    loss = sum(max(0.0, max(a, b) - math.hypot(
+                        a * 10 ** (out_eq(i / 10) * plan.eq_strength / 20),
+                        b * 10 ** (in_eq(i / 10) * plan.eq_strength / 20)))
+                        for i, (a, b) in enumerate(zip(out_bass, bass))) / 11
+                    return loss + 0.08 * abs(point - preferred)
+                plan.bass_swap = min((i / 20 for i in range(4, 17)), key=cost)
     out_vocal = _window(outgoing, end - overlap * out_rate, end, "vocal")
     in_vocal = _window(incoming, cue, cue + overlap * in_rate, "vocal")
     if out_vocal is not None and in_vocal is not None:
+        pairs = [(i / 20,
+                  structure.at(outgoing, end - overlap * out_rate + overlap * out_rate * i / 20).get("vocal"),
+                  structure.at(incoming, cue + overlap * in_rate * i / 20).get("vocal"))
+                 for i in range(20)]
+        known = [(x, a, b) for x, a, b in pairs if a is not None and b is not None]
+        if options["vocal_handoff"] and plan.eq != "none" and any(a * b > .12 for _, a, b in known):
+            # Handoff near the strongest incoming vocal entrance, preferring
+            # a point where the outgoing voice leaves a gap.
+            points = [i / 20 for i in range(4, 17)]
+            def vocal_cost(point):
+                mismatch = sum((b if x < point else a) for x, a, b in known) / max(1, len(known))
+                return mismatch + .15 * abs(point - .5)
+            plan.vocal_swap = min(points, key=vocal_cost)
+            plan.vocal_depth = max(0, min(6, _number(options["vocal_eq_depth"], 3)))
+        if (options["echo_enabled"] and options["echo_in_blends"] and plan.echo_mix == 0
+                and plan.preset in ("fade", "blend") and len(known) == 20
+                and max(max(a, b) for _, a, b in known) < .12):
+            out_head = _window(outgoing, end - overlap * out_rate, end - overlap * out_rate * .5, "energy")
+            out_tail = _window(outgoing, end - overlap * out_rate * .25, end - 1e-6, "energy")
+            in_tail = _window(incoming, cue + overlap * in_rate * .5, cue + overlap * in_rate, "energy")
+            if (out_head is not None and out_tail is not None and in_tail is not None
+                    and .04 < out_tail < out_head * .7 and in_tail < .55):
+                plan.echo_mix = min(.18, max(0, _number(options["echo_mix"], .18)))
+                plan.echo_start = .55
         # Repeating a departing vocal under a new singer produces a clash.
-        plan.echo_mix *= max(0.0, 1.0 - max(out_vocal, in_vocal))
-        if max(out_vocal, in_vocal) > 0.35:
+        peak_voice = max([out_vocal, in_vocal] + [max(a, b) for _, a, b in known])
+        plan.echo_mix *= max(0.0, 1.0 - peak_voice)
+        if peak_voice > 0.35:
             plan.effects = tuple(effect for effect in plan.effects if not effect.endswith("_in"))
     # Unknown vocal activity is not a license for large wet effects.
     elif plan.echo_mix > 0:

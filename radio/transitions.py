@@ -56,13 +56,18 @@ class Plan:
     echo_feedback: float = 0.3
     echo_beats: float = 0.5
     bass_swap: float | None = None
+    vocal_swap: float | None = None
+    vocal_depth: float = 0.0
+    echo_start: float = 0.0
 
     def as_dict(self) -> dict[str, Any]:
         return {"preset": self.preset, "volume": self.volume, "eq": self.eq,
                 "effects": list(self.effects), "overlap": round(self.overlap, 2),
                 "reason": self.reason, "eq_strength": self.eq_strength,
                 "echo_mix": self.echo_mix, "echo_feedback": self.echo_feedback,
-                "echo_beats": self.echo_beats, "bass_swap": self.bass_swap}
+                "echo_beats": self.echo_beats, "bass_swap": self.bass_swap,
+                "vocal_swap": self.vocal_swap, "vocal_depth": self.vocal_depth,
+                "echo_start": self.echo_start}
 
 
 def configured(plan: Plan) -> Plan:
@@ -485,6 +490,16 @@ def render(plan: Plan, length: float) -> tuple[Automation, Automation]:
         mid=_sample(eq["mid"][1], length, 0.0),
         high=_sample(eq["high"][1], length, 0.0),
     )
+    if plan.vocal_swap is not None and plan.eq != "none":
+        # A modest mid-band handoff gives one singer the foreground. This is
+        # broad EQ, not vocal isolation; the incoming band returns to unity.
+        swap = max(0.2, min(0.8, plan.vocal_swap))
+        depth = max(0.0, min(6.0, plan.vocal_depth))
+        for i, (out_point, in_point) in enumerate(zip(outgoing.mid, incoming.mid)):
+            x = i / STEPS
+            turn = min(1.0, max(0.0, (x - swap + 0.15) / 0.3))
+            out_point[1] -= depth * turn
+            in_point[1] -= depth * (1.0 - turn)
     for automation in (outgoing, incoming):
         for band in (automation.low, automation.mid, automation.high):
             for point in band:
