@@ -1,0 +1,82 @@
+# ============================================================================
+#  GAMES  --  drives patch-note segments and the fake ad reads.
+#
+#  With STEAM_API_KEY + STEAM_ID set in .env, the station discovers your
+#  library automatically and everything below is optional refinement.
+#  Without them, only the manual `watchlist` is used.
+# ============================================================================
+
+steam:
+  enabled: true
+  # Pull patch notes for games you have actually played recently.
+  use_recently_played: true
+  recently_played_days: 21
+  # Also consider anything in your library with more than this many minutes.
+  min_playtime_minutes: 120
+  # Cap how many titles the station tracks, most-played first.
+  max_tracked_titles: 25
+  # Your wishlist becomes the source of "ads" for upcoming games.
+  use_wishlist_for_ads: true
+
+patch_notes:
+  # Only read patches published within this window.
+  max_age_hours: 96
+  # Steam news feeds to accept. steam_community_announcements is where
+  # actual patch notes live for most games.
+  accepted_feeds:
+    - steam_community_announcements
+    - steam_updates
+  # A patch must have at least this many characters of body to be worth airing.
+  min_body_chars: 240
+  # How many distinct games a single patch segment may cover.
+  games_per_segment: 1
+  # Never cover the same game's patches twice within this many hours.
+  per_game_cooldown_hours: 20
+  # Headline keywords that mark a post as a real patch rather than marketing.
+  patch_keywords:
+    - "patch"
+    - "update"
+    - "hotfix"
+    - "changelog"
+    - "balance"
+    - "bug fix"
+    - "release notes"
+
+ads:
+  # These are obvious comedy bits, not real advertising. Nothing is sponsored,
+  # nothing is paid, and the hosts are told to make that unmistakable.
+  enabled: true
+  # Ads are written for games releasing inside this window, plus wishlist items.
+  upcoming_window_days: 60
+  # Length target for a read, in seconds of speech.
+  target_seconds: 22
+  # Styles the writer may pick from. Add your own -- they are free text.
+  styles:
+    - "late-night infomercial, unreasonable enthusiasm"
+    - "local car dealership, shouting, terrible"
+    - "prestige-drama voiceover that gradually falls apart"
+    - "public service announcement about a game that is not a danger"
+    - "the two hosts arguing about whether it is even good"
+  # Always close with a disclaimer line so the bit can never read as real.
+  require_disclaimer: true
+  disclaimer_hint: "Make it clear nobody paid for this and the station has no sponsors."
+
+# ---------------------------------------------------------------------------
+# MANUAL WATCHLIST
+# For non-Steam games, or to force coverage of something regardless of
+# playtime. `appid` is the Steam app ID -- find it in the store URL.
+# Entries without an appid are still used for ads and mentions, just without
+# automatic patch notes.
+# ---------------------------------------------------------------------------
+watchlist:
+  # - name: "Deep Rock Galactic"
+  #   appid: 548430
+  #   priority: high
+  # - name: "Minecraft"
+  #   appid: null
+  #   priority: normal
+  #   notes: "Patch notes come from the Mojang feed, not Steam."
+  []
+
+# Games the station should never bring up.
+blocklist: []

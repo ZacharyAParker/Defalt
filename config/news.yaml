@@ -1,0 +1,78 @@
+# ============================================================================
+#  NEWS CATEGORIES
+#  Add, remove, or reweight freely. Any category with enabled: true and at
+#  least one working feed becomes eligible for a news segment.
+#
+#  `weight`  -- relative chance this category is picked for a news break.
+#  `max_age_hours` -- stories older than this are never read on air.
+#  `items_per_segment` -- how many stories the hosts cover in one break.
+# ============================================================================
+
+defaults:
+  max_age_hours: 30
+  items_per_segment: 2
+  # Skip a story whose headline matches any of these (case-insensitive).
+  # Keeps the hosts off topics you do not want piped into your living room.
+  global_blocklist:
+    - "shooting"
+    - "dies at"
+    - "obituary"
+  # Never read the same story twice, even across restarts.
+  dedupe_days: 5
+  # Fetch timeout per feed, seconds.
+  timeout: 12
+
+categories:
+  gaming:
+    enabled: true
+    weight: 4
+    label: "Gaming"
+    # How the hosts should treat this category.
+    tone: "Industry news. Rue cares far too much, Mav is professionally neutral."
+    feeds:
+      - https://www.rockpapershotgun.com/feed
+      - https://kotaku.com/rss
+      - https://www.pcgamer.com/rss/
+      - https://www.eurogamer.net/feed
+      - https://www.gamedeveloper.com/rss.xml
+
+  music:
+    enabled: true
+    weight: 4
+    label: "Music"
+    tone: "Album drops, tours, artist news. Tie it back to the rotation when possible."
+    feeds:
+      - https://pitchfork.com/feed/feed-news/rss
+      - https://www.stereogum.com/feed/
+      - https://consequence.net/feed/
+      - https://www.brooklynvegan.com/feed/
+
+  tech_ai:
+    enabled: true
+    weight: 3
+    label: "Tech and AI"
+    tone: "Model releases, dev tooling, hardware. Mav is skeptical. Rue is a believer."
+    feeds:
+      - https://techcrunch.com/feed/
+      - https://www.theverge.com/rss/index.xml
+      - https://arstechnica.com/feed/
+      - https://simonwillison.net/atom/everything/
+      - https://hnrss.org/frontpage?points=250
+
+  # ------------------------------------------------------------------------
+  # ADD YOUR OWN BELOW. Copy the shape above. Example left disabled:
+  # ------------------------------------------------------------------------
+  local:
+    enabled: false
+    weight: 2
+    label: "Local"
+    tone: "Read it completely straight. The contrast is the joke."
+    feeds: []
+
+  film_tv:
+    enabled: false
+    weight: 2
+    label: "Film and TV"
+    tone: "Trailers, casting, release dates."
+    feeds:
+      - https://www.slashfilm.com/feed/

@@ -1,0 +1,443 @@
+# ============================================================================
+#  STATION CONFIG  --  the master tweak file.
+#  Everything here is hot-reloaded: save the file and the change takes effect
+#  on the next segment the director builds. No restart needed.
+# ============================================================================
+
+identity:
+  name: "Side Room"
+  call_sign: "SIDE ROOM"
+  tagline: "Leave the door open."
+  # Fed to the hosts as context, and shown in the UI header.
+  city: "your living room"
+  # Who the station is for. The hosts are allowed to know this is one person.
+  listener: "the one guy who leaves it on"
+
+# ---------------------------------------------------------------------------
+#  HOUSE STYLE
+#  The single thing that decides whether this station is funny or unbearable.
+#  It is dropped verbatim into every brief that has room for a joke, so write
+#  it as an instruction to a writer, not as a description of one.
+# ---------------------------------------------------------------------------
+hosts:
+  personal_comments: true
+  song_comment_chance: 0.85
+  roast_level: sharp
+  meme_references: true
+  meme_chance_percent: 30
+  meme_gap_minutes: 10
+  meme_repeat_hours: 48
+  meme_quotes: true
+  # Set false and the hosts play it straight, like a station that believes it
+  # has an audience.
+  self_aware: true
+
+  humour: >
+    Dry, fast, and a little bleak. The joke is never explained and never
+    landed on twice. They are funniest when they are being completely
+    sincere about something absurd, and when they turn on themselves rather
+    than on the listener or the music. Cut a bit one line before it is
+    finished. No puns, no wordplay about radio, no catchphrases, and never
+    a laugh written into the line -- if it is funny it does not need one.
+
+# ---------------------------------------------------------------------------
+# AUDIO ENGINE
+# ---------------------------------------------------------------------------
+audio:
+  # Target loudness for every downloaded track, EBU R128. Real stations run
+  # hot and flat; -14 is streaming-standard, -16 is gentler, -11 is "FM loud".
+  target_lufs: -14.0
+  true_peak_ceiling: -1.5
+
+  # Sample rate the whole playout graph runs at.
+  sample_rate: 48000
+
+  # Master output gain (0..1) applied after everything else.
+  master_gain: 0.9
+
+crossfade:
+  # Seconds of overlap between two music items.
+  duration: 6.0
+  # Curve shape: equal_power keeps perceived loudness flat through the overlap
+  # (what real mixers use). linear dips in the middle. exponential holds the
+  # outgoing track longer before dropping it.
+  curve: equal_power
+  # Hard-cut instead of fading if the outgoing track ends in silence anyway.
+  detect_cold_end: true
+  # Never crossfade more than this fraction of the shorter track.
+  max_fraction_of_track: 0.25
+
+# ---------------------------------------------------------------------------
+# TRANSITIONS
+# A transition is three independent choices -- what the volume does, what
+# happens to the bass, and which filters sweep. The named presets are just
+# combinations of those, so you can use a preset or build your own.
+# ---------------------------------------------------------------------------
+transitions:
+  # Plan the next pair as soon as audio is ready, even on long songs.
+  prepare_tracks_ahead: 1
+  # Cached structure supplies candidate cue points; missing analysis uses the
+  # normal transition. Never skip a preloaded/manual entry point.
+  smart_cues: true
+  exit_search_seconds: 24.0
+  max_intro_skip: 8.0
+  minimum_play_fraction: 0.65
+  mid_song_cues: true
+  max_entry_skip_fraction: 0.25
+  adaptive_eq_fx: true
+  feedback_enabled: true
+  feedback_max_adjustment: 0.005
+  feedback_tolerance_ms: 30.0
+  # auto  -- pick per pair, from tempo, key and energy (recommended)
+  # or force one of: fade, rise, blend, wave, melt, slam
+  #
+  #   fade   equal-power crossfade, bass swaps at the midpoint
+  #   rise   overlap, bass swap at the end, low-pass in / high-pass out
+  #   blend  smooth three-band fade, highs hand over first and lows last
+  #   wave   overlap, bass swap centre, low-pass on both -- goes muffled
+  #          through the middle and opens up again
+  #   melt   fade across, bass swap centre, high-pass on both -- thins out
+  #   slam   hard centred swap, no blend at all
+  preset: auto
+  phrase_beats: 4
+  eq_enabled: true
+  eq_mode: auto
+  eq_strength: 0.8
+  filters_enabled: true
+  echo_enabled: true
+  echo_mix: 0.18
+  echo_feedback: 0.30
+  echo_beats: 0.5
+
+  # Two tempos within this fraction of each other count as matched. Compared
+  # octave-invariantly, so a track detected at double time is not treated as
+  # a mismatch.
+  tempo_tolerance: 0.06
+  # Above this octave-invariant distance the two records will not blend, so
+  # the station cuts instead of pretending. Folding means the scale only runs
+  # to about 0.33, so this is further apart than it looks.
+  slam_distance: 0.18
+
+  # Beat alignment: nudge the incoming record, by at most half a beat, so its
+  # beats land on the outgoing one's. Matching tempo is not the same as
+  # matching beats -- two records at 129 BPM whose grids sit a tenth of a
+  # second apart flam through the whole overlap.
+  #
+  # It refuses rather than guesses. Confidence is the RMS distance between the
+  # detected beats and a steady grid, in milliseconds -- literally how far an
+  # alignment built on it would be off. A rubato acoustic track measures in
+  # the hundreds and is skipped; a programmed drum machine measures in the
+  # low teens and aligns cleanly.
+  # MEASURED ON THIS LIBRARY: 62% of tracks have a grid good enough to align
+  # on, but only about 7% of consecutive PAIRS clear both this and the tempo
+  # limit below -- because a rotation picked by taste rarely puts two records
+  # of the same tempo together. Loosening these to 80ms/12% reaches 21% of
+  # pairs, at the cost of a pitch shift big enough to hear. See
+  # docs/TRANSITIONS.md.
+  beat_align: true
+  beat_max_residual_ms: 30   # skip alignment above this
+  beat_max_drift: 0.25       # fraction of a beat the grids may drift over a blend
+
+  # Beat matching: pitch the incoming record so its tempo agrees with the
+  # outgoing one, the way a DJ rides the pitch fader. Web Audio moves pitch
+  # with speed, so this is capped -- 6% is inaudible as pitch, 12% is a
+  # couple of semitones and obvious.
+  tempo_match: true
+  tempo_match_limit: 0.06
+
+  # How far the filter sweeps travel.
+  lpf_floor_hz: 380      # lowest a low-pass closes to
+  hpf_ceiling_hz: 900    # highest a high-pass climbs to
+
+  # Overlap is `crossfade.duration` scaled: harmonically matched pairs get a
+  # longer blend, mismatched tempos get a short cut.
+  long_multiplier: 1.5
+  short_multiplier: 0.55
+
+# ---------------------------------------------------------------------------
+# SKIPPING
+# ---------------------------------------------------------------------------
+skip:
+  # Skip winds the clock forward to just before the next transition rather
+  # than cutting the record dead, so you still get the mix -- the blend, the
+  # bass swap, the sweep, and any link the hosts wrote over it. This is how
+  # many seconds of the outgoing record you land on before the blend starts.
+  # 0 drops you straight onto the crossfade.
+  lead_in: 4.0
+
+ducking:
+  # How far the music drops (linear gain) while a host talks over it.
+  # Keep the music 20 dB down under normalized host speech.
+  target_gain: 0.10
+  # Fast attack, slow release reads as professional.
+  # A slow attack just sounds like somebody missed the fader.
+  attack: 0.35
+  release: 1.2
+  # Extra hold after the voice stops before the music climbs back.
+  hold_after: 0.40
+  curve: exponential
+
+# ---------------------------------------------------------------------------
+# HOW THE HOSTS TALK OVER MUSIC
+# ---------------------------------------------------------------------------
+talk_placement:
+  # Relative weights for where a between-song break sits. The director rolls
+  # against these each time. Set any to 0 to disable that style.
+  weights:
+    bridge: 5      # starts over the outgoing outro, lands on the new intro
+    over_intro: 3  # entirely over the top of the incoming track
+    over_outro: 2  # entirely over the tail of the outgoing track
+    dry: 2         # music out, hosts talk in the clear, music back in
+
+  # "Talking up the post": the host stops talking right as the vocal starts.
+  # We do not reliably know where the vocal is, so this is the assumed intro
+  # length used for any track with no measured or manual override value.
+  assumed_intro: 12.0
+  # Land the last word this many seconds BEFORE the assumed vocal entry.
+  post_safety_margin: 0.6
+  # If a break runs longer than the intro allows, start it earlier over the
+  # outgoing track rather than talking into the vocal.
+  allow_backtime_into_outro: true
+  # Hard ceiling on how far back a break may reach into the outgoing track.
+  max_backtime: 20.0
+
+  line_gap:
+    # Gap between two hosts' lines, in seconds.
+    default: 0.18
+    # Chance a line overlaps the previous one instead of following it.
+    interrupt_chance: 0.22
+    interrupt_overlap: 0.35
+
+# ---------------------------------------------------------------------------
+# VOICES
+# ---------------------------------------------------------------------------
+tts:
+  # Station-wide default engine. A persona can override it with `engine:`.
+  #   edge       -- Microsoft Edge TTS. Free, fast, 300+ voices.
+  #   openrouter -- OpenRouter's /audio/speech endpoint (hosted models).
+  backend: edge
+
+  openrouter:
+    # Speech models do NOT appear in OpenRouter's /models list, so nothing can
+    # enumerate them for you -- you need the id. This one is free.
+    model: fish-audio/s2.1-pro-free:free
+    # Voice support varies hard by model. The free Fish model accepts only
+    # "alloy" and rejects every other name with a 400.
+    voice: alloy
+    # response_format is forced to mp3; only mp3 and pcm are accepted.
+
+  # Worth knowing before you switch: a hosted model that offers one voice will
+  # make both hosts sound identical. Setting `engine: openrouter` on one
+  # persona and leaving the other on edge is usually the better move.
+  # If a hosted call fails, the line falls back to edge rather than vanishing.
+
+# ---------------------------------------------------------------------------
+# THE CLOCK  --  what airs and how often.
+# A real station runs on an hour clock. So does this one.
+# ---------------------------------------------------------------------------
+clock:
+  # Songs between talk breaks. The director picks in this range.
+  songs_per_break: [2, 4]
+
+  # Rotation weights for non-music segments. Higher = more often.
+  segment_weights:
+    banter: 10        # hosts riff, no external content
+    track_intro: 12   # they actually introduce the song
+    news: 4
+    patch_notes: 3
+    game_ad: 2
+    station_id: 3     # "you are listening to..."
+    listener_note: 2  # references your own listening history
+    time_check: 2
+
+  # A segment may not air twice within this many minutes.
+  cooldown_minutes:
+    news: 20
+    patch_notes: 35
+    game_ad: 25
+    station_id: 14
+    time_check: 25
+
+  # Top-of-hour news is a radio institution. Set false to disable.
+  top_of_hour_news: true
+  top_of_hour_window: 4   # minutes past the hour it may still fire
+
+# ---------------------------------------------------------------------------
+# MUSIC SELECTION
+# ---------------------------------------------------------------------------
+selection:
+  # Skip labeled censored editions in automatic picks and prefer explicit sources.
+  avoid_clean_versions: true
+  # Soft connections, never a genre gate. Novelty grows after similar songs.
+  # Missing embedded lyrics are neutral; no lyrics are inferred from titles.
+  compatibility:
+    enabled: true
+    genre_weight: 0.65
+    artist_weight: 0.25
+    lyrics_weight: 0.45
+    mix_weight: 0.35
+    variety_strength: 0.65
+    explore_chance: 0.18
+    fatigue_after: 4
+    history_size: 10
+  # How many tracks the station keeps queued and downloaded ahead of itself.
+  # This is also how much queue there is to reorder, so a larger number gives
+  # you more to work with at the cost of more disk held at once. Tracks you
+  # queue by hand do not count toward it -- ask for six things and the station
+  # stops choosing for you until your queue runs down.
+  prefetch_depth: 5
+
+  # Do not repeat an artist within this many tracks, or a track within this
+  # many hours. Separation rules are what stop a station feeling like shuffle.
+  artist_separation: 6
+  title_separation_hours: 5
+
+  # Relative weighting for how the next track is chosen.
+  weights:
+    affinity: 1.0        # how much you have historically liked it
+    freshness: 0.6       # bias toward things not played recently
+    daypart_fit: 0.5     # does it match what you play at this hour
+    exploration: 0.35    # deliberate wildcards, keeps it from going stale
+    recency_seed: 0.4    # bias toward the Spotify seed's recent tracks
+
+  # Fraction of tracks that are deliberate discoveries outside your profile.
+  exploration_rate: 0.15
+
+  # Reject a resolved candidate if its duration differs from the expected
+  # length by more than this fraction. Catches loops, nightcore, wrong hits.
+  duration_tolerance: 0.18
+
+  # Extra title keywords that disqualify a result unless you asked for them.
+  # These are on top of what the resolver already refuses on its own: live
+  # takes, music videos, visualisers, alternate takes and pitched re-uploads.
+  # It prefers the auto-generated upload of the actual release, which is
+  # marked by "Provided to YouTube by" in the description.
+  # Run `python -m radio.cli audit` to check what the cache was resolved from.
+  reject_keywords:
+    - "live at"
+    - "live in"
+    - "cover"
+    - "karaoke"
+    - "instrumental"
+    - "nightcore"
+    - "sped up"
+    - "slowed"
+    - "8d audio"
+    - "reaction"
+    - "lyrics video"
+    - "1 hour"
+    - "loop"
+
+# ---------------------------------------------------------------------------
+# DOWNLOAD + CACHE
+#  See NOTICE.md. Audio is fetched for personal, local, transient playback
+#  only. It is never served off this machine and never redistributed.
+# ---------------------------------------------------------------------------
+cache:
+  # ephemeral -- delete a file the moment it finishes playing.
+  # lru       -- keep files until the size budget is hit, then evict oldest.
+  mode: lru
+  max_size_gb: 6.0
+  # Files older than this are evicted regardless of the budget.
+  max_age_hours: 168
+  # Delete everything on shutdown. Overrides the above.
+  purge_on_exit: false
+
+  # Working audio format on disk. wav is zero decode cost but enormous.
+  #
+  # NOT opus, tempting as it is on size: the console's decoder has no Opus
+  # support at all, so a cache full of it is a station only a browser can
+  # play. m4a is AAC, which is nearly as small and decodes here. flac is the
+  # other safe option and costs several times the disk for a file that is
+  # evicted within the week anyway.
+  format: m4a
+  aac_bitrate: "192k"
+  opus_bitrate: "160k"
+
+downloader:
+  # yt_dlp runs locally (default). metube hands the job to your MeTube
+  # container -- only usable if its download dir is visible to this machine.
+  backend: yt_dlp
+  concurrency: 2
+  # More candidates to filter. The resolver refuses live takes, music videos,
+  # karaoke and pitched re-uploads, so it needs a deeper pool to find the
+  # actual record in.
+  search_results: 8
+  timeout_seconds: 90
+  metube:
+    url: "http://10.0.30.116:8081"
+    # Path where THIS machine can see MeTube's completed downloads.
+    # Leave blank and the metube backend stays disabled.
+    download_dir: ""
+
+# ---------------------------------------------------------------------------
+# LEARNING  --  how the station figures out what you like.
+# ---------------------------------------------------------------------------
+learning:
+  enabled: true
+  # A skip before this many seconds counts as a real rejection.
+  skip_is_rejection_before: 30.0
+  # Playing past this fraction of a track counts as approval.
+  completion_is_approval_at: 0.85
+
+  # How far each signal moves an affinity score.
+  signal_weights:
+    thumbs_up: 3.0
+    thumbs_down: -4.0
+    request: 2.5
+    completed: 0.6
+    skipped_early: -1.8
+    skipped_late: -0.4
+    replayed: 2.0
+
+  # Affinity decays toward neutral so old tastes fade instead of ruling forever.
+  half_life_days: 90
+  # An artist absorbs this fraction of each of its tracks' signals.
+  artist_bleed: 0.4
+  # Write a session recap into the Obsidian vault when the station stops.
+  write_session_notes: true
+
+# ---------------------------------------------------------------------------
+# REQUESTS
+# ---------------------------------------------------------------------------
+requests:
+  enabled: true
+  # Where a request lands: next (straight after the current song),
+  # after_break (hosts introduce it properly), or queue (back of the line).
+  placement: after_break
+  acknowledge_on_air: true
+  max_pending: 12
+
+  # The box takes more than song titles. It also understands:
+  #   "give me some bossa nova"            -> a run of a genre or mood
+  #   "play me artists like yuno miles"    -> similar acts
+  #   "more Good Kid"                      -> more of one artist
+  #   "next transition tell me about the AI news" -> a topic to cover
+  #   "do the news" / "station id"         -> force the next segment
+  #   "stop playing so much niko b"        -> play it less
+  #   "i hate this"                        -> thumbs down what is on now
+
+  # Requests are classified without a model first. Only a reading less
+  # confident than this gets a second opinion from the LLM. Negations and
+  # refusals are never delegated, at any threshold.
+  refine_below_confidence: 0.8
+
+  # Genre / similar / artist requests. These deliberately do NOT flood the
+  # station: most of what comes back joins the rotation to surface naturally,
+  # and only a couple jump the queue.
+  bulk_suggest: 8        # how many the writer proposes
+  bulk_add: 6            # how many survive filtering into the library
+  bulk_queue_now: 2      # how many play soon
+  max_per_artist: 2      # stops "some bossa nova" being eight Jobim tracks
+  # Affinity nudge per bulk-added track. Much smaller than an explicit
+  # single-track request (2.5), so exploring a genre once does not
+  # permanently reshape the profile.
+  bulk_affinity: 0.8
+  # Never suggest something you have already pushed this far down.
+  skip_below_affinity: -2.0
+
+  # How hard "play less of X" hits the affinity of everything matched.
+  directive_penalty: -3.0
+
+  # A topic request is dropped if it has not aired within this long.
+  topic_ttl_minutes: 45

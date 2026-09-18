@@ -1,0 +1,21 @@
+{
+  "_comment": "Copy this to spotify_seed.json and fill it with your own listening data, then run `python -m radio.cli seed`. The real file is gitignored because it is a fingerprint of your taste. Format per row: [title, artist, m:ss]. Duration is optional but helps the resolver reject the wrong upload -- a nightcore edit or an hour-long loop will not match the length and gets skipped. Anything you leave empty is simply skipped; the station will still learn from scratch, it just starts colder.",
+  "_where_to_get_this": [
+    "Top tracks: https://www.spotify.com -> your profile, or any Spotify stats site",
+    "Or ask an assistant with Spotify access to pull your top tracks and recently played",
+    "Or just type in forty songs you like. It genuinely does not need to be exhaustive."
+  ],
+  "pulled_at": "1970-01-01",
+  "top_tracks_long_term": [
+    ["Teenage Dirtbag", "Wheatus", "4:02"],
+    ["Buddy Holly", "Weezer", "2:39"],
+    ["Zombie", "The Cranberries", "5:08"]
+  ],
+  "top_tracks_short_term": [
+    ["Time To Pretend", "MGMT", "4:21"],
+    ["Better Off Alone", "Alice Deejay", "3:35"]
+  ],
+  "recently_played": [
+    ["Cool Kids", "Echosmith", "3:36"]
+  ]
+}

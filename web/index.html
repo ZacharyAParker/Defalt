@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en" data-state="idle">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Side Room</title>
+<meta name="color-scheme" content="dark">
+<meta name="description" content="Manual, assisted, automatic.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:ital,wght@0,400..800;1,400..700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/radio.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23100e0c'/><circle cx='16' cy='16' r='6' fill='%23ffb020'/></svg>">
+</head>
+<body>
+
+<!-- Drawn icon set: one library, one stroke weight. -->
+<svg width="0" height="0" aria-hidden="true" style="position:absolute">
+  <defs>
+    <g id="i-skip"><path d="M5 4v16M19 12 8 4v16z"/></g>
+    <g id="i-play"><path d="M7 4.5 19 12 7 19.5z"/></g>
+    <g id="i-pause"><path d="M8.5 4.5v15M15.5 4.5v15"/></g>
+    <g id="i-up"><path d="M7 21V10m0 0 4.2-7.1a1.4 1.4 0 0 1 2.5 1L12.4 9h5.3a2 2 0 0 1 2 2.4l-1.5 7.2a2.6 2.6 0 0 1-2.5 2H7M7 10H4.5v11H7"/></g>
+    <g id="i-down"><path d="M7 3v11m0 0 4.2 7.1a1.4 1.4 0 0 0 2.5-1L12.4 15h5.3a2 2 0 0 0 2-2.4l-1.5-7.2A2.6 2.6 0 0 0 15.7 3H7M7 14H4.5V3H7"/></g>
+    <g id="i-send"><path d="M4 12h13m0 0-5-5m5 5-5 5"/></g>
+    <g id="i-fader"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2.2"/><circle cx="10" cy="17" r="2.2"/></g>
+    <g id="i-mic"><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3ZM5 11a7 7 0 0 0 14 0M12 18v3"/></g>
+    <g id="i-chevron"><path d="m7 10 5 5 5-5"/></g>
+    <g id="i-up-arrow"><path d="M12 19V5m0 0-6 6m6-6 6 6"/></g>
+    <g id="i-down-arrow"><path d="M12 5v14m0 0 6-6m-6 6-6-6"/></g>
+    <g id="i-top"><path d="M5 4h14M12 20V8m0 0-5 5m5-5 5 5"/></g>
+    <g id="i-cross"><path d="M6 6l12 12M18 6L6 18"/></g>
+    <g id="i-vol"><path d="M11 5 6 9H3v6h3l5 4zM15.5 9.5a3.5 3.5 0 0 1 0 5M18.5 6.5a7.5 7.5 0 0 1 0 11"/></g>
+    <g id="i-mute"><path d="M11 5 6 9H3v6h3l5 4zM16 10l5 5m0-5-5 5"/></g>
+  </defs>
+</svg>
+
+<div class="console">
+
+  <!-- ─── RAIL ─────────────────────────────────────────────── -->
+  <header class="rail">
+    <div class="rail__ident">
+      <span class="lamp" id="lamp" aria-hidden="true"></span>
+      <h1 class="ident" id="ident-name">Defalt</h1>
+      <p class="ident__tag" id="ident-tag"></p>
+    </div>
+
+    <div class="rail__meta">
+      <div class="readout" id="engine-readout" hidden>
+        <span class="readout__label">engine</span>
+        <span class="readout__value tnum" id="engine-value">--</span>
+      </div>
+      <div class="readout">
+        <span class="readout__label">state</span>
+        <span class="readout__value" id="state-value">standby</span>
+      </div>
+      <div class="readout">
+        <span class="readout__label">elapsed</span>
+        <span class="readout__value tnum" id="uptime">0:00:00</span>
+      </div>
+      <div class="readout">
+        <span class="readout__label">local</span>
+        <span class="readout__value tnum" id="wallclock">--:--</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ─── DECK ─────────────────────────────────────────────── -->
+  <main class="deck">
+    <section class="deck__now" aria-labelledby="np-heading">
+      <h2 class="sr-only" id="np-heading">Now playing</h2>
+
+      <div class="now" id="now">
+        <p class="now__eyebrow" id="now-source">on air</p>
+        <p class="now__title" id="now-title">Side Room is off the air</p>
+        <p class="now__artist" id="now-artist">Press start to bring it up</p>
+      </div>
+
+      <div class="scope">
+        <canvas id="scope" class="scope__canvas" aria-hidden="true"></canvas>
+        <div class="scope__meters" aria-hidden="true">
+          <div class="meter"><i style="--h:0" id="meter-l"></i></div>
+          <div class="meter"><i style="--h:0" id="meter-r"></i></div>
+        </div>
+      </div>
+
+      <div class="progress" id="progress" role="progressbar"
+           aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"
+           aria-label="Track position">
+        <div class="progress__fill" id="progress-fill"></div>
+        <div class="progress__times">
+          <span class="tnum" id="pos">0:00</span>
+          <span class="tnum" id="dur">0:00</span>
+        </div>
+      </div>
+
+      <div class="transport">
+        <button class="btn btn--primary" id="power" type="button">
+          <span id="power-label">Start the station</span>
+        </button>
+        <button class="btn btn--icon" id="skip" type="button" title="Next record"
+                aria-label="Skip to the next record" disabled>
+          <svg class="icon" viewBox="0 0 24 24"><use href="#i-skip"/></svg>
+        </button>
+        <div class="volume" role="group" aria-label="Volume">
+          <button class="btn btn--icon btn--vol" id="mute" type="button"
+                  aria-label="Mute" aria-pressed="false">
+            <svg class="icon" viewBox="0 0 24 24"><use href="#i-vol" id="vol-icon"/></svg>
+          </button>
+          <input class="volume__fader" id="volume" type="range"
+                 min="0" max="100" step="1" value="90"
+                 aria-label="Volume" aria-valuetext="90 percent">
+        </div>
+
+        <div class="rate" role="group" aria-label="Rate this record">
+          <button class="btn btn--icon" id="rate-up" type="button"
+                  aria-label="More like this" disabled>
+            <svg class="icon" viewBox="0 0 24 24"><use href="#i-up"/></svg>
+          </button>
+          <button class="btn btn--icon btn--danger" id="rate-down" type="button"
+                  aria-label="Less like this" disabled>
+            <svg class="icon" viewBox="0 0 24 24"><use href="#i-down"/></svg>
+          </button>
+        </div>
+      </div>
+      <p class="hint" id="hint">Audio starts muted until you press start — browsers require it.</p>
+    </section>
+
+    <!-- ─── TALKBACK ───────────────────────────────────────── -->
+    <aside class="talkback" aria-labelledby="tb-heading">
+      <div class="panel__head">
+        <svg class="icon icon--sm" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-mic"/></svg>
+        <h2 id="tb-heading">Talkback</h2>
+        <span class="pill" id="host-pill">2 hosts</span>
+      </div>
+
+      <ol class="transcript" id="transcript" aria-live="polite" aria-relevant="additions">
+        <li class="transcript__empty" id="transcript-empty">
+          Nothing said yet. The hosts come in between records.
+        </li>
+      </ol>
+
+      <form class="request" id="request-form">
+        <div class="request__mode">
+          <label class="request__label" for="request-mode">Tell the station</label>
+          <select id="request-mode" aria-label="Request type">
+            <option value="request">Request a song or topic</option>
+            <option value="vibe">Set an ongoing vibe</option>
+          </select>
+        </div>
+        <label class="request__label" for="request-input" id="request-prompt">What would you like to hear?</label>
+        <div class="request__row">
+          <input class="request__input" id="request-input" name="query"
+                 type="text" autocomplete="off" spellcheck="false" maxlength="240"
+                 placeholder="A song, YouTube link, genre, or topic&hellip;">
+          <button class="btn btn--icon btn--send" type="submit"
+                  aria-label="Send request">
+            <svg class="icon" viewBox="0 0 24 24"><use href="#i-send"/></svg>
+          </button>
+        </div>
+        <p class="request__note" id="request-note" role="status">
+          Songs, &ldquo;some bossa nova&rdquo;, &ldquo;artists like Yuno Miles&rdquo;,
+          &ldquo;tell me about the AI news&rdquo;, &ldquo;less rap&rdquo;.
+        </p>
+        <p class="request__note" id="spotify-note" role="status"></p>
+        <ul class="request__results" id="spotify-results" aria-label="Spotify song suggestions" hidden></ul>
+        <div class="request__vibe" id="vibe-panel" hidden>
+          <span class="request__label">Current vibe</span>
+          <span id="vibe-description"></span>
+          <button class="lineup__clear" id="vibe-clear" type="button">Clear vibe</button>
+        </div>
+      </form>
+
+      <section class="lineup" aria-labelledby="lineup-heading">
+        <div class="lineup__head">
+          <h3 id="lineup-heading">Up next</h3>
+          <span class="lineup__count" id="lineup-count"></span>
+          <button class="lineup__clear" id="queue-clear" type="button">Clear</button>
+        </div>
+        <ol class="queue" id="queue" aria-live="polite"></ol>
+        <p class="lineup__empty" id="lineup-empty">Nothing queued yet.</p>
+      </section>
+    </aside>
+  </main>
+
+  <!-- ─── TIMELINE ─────────────────────────────────────────── -->
+  <section class="timeline" aria-labelledby="tl-heading">
+    <div class="timeline__head">
+      <h2 id="tl-heading">Playout</h2>
+      <div class="legend" aria-hidden="true">
+        <span class="key key--music">record</span>
+        <span class="key key--talk">mic</span>
+        <span class="key key--duck">ducked</span>
+      </div>
+    </div>
+    <canvas id="timeline" class="timeline__canvas"
+            aria-label="Upcoming schedule showing records, talk breaks and where the music ducks"></canvas>
+    <p class="timeline__empty" id="timeline-empty">Schedule builds once the station is running.</p>
+  </section>
+
+  <!-- ─── PANEL ────────────────────────────────────────────── -->
+  <section class="panel" aria-labelledby="pn-heading">
+    <button class="panel__toggle" id="panel-toggle" type="button"
+            aria-expanded="false" aria-controls="panel-body">
+      <svg class="icon icon--sm" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-fader"/></svg>
+      <h2 id="pn-heading">Board</h2>
+      <span class="panel__sub">crossfade, ducking, rotation</span>
+      <svg class="icon icon--sm panel__chevron" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-chevron"/></svg>
+    </button>
+
+    <div class="panel__body" id="panel-body" hidden>
+      <div class="faders" id="faders"></div>
+      <p class="panel__foot">
+        Changes save to <code>config/overrides.yaml</code> and take effect on the next
+        break. Everything else lives in <code>config/station.yaml</code>.
+      </p>
+    </div>
+  </section>
+
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="/static/radio.js" defer></script>
+</body>
+</html>

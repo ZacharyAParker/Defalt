@@ -1,0 +1,42 @@
+# --- secrets ---------------------------------------------------------------
+.env
+*.key
+*-key.json
+my-google-key.json
+
+# --- local state, never shared ---------------------------------------------
+cache/
+vault/
+config/overrides.yaml
+seed/spotify_seed.json
+analysis/
+*.db
+*.db-wal
+*.db-shm
+
+# --- python ----------------------------------------------------------------
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- os / editor -----------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+
+# --- misc ------------------------------------------------------------------
+*.log
+_archive_old/
+node_modules/
+
+# --- rust / tauri ----------------------------------------------------------
+target/

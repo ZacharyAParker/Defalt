@@ -1,0 +1,97 @@
+# Manually reviewed sources. Exact artist + title for song memes; artist
+# callbacks explicitly identify their origin. Never treat model recall as proof.
+references:
+  - id: rickroll
+    scope: song
+    artists: [Rick Astley]
+    titles: [Never Gonna Give You Up]
+    context: Rickrolling redirects someone expecting something else to this song's music video.
+    source: https://knowyourmeme.com/memes/rickroll/
+    reviewed: '2026-09-18'
+    spoken: Rick Astley. You put the Rickroll directly in your queue. Even the internet used to give you a surprise first.
+  - id: weezered
+    scope: song
+    artists: [Weezer]
+    titles: [Buddy Holly]
+    context: Buddy Holly's riff is used in bait-and-switch videos called getting Weezered.
+    source: https://knowyourmeme.com/memes/buddy-holly-weezer-song-weezered
+    reviewed: '2026-09-18'
+    quote: Get Weezered
+    spoken_quote: Get Weezered. Buddy Holly has turned your listening session into a booby trap with guitars.
+    spoken: Buddy Holly. Getting Weezered is supposed to be a surprise. Your queue has removed the last remaining safeguard.
+  - id: kendrick_mustard
+    scope: song
+    artists: [Kendrick Lamar]
+    titles: [tv off]
+    context: Kendrick shouting Mustard in tv off became a reaction meme.
+    source: https://knowyourmeme.com/memes/kendrick-lamar-mustard
+    reviewed: '2026-09-18'
+    quote: Mustard!
+    spoken_quote: Mustard! Kendrick made a producer shout into a meme. Your queue has condiment notifications enabled.
+    spoken: Kendrick's Mustard shout became a meme. Your queue has condiment notifications enabled.
+  - id: drakeposting
+    scope: artist
+    artists: [Drake]
+    context: The reject-then-approve Drakeposting reaction panels originate in the Hotline Bling video, not necessarily this recording.
+    source: https://knowyourmeme.com/memes/drakeposting
+    reviewed: '2026-09-18'
+    spoken: Drake's Hotline Bling reaction panels, applied to this queue. Broaden your horizons? Rejected. More Drake? Approved.
+  - id: nickelback_graph
+    scope: song
+    artists: [Nickelback]
+    titles: [Photograph]
+    context: The Look at this graph parody changes Photograph's opening and the object Chad Kroeger holds in its video.
+    source: https://digitalcultures.net/memes/look-at-this-graph/
+    reviewed: '2026-09-18'
+    quote: Look at this graph
+    spoken_quote: Look at this graph. The Photograph parody turned Nickelback into spreadsheet entertainment. Finally, a rock band for quarterly reporting.
+    spoken: That graph parody turned Nickelback's Photograph into spreadsheet entertainment. Finally, a rock band for quarterly reporting.
+  - id: all_star
+    scope: song
+    artists: [Smash Mouth]
+    titles: [All Star]
+    context: All Star is associated with Shrek and a large culture of internet mashups.
+    source: https://folklore.usc.edu/all-star-memes/
+    reviewed: '2026-09-18'
+    spoken: All Star. Between Shrek and the mashups, this song has more internet jobs than most people have browser tabs.
+  - id: yuno_pigeon
+    scope: artist
+    artists: [Yuno Miles]
+    context: Yuno Miles's Road to Riches video went viral with deliberately absurd pigeon and lottery-machine vocal impressions. This does not describe every Yuno Miles song.
+    source: https://knowyourmeme.com/memes/people/yuno-miles
+    reviewed: '2026-09-18'
+    spoken: Yuno Miles gave us the pigeon impression on Road to Riches. Other artists have a signature sound. His apparently requires birdseed.
+  - id: teenage_dirtbag
+    scope: song
+    artists: [Wheatus]
+    titles: [Teenage Dirtbag]
+    context: Teenage Dirtbag soundtracked a social media trend sharing old teenage photographs.
+    source: https://observer.com/2022/08/the-many-lives-of-teenage-dirtbag/
+    reviewed: '2026-09-18'
+    spoken: Teenage Dirtbag became the soundtrack for everyone's old teenage photos. A song brave enough to take responsibility for those haircuts.
+  - id: magnetic_dance
+    scope: song
+    artists: [ILLIT]
+    titles: [Magnetic]
+    context: Magnetic inspired a TikTok dance trend with finger taps and magnet-like hand movements.
+    source: https://dailydot.com/magnetic-illit-tiktok-dance
+    reviewed: '2026-09-18'
+    spoken: Magnetic has that finger-tapping dance trend. ILLIT managed to give your hands homework.
+  - id: tyler_lie
+    scope: artist
+    artists: ['Tyler, The Creator']
+    context: Tyler's interview remark became a reaction meme for a claim being contradicted. It is an interview callback, not a lyric or an allegation about this song.
+    source: https://knowyourmeme.com/memes/so-that-was-a-fucking-lie
+    reviewed: '2026-09-18'
+    quote: So that was a fucking lie
+    spoken_quote: Tyler's interview meme. So that was a fucking lie. My promise to keep my music opinions to myself lasted exactly this long.
+    spoken: That Tyler interview reaction meme was built for broken promises. My promise to keep my music opinions to myself lasted exactly this long.
+  - id: bieber_clocking
+    scope: artist
+    artists: [Justin Bieber]
+    context: Bieber's not clocking to you phrase comes from a viral paparazzi interaction, not a song lyric. Reference the phrase without inventing private circumstances.
+    source: https://knowyourmeme.com/memes/its-not-clocking-to-you-that-im-standing-on-business
+    reviewed: '2026-09-18'
+    quote: It's not clocking to you
+    spoken_quote: "Bieber's viral phrase: It's not clocking to you. That's me explaining the shuffle button to a queue with this much confidence."
+    spoken: That Bieber clocking phrase has meme status. Meanwhile, explaining shuffle to this queue remains a full-time job.

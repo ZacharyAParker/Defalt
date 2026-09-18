@@ -1,0 +1,52 @@
+[package]
+name = "defalt"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+description = "Defalt -- a DJ application"
+authors = ["Zachary Parker"]
+publish = false
+
+[build-dependencies]
+winresource = "0.1"
+cc = "1.4.5"
+
+[dependencies]
+cpal = "0.18"
+rtrb = "0.4"
+# Everything symphonia can decode. Opus is deliberately absent from
+# this list because symphonia has no Opus decoder at all, which is
+# why nothing here is allowed to write one.
+symphonia = { version = "0.6", features = [
+    "mp3", "mp1", "mp2", "isomp4", "aac", "alac", "aiff", "caf",
+] }
+eframe = { version = "0.36", default-features = false, features = [
+    "wgpu",
+    "default_fonts",
+] }
+egui = "0.36"
+egui_extras = "0.36"
+rusqlite = { version = "0.40", features = ["bundled"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+ureq = { version = "3", features = ["json"] }
+serde_json = "1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+strip = true
+
+[profile.dev]
+opt-level = 2          # a debug build still has to keep an audio thread fed
+
+[profile.dev.package."*"]
+opt-level = 3
