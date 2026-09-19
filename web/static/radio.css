@@ -507,6 +507,9 @@ button, input { font: inherit; color: inherit; }
   transition: border-color .18s;
 }
 .request__input::placeholder { color: var(--text-mute); }
+.request__input[hidden] { display: none; }
+textarea.request__input { resize: vertical; min-height: 110px; line-height: 1.5; font-family: inherit; padding-top: 10px; }
+textarea.request__input:not([hidden]) + .btn--send { align-self: flex-start; min-height: 42px; }
 .request__input:focus { outline: none; border-color: #55492f; }
 .request__input:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
 

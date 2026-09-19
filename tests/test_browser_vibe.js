@@ -11,7 +11,7 @@ function element() {
     addEventListener(type, fn) { this.handlers[type] = fn; }, focus() {}, replaceChildren() {} };
 }
 async function run() {
-  const ui = Object.fromEntries(['form', 'input', 'note', 'requestMode', 'requestPrompt',
+  const ui = Object.fromEntries(['form', 'input', 'note', 'requestMode', 'requestPrompt','articleInput',
     'vibePanel', 'vibeDescription', 'vibeClear', 'spotifyNote', 'spotifyResults'].map(key => [key, element()]));
   const calls = [];
   let state = {}, fail = false;

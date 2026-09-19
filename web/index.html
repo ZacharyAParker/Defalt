@@ -146,6 +146,7 @@
           <select id="request-mode" aria-label="Request type">
             <option value="request">Request a song or topic</option>
             <option value="vibe">Set an ongoing vibe</option>
+            <option value="article">Send a news article</option>
           </select>
         </div>
         <label class="request__label" for="request-input" id="request-prompt">What would you like to hear?</label>
@@ -153,6 +154,8 @@
           <input class="request__input" id="request-input" name="query"
                  type="text" autocomplete="off" spellcheck="false" maxlength="240"
                  placeholder="A song, YouTube link, genre, or topic&hellip;">
+          <textarea class="request__input" id="article-input" rows="6" maxlength="24000"
+                    aria-label="Article link or pasted text" placeholder="Paste a news URL or the article itself" hidden></textarea>
           <button class="btn btn--icon btn--send" type="submit"
                   aria-label="Send request">
             <svg class="icon" viewBox="0 0 24 24"><use href="#i-send"/></svg>

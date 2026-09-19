@@ -1,8 +1,9 @@
 # The request box
 
-One text field. It takes a song, an artist, a genre, a mood, a topic for the
-hosts to cover, a demand for a specific segment, or an instruction to play
-something less.
+Radio has three modes: **Request**, **Set vibe**, and **Article**. Request
+takes songs, artists, genres, topics, segments, and instructions to play
+something less. Set vibe keeps a mood going. Article gives the hosts a full
+source to work from.
 
 ```
 Weezer - Buddy Holly                        a specific record
@@ -18,6 +19,38 @@ https://youtube.com/watch?v=...             that exact video
 ```
 
 ## How it decides
+
+### News articles
+
+choose **Article** in Radio, paste a public article URL or the article text,
+then send it. the browser calls this **Send a news article**. pasted text can
+be 200–24,000 characters; for a longer piece, pick an excerpt
+
+links fetch in the background. the queue shows progress, the extracted title,
+or an error you can act on. if a site blocks the reader, needs a login, or
+only loads its article through JavaScript, paste the text instead. navigation
+and recognized embedded promotions are left out
+
+the director writes a short host break from that source instead of searching
+RSS. it runs at the next break that hasn't already been written. requesting
+a song alongside it won't replace the article with a song acknowledgement.
+cancel it from the queue while it's waiting or being fetched
+
+the script attributes the story, keeps rumors uncertain, and checks dates.
+recognized predictions that predate the page's publication get an explicit
+timing warning. this doesn't independently verify the article. its source
+appears alongside the spoken lines in the transcript, with a link when one
+was supplied
+
+the desktop keeps your article draft until **Clear draft**. the browser clears
+it after acceptance and keeps it on rejection. duplicate waiting submissions
+are ignored. article text is stored locally and sent to the configured
+OpenRouter writer when the director prepares the break
+
+API: `POST /api/request` with `{"mode":"article","query":"..."}`. accepted
+links start as `preparing`; extracted or pasted sources become `pending`.
+failed fetches stay visible until dismissed. articles use `wish:<id>` queue
+entries and cannot be reordered among songs.
 
 ### YouTube links and Spotify search
 
@@ -47,7 +80,7 @@ Radio now offers the same **Spotify song suggestions** as Console, including
 the browser view. Type a song or artist, choose a result, then send the request.
 The selected title, credits, album, year and duration travel with the request;
 duration helps reject the wrong upload. Editing the text clears that selection.
-Suggestions are disabled in **Set vibe** mode and for YouTube links. Searches
+Suggestions are disabled in **Set vibe** and **Article** modes and for YouTube links. Searches
 use the existing `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET`; ordinary
 requests and YouTube links still work if Spotify is unavailable. This searches
 Spotify's catalog; playback uses Defalt's existing audio preparation pipeline.

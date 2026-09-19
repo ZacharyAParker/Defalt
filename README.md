@@ -24,6 +24,8 @@ it runs locally on Windows
   keeps a mood or activity in mind until you change it.
 - Two configurable hosts, song-specific jokes, optional meme references,
   speech ducking, and a transcript.
+- Article requests: paste a news link or full text and the director writes a
+  short, attributed host break. Source links stay with the transcript.
 
 the hosts use a language model and text-to-speech. the deck controls don't
 need either. Spotify is used for search and metadata; it isn't the playback

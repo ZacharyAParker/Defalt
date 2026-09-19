@@ -63,6 +63,10 @@ def main():
         stream.reconfigure(encoding="utf-8", errors="replace")
     payload = json.load(sys.stdin)
     operation = sys.argv[1]
+    if operation == "article":
+        from .articles import fetch
+        print(json.dumps(fetch(payload['url']), ensure_ascii=False), flush=True)
+        return
     if operation == "guess_metadata":
         from . import llm
         import contextlib

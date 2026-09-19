@@ -36,6 +36,8 @@ pub struct TranscriptLine {
     pub text: String,
     pub start_at: f64,
     pub active: bool,
+    pub source: Option<String>,
+    pub source_url: Option<String>,
 }
 
 pub enum Health {
@@ -255,6 +257,10 @@ pub fn on_air_from(body: &serde_json::Value) -> OnAir {
                         text: line["text"].as_str()?.to_string(),
                         start_at: line["start_at"].as_f64().unwrap_or(0.0),
                         active: line["active"].as_bool().unwrap_or(false),
+                        source: line["reference"]["source"].as_str().map(str::to_string),
+                        source_url: line["reference"]["url"].as_str()
+                            .filter(|url| url.starts_with("https://") || url.starts_with("http://"))
+                            .map(str::to_string),
                     })
                 })
                 .collect()

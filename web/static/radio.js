@@ -29,7 +29,7 @@ const ui = {
   transcript: el("transcript"), transcriptEmpty: el("transcript-empty"),
   hostPill: el("host-pill"),
   form: el("request-form"), input: el("request-input"), note: el("request-note"),
-  requestMode: el("request-mode"), requestPrompt: el("request-prompt"),
+  requestMode: el("request-mode"), requestPrompt: el("request-prompt"), articleInput: el("article-input"),
   spotifyNote: el("spotify-note"), spotifyResults: el("spotify-results"),
   vibePanel: el("vibe-panel"), vibeDescription: el("vibe-description"), vibeClear: el("vibe-clear"),
   queue: el("queue"), lineupCount: el("lineup-count"),
@@ -398,6 +398,14 @@ function renderLines() {
     what.className = "line__text";
     what.textContent = item.meta.text;
     li.append(who, what);
+    const reference = item.meta.reference;
+    if (reference?.kind === "article") {
+      const linked = /^https?:\/\//i.test(reference.url || "");
+      const source = document.createElement(linked ? "a" : "small");
+      source.textContent = `Source: ${reference.source || "Pasted article"}`;
+      if (linked) { source.href = reference.url; source.target = "_blank"; source.rel = "noopener noreferrer"; }
+      li.append(source);
+    }
     ui.transcript.append(li);
 
     while (ui.transcript.children.length > 60) ui.transcript.firstElementChild.remove();
@@ -894,7 +902,7 @@ for (const [button, value] of [[ui.up, "up"], [ui.down, "down"]]) {
    turns up on air twenty minutes later. */
 const KIND_LABEL = {
   track: "song", artist: "artist", similar: "similar", genre: "genre",
-  topic: "topic", segment: "segment", directive: "play less", vibe: "vibe", clear_vibe: "vibe",
+  topic: "topic", article: "article", segment: "segment", directive: "play less", vibe: "vibe", clear_vibe: "vibe",
 };
 
 let spotifySelection = null, spotifyTimer = null, spotifyRevision = 0;
@@ -910,7 +918,7 @@ function clearSpotify() {
 ui.input.addEventListener("input", () => {
   clearSpotify();
   const query = ui.input.value.trim(), revision = spotifyRevision;
-  if (ui.requestMode.value === "vibe" || query.length < 2 || /https?:\/\/|youtube\.com\/|youtu\.be\//i.test(query)) return;
+  if (ui.requestMode.value !== "request" || query.length < 2 || /https?:\/\/|youtube\.com\/|youtu\.be\//i.test(query)) return;
   spotifyTimer = setTimeout(async () => {
     ui.spotifyNote.textContent = "Searching Spotify…";
     try {
@@ -946,18 +954,23 @@ ui.input.addEventListener("input", () => {
 
 ui.form.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const query = ui.input.value.trim();
+  const mode = ui.requestMode.value;
+  const input = mode === "article" ? ui.articleInput : ui.input;
+  if (input.disabled) return;
+  const query = input.value.trim();
   if (!query) return;
 
   ui.note.textContent = "Working out what you meant…";
   ui.note.dataset.tone = "";
-  ui.input.disabled = true;
+  input.disabled = true;
+  ui.requestMode.disabled = true;
+  if (mode === "article") ui.note.textContent = "Sending article…";
 
   let payload;
   try {
     payload = await api("/api/request", {
-      method: "POST", body: JSON.stringify({ query, mode: ui.requestMode.value,
-        selection: ui.requestMode.value !== "vibe" && spotifySelection
+      method: "POST", body: JSON.stringify({ query, mode,
+        selection: mode === "request" && spotifySelection
           && query === `${spotifySelection.artist} - ${spotifySelection.title}` ? spotifySelection : null }),
     });
   } catch (error) {
@@ -967,10 +980,11 @@ ui.form.addEventListener("submit", async (event) => {
       ? { ...error.payload, ok: false }
       : { ok: false, message: error.message };
   } finally {
-    ui.input.disabled = false;
+    input.disabled = false;
+    ui.requestMode.disabled = false;
   }
 
-  const kind = payload.intent && payload.intent.kind;
+  const kind = payload.kind || (payload.intent && payload.intent.kind);
   ui.note.textContent = (payload.ok && kind && KIND_LABEL[kind])
     ? `${KIND_LABEL[kind]} — ${payload.message}`
     : payload.message || "something went wrong";
@@ -978,8 +992,8 @@ ui.form.addEventListener("submit", async (event) => {
 
   if (payload.ok) {
     clearSpotify();
-    ui.input.value = "";
-    ui.input.focus();
+    input.value = "";
+    input.focus();
   }
   loadQueue();
   loadVibe();
@@ -988,10 +1002,18 @@ ui.form.addEventListener("submit", async (event) => {
 ui.requestMode.addEventListener("change", () => {
   clearSpotify();
   const vibeMode = ui.requestMode.value === "vibe";
+  const articleMode = ui.requestMode.value === "article";
+  ui.input.hidden = articleMode;
+  ui.articleInput.hidden = !articleMode;
   ui.requestPrompt.textContent = vibeMode ? "What is the mood, or what are you doing?" : "What would you like to hear?";
   ui.input.placeholder = vibeMode ? "Studying, calm and jazzy. No heavy metal." : "A song, YouTube link, genre, or topic…";
   ui.note.textContent = vibeMode ? "Stays on until changed or cleared. Planned mixes finish first; song requests keep priority." : "Ask for a song, artist, genre, or something for the hosts to discuss.";
   ui.note.dataset.tone = "";
+  if (articleMode) {
+    ui.requestPrompt.textContent = "Article link or pasted text";
+    ui.note.textContent = "The director writes a sourced news break. Already planned breaks finish first. Up to 24,000 characters.";
+  }
+  ui.requestPrompt.htmlFor = articleMode ? "article-input" : "request-input";
 });
 
 function showVibe(vibe) {
@@ -1017,7 +1039,7 @@ ui.vibeClear.addEventListener("click", async () => {
 });
 
 /* ── The queue ─────────────────────────────────────────────────────── */
-const STAGE_LABEL = { on_deck: "on deck", queued: "queued", finding: "finding" };
+const STAGE_LABEL = { on_deck: "on deck", queued: "queued", finding: "finding", article: "article" };
 
 function iconButton(symbol, label, handler) {
   const button = document.createElement("button");
@@ -1043,7 +1065,7 @@ async function queueAction(id, action) {
   }
 }
 
-let queueBusy = false;
+let queueBusy = false, articleFetching = false;
 
 async function loadQueue() {
   if (queueBusy) return;
@@ -1059,6 +1081,7 @@ async function loadQueue() {
   queueBusy = false;
 
   const rows = data.items || [];
+  articleFetching = rows.some(row => row.stage === "article" && row.status === "preparing");
   const movable = rows.filter((r) => r.stage === "queued");
 
   ui.queue.replaceChildren();
@@ -1066,6 +1089,7 @@ async function loadQueue() {
   // Topics and forced segments sit above the music -- they change the next
   // break rather than the running order.
   for (const wish of wishes) {
+    if (wish.kind === "article") continue; // Included in the shared queue, including fetch failures.
     if (!["pending", "active"].includes(wish.status)) continue;
     const li = document.createElement("li");
     li.className = "queue__item queue__item--wish";
@@ -1123,7 +1147,8 @@ async function loadQueue() {
     ui.queue.append(li);
   }
 
-  const count = rows.filter((r) => !r.playing).length + wishes.length;
+  const count = rows.filter((r) => !r.playing).length
+    + wishes.filter(w => w.kind !== "article" && ["pending", "active"].includes(w.status)).length;
   ui.lineupCount.textContent = count ? String(count) : "";
   ui.lineupEmpty.hidden = count > 0;
   ui.queueClear.disabled = !movable.length;
@@ -1329,7 +1354,7 @@ async function boot() {
   loadVibe();
   setInterval(loadVibe, 4000);
   loadQueue();
-  setInterval(() => { if (running) loadQueue(); }, 15000);
+  setInterval(() => { if (running || articleFetching) loadQueue(); }, 5000);
   setInterval(() => { if (running) poll(); }, POLL_MS);
   setInterval(() => { if (running) pumpAudio(); }, 900);
 

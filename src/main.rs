@@ -1097,6 +1097,11 @@ impl Defalt {
                 }
             }
             if std::env::var_os("DEFALT_SHOT_RADIO").is_some() { self.view = View::Radio; }
+            if std::env::var_os("DEFALT_SHOT_ARTICLE").is_some() {
+                self.airtime.request_is_article = true;
+                self.airtime.article = "https://www.mindstudio.ai/blog/gemini-4-release-date-rumors".into();
+                self.view = View::Radio;
+            }
             if let Some(path) = std::env::var_os("DEFALT_SHOT_STATUS") {
                 if let Ok(body) = std::fs::read(path).ok().and_then(|s| serde_json::from_slice(&s).ok()).ok_or(()) {
                     let status = station::on_air_from(&body);

@@ -241,7 +241,8 @@ fn queue_panel(app: &mut Defalt, ui: &mut Ui, rect: Rect) {
             for (index, row) in rows.iter().enumerate() {
                 let width = ui.available_width();
                 let (slot, response) = ui.allocate_exact_size(vec2(width, 56.0), Sense::hover());
-                if !row.selection_reason.is_empty() { response.on_hover_text(&row.selection_reason); }
+                if row.stage == "article" { response.on_hover_text(format!("{}\n{}", row.title, row.artist)); }
+                else if !row.selection_reason.is_empty() { response.on_hover_text(&row.selection_reason); }
 
                 // Stage reads as colour: on air, on the clock, waiting, still
                 // being found.
@@ -264,6 +265,8 @@ fn queue_panel(app: &mut Defalt, ui: &mut Ui, rect: Rect) {
 
                 let under = if row.stage == "finding" {
                     "finding...".to_string()
+                } else if row.stage == "article" {
+                    "news article".to_string()
                 } else {
                     let mut parts = Vec::new();
                     if let Some(bpm) = row.bpm {
@@ -532,41 +535,59 @@ fn controls_content(app: &mut Defalt, mut column: &mut Ui) {
     // next break, "do the news", or "play less niko b" -- the station works
     // out which, so this does not have to and must not pretend otherwise.
     column.add_space(10.0);
-    let previous_mode = app.airtime.request_is_vibe;
-    column.horizontal(|ui| {
-        ui.selectable_value(&mut app.airtime.request_is_vibe, false, "Request");
-        ui.selectable_value(&mut app.airtime.request_is_vibe, true, "Set vibe");
+    let previous_mode = (app.airtime.request_is_vibe, app.airtime.request_is_article);
+    column.horizontal_wrapped(|ui| {
+        if ui.selectable_label(!app.airtime.request_is_vibe && !app.airtime.request_is_article, "Request").clicked() {
+            app.airtime.request_is_vibe = false; app.airtime.request_is_article = false;
+        }
+        if ui.selectable_label(app.airtime.request_is_vibe, "Set vibe").clicked() {
+            app.airtime.request_is_vibe = true; app.airtime.request_is_article = false;
+        }
+        if ui.selectable_label(app.airtime.request_is_article, "Article").clicked() {
+            app.airtime.request_is_vibe = false; app.airtime.request_is_article = true;
+        }
     });
     let vibe_mode = app.airtime.request_is_vibe;
-    if previous_mode != vibe_mode {
+    let article_mode = app.airtime.request_is_article;
+    if previous_mode != (vibe_mode, article_mode) {
         app.airtime.request_selection = None;
         app.airtime.catalogue.clear();
-        if !vibe_mode { app.airtime.catalogue.typed(&app.airtime.request.clone()); }
+        if !vibe_mode && !article_mode { app.airtime.catalogue.typed(&app.airtime.request.clone()); }
     }
     let box_width = column.available_width().min(180.0);
-    let entry = column.add_enabled(
+    let entry = if article_mode {
+        column.label(super::rich("Article link or pasted text", 10.5, theme::TEXT_DIM));
+        column.add_enabled(running, egui::TextEdit::multiline(&mut app.airtime.article)
+            .hint_text("Paste a news URL or the article itself")
+            .char_limit(24000).desired_rows(5).desired_width(box_width)
+            .font(FontId::proportional(10.5)))
+    } else { column.add_enabled(
         running,
         egui::TextEdit::singleline(&mut app.airtime.request)
             .hint_text(if vibe_mode { "Studying, calm and jazzy" } else { "Song, YouTube link, or topic" })
             .char_limit(240)
             .desired_width(box_width)
             .font(FontId::proportional(10.5)),
-    );
-    let sent = entry.lost_focus() && column.input(|i| i.key_pressed(egui::Key::Enter));
+    ) };
+    let sent = !article_mode && entry.lost_focus() && column.input(|i| i.key_pressed(egui::Key::Enter));
     if entry.changed() {
         app.airtime.request_selection = None;
-        if !vibe_mode { app.airtime.catalogue.typed(&app.airtime.request.clone()); }
+        if !vibe_mode && !article_mode { app.airtime.catalogue.typed(&app.airtime.request.clone()); }
     }
-    let has_text = !app.airtime.request.trim().is_empty();
-    let pressed = super::chip(&mut column, if vibe_mode { "Keep this vibe" } else { "Send request" }, vec2(box_width, 24.0), false,
+    let has_text = !(if article_mode { &app.airtime.article } else { &app.airtime.request }).trim().is_empty();
+    let pressed = super::chip(&mut column, if article_mode { "Send article" } else if vibe_mode { "Keep this vibe" } else { "Send request" }, vec2(box_width, 24.0), false,
                               running && has_text)
-        .on_hover_text(if vibe_mode { "Guides future picks until changed or cleared. Planned mixes finish first." } else { "Ask for a song, artist, genre, or something to talk about." })
+        .on_hover_text(if article_mode { "The director writes a sourced news break. Already planned breaks finish first." } else if vibe_mode { "Guides future picks until changed or cleared. Planned mixes finish first." } else { "Ask for a song, artist, genre, or something to talk about." })
         .clicked();
     if (sent && has_text && running) || pressed {
         app.airtime.submit_request();
         entry.request_focus();
     }
-    if !vibe_mode {
+    if article_mode {
+        column.label(super::rich("Next unwritten host break. Draft stays here; clear it when done.", 10.0, theme::TEXT_DIM));
+        if column.small_button("Clear draft").clicked() { app.airtime.article.clear(); }
+    }
+    if !vibe_mode && !article_mode {
         if let Some(selected) = &app.airtime.request_selection {
             column.label(super::rich(&format!("Spotify selection · {}", selected.length()), 10.0, theme::CYAN));
         } else if !app.airtime.request.trim().is_empty() {
@@ -701,6 +722,13 @@ fn on_air(app: &mut Defalt, ui: &mut Ui, rect: Rect) {
                         .font(FontId::proportional(16.0))
                         .color(if line.active { theme::TEXT_BRIGHT } else { theme::TEXT }),
                 );
+                if let Some(source) = &line.source {
+                    if let Some(url) = &line.source_url {
+                        ui.hyperlink_to(format!("Source: {source}"), url);
+                    } else {
+                        ui.small(format!("Source: {source}"));
+                    }
+                }
             }
         });
 

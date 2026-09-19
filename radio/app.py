@@ -162,7 +162,7 @@ def list_requests():
         "FROM requests r LEFT JOIN tracks t ON t.key = r.track_key "
         "ORDER BY r.ts DESC LIMIT 20")
     wish_rows = db.query(
-        "SELECT id, ts, raw, kind, subject, timing, status, note "
+        "SELECT id, ts, CASE WHEN kind='article' THEN subject ELSE raw END AS raw, kind, subject, timing, status, note "
         "FROM wishes ORDER BY ts DESC LIMIT 20")
     return jsonify({
         "tracks": [dict(row) for row in tracks],
@@ -222,6 +222,15 @@ def get_queue():
             "source": "request", "can_move": False, "can_remove": True,
         })
 
+    wishes.pending()  # Retire interrupted/expired article preparation too.
+    for row in db.query("SELECT id,subject,status,note FROM wishes WHERE kind='article' "
+                        "AND status IN ('pending','preparing','failed') ORDER BY ts DESC LIMIT 20"):
+        rows.append({'id': f"wish:{row['id']}", 'stage': 'article', 'playing': False,
+                     'status': row['status'],
+                     'eta': None, 'title': row['subject'], 'artist': row['note'] or
+                     ('Fetching article' if row['status'] == 'preparing' else
+                      'Article failed' if row['status'] == 'failed' else 'Next unwritten host break'),
+                     'source': 'article', 'can_move': False, 'can_remove': True})
     return jsonify({"items": rows, "now": round(now, 2)})
 
 
@@ -231,6 +240,16 @@ def queue_action(entry_id: str, action: str):
     station = director.station()
 
     # A request that has not resolved yet lives in the database, not the queue.
+    if entry_id.startswith('wish:'):
+        try:
+            wish_id = int(entry_id.split(':', 1)[1])
+        except ValueError:
+            return jsonify(error='Not an article request'), 400
+        if action != 'remove':
+            return jsonify(error='Articles play during host breaks and cannot be reordered with songs.'), 400
+        with station.lock:
+            removed = wishes.cancel(wish_id)
+        return jsonify(ok=removed), 200 if removed else 409
     if entry_id.startswith("req:"):
         if action != "remove":
             return jsonify(error="still being found -- it cannot be reordered "

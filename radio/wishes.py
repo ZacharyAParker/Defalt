@@ -208,7 +208,7 @@ def add_wish(intent: intent_mod.Intent, payload: dict[str, Any] | None = None
 def pending(kind: str | None = None) -> list[dict[str, Any]]:
     """Live wishes, oldest first, with expired ones retired on the way past."""
     db.write("UPDATE wishes SET status='failed', note='expired' "
-             "WHERE status='pending' AND expires_at IS NOT NULL "
+             "WHERE status IN ('pending','preparing') AND expires_at IS NOT NULL "
              "AND expires_at < ?", (time.time(),))
     sql = "SELECT * FROM wishes WHERE status='pending'"
     params: list[Any] = []
@@ -221,7 +221,9 @@ def pending(kind: str | None = None) -> list[dict[str, Any]]:
 
 def next_topic() -> dict[str, Any] | None:
     """The topic the hosts should cover next, if one is due."""
-    for wish in pending("topic"):
+    for wish in pending():
+        if wish['kind'] not in ('topic', 'article'):
+            continue
         if wish["timing"] == "hour" and time.localtime().tm_min > 6:
             continue        # asked for top of the hour, not yet
         return wish
@@ -243,7 +245,7 @@ def close(wish_id: int, status: str = "done", note: str = "") -> None:
 
 def cancel(wish_id: int) -> bool:
     row = db.one("SELECT status FROM wishes WHERE id=?", (wish_id,))
-    if not row or row["status"] not in ("pending", "active"):
+    if not row or row["status"] not in ("pending", "active", "preparing", "failed"):
         return False
     close(wish_id, "cancelled")
     return True
@@ -258,8 +260,11 @@ def submit(raw: str, *, rate_current: Any = None, mode: str = "request", vibe_ch
     `rate_current` is the station's thumbs-down callback, passed in so this
     module does not have to import the director and create a cycle.
     """
+    if mode == "article":
+        from . import articles
+        return articles.submit(raw)
     if mode not in ("request", "vibe"):
-        return {"ok": False, "message": "Choose request or vibe."}
+        return {"ok": False, "message": "Choose request, vibe, or article."}
     try:
         selected = spotify.selected(raw, selection) if mode == "request" else None
     except ValueError as error:

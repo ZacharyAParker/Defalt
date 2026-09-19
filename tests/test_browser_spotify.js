@@ -8,7 +8,7 @@ function element() {
     append(...children) { this.children.push(...children); }, replaceChildren() { this.children = []; }, focus() {}};
 }
 async function run() {
-  const ui = Object.fromEntries(['form','input','note','requestMode','requestPrompt','spotifyNote','spotifyResults',
+  const ui = Object.fromEntries(['form','input','note','requestMode','requestPrompt','articleInput','spotifyNote','spotifyResults',
     'vibePanel','vibeDescription','vibeClear'].map(name => [name, element()]));
   ui.requestMode.value = 'request';
   let timer, pending = [], posts = [];

@@ -13,7 +13,7 @@ from typing import Any
 from .. import config, db, taste
 from ..sources import rss, steam
 from .base import Line, write
-from . import personal
+from . import personal, article
 
 SEGMENT_KINDS = [
     "banter", "track_intro", "news", "patch_notes",
@@ -434,6 +434,7 @@ Do not mention a song title -- there is no song yet."""
 
 
 WRITERS = {
+    "article": article.write,
     "topic": topic,
     "sign_on": sign_on,
     "track_intro": track_intro,

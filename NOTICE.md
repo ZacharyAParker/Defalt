@@ -73,12 +73,13 @@ the original. Every story keeps its source URL.
 
 | Service | What it gets | Optional |
 |---|---|---|
-| OpenRouter | The segment brief: track titles, headlines, patch text | Yes — canned lines without it |
+| OpenRouter | The segment brief: track titles, headlines, patch text, submitted articles | Yes — canned lines without it |
 | Microsoft Edge TTS | The written host lines, to synthesise speech | No |
 | Steam Web API | Your SteamID, to read your library and wishlist | Yes |
 | RSS feeds | Nothing about you; a plain GET | Yes |
 
 The database and vault stay on this machine. When host dialogue or request
 interpretation uses OpenRouter, the prompt can include song details, your vibe
-brief, and selected listening-history facts. Voice providers receive the lines
-they are asked to read.
+brief, selected listening-history facts, and the full text of articles you
+submit for a host break. Article links are fetched from their publisher.
+Voice providers receive the lines they are asked to read.

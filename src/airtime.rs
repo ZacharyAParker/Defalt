@@ -425,6 +425,8 @@ pub struct Airtime {
     /// What you have typed into the request box.
     pub request: String,
     pub request_is_vibe: bool,
+    pub request_is_article: bool,
+    pub article: String,
     pub catalogue: crate::spotify::Search,
     pub request_selection: Option<crate::spotify::Suggestion>,
 }
@@ -474,6 +476,8 @@ impl Airtime {
             gripe_out,
             request: String::new(),
             request_is_vibe: false,
+            request_is_article: false,
+            article: String::new(),
             catalogue: crate::spotify::Search::new(root),
             request_selection: None,
         }
@@ -647,17 +651,18 @@ impl Airtime {
     /// "do the news", or "play less niko b" -- the station works out which of
     /// those it is, so this does not have to.
     pub fn submit_request(&mut self) {
-        let query = self.request.trim().to_string();
+        let query = if self.request_is_article { &self.article } else { &self.request }.trim().to_string();
         if query.is_empty() {
             return;
         }
-        let mode = if self.request_is_vibe { "vibe" } else { "request" };
-        let selection = self.request_selection.take().filter(|s| !self.request_is_vibe && s.query() == query);
-        self.request.clear();
+        let mode = if self.request_is_article { "article" } else if self.request_is_vibe { "vibe" } else { "request" };
+        let selection = self.request_selection.take().filter(|s| mode == "request" && s.query() == query);
+        if !self.request_is_article { self.request.clear(); }
         self.catalogue.clear();
         self.post("/api/request", Some(serde_json::json!({ "query": query, "mode": mode,
                    "selection": selection.map(|s| s.payload()) })));
-        self.note = Some(format!("{}: {query}", if self.request_is_vibe { "Setting vibe" } else { "Asked for" }));
+        self.note = Some(if self.request_is_article { "Sending article. Progress appears in the queue; draft kept here.".into() }
+                        else { format!("{}: {query}", if self.request_is_vibe { "Setting vibe" } else { "Asked for" }) });
         self.last_queue = Instant::now() - QUEUE_POLL;
     }
 
@@ -675,14 +680,23 @@ impl Airtime {
         let sender = self.gripe_out.clone();
         std::thread::spawn(move || {
             let sent = match body {
-                Some(body) => ureq::post(&url).send_json(&body),
-                None => ureq::post(&url).send_empty(),
+                Some(body) => ureq::post(&url).config().http_status_as_error(false)
+                    .timeout_global(Some(Duration::from_secs(30))).build().send_json(&body),
+                None => ureq::post(&url).config().http_status_as_error(false)
+                    .timeout_global(Some(Duration::from_secs(30))).build().send_empty(),
             };
             // A refusal carries the station's own reason, which is far more
             // use than "that did not work" -- "too late, that one is already
             // playing" tells you what to do instead.
             let complaint = match sent {
-                Ok(_) => return,
+                Ok(mut response) => {
+                    let success = response.status().is_success();
+                    let payload = response.body_mut().read_json::<serde_json::Value>().unwrap_or_default();
+                    if let Some(message) = payload["message"].as_str().or(payload["error"].as_str()) {
+                        message.to_string()
+                    } else if success { return; }
+                    else { format!("the station said no ({})", response.status()) }
+                }
                 Err(ureq::Error::StatusCode(code)) => {
                     format!("the station said no ({code})")
                 }

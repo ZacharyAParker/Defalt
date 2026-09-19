@@ -241,7 +241,7 @@ class Station:
         topic = wishes.next_topic()
         if topic:
             self._active_wish = topic
-            return "topic"
+            return "article" if topic['kind'] == 'article' else "topic"
 
         # Top of the hour is news, if it is due and enabled.
         if config.station.get("clock.top_of_hour_news", True):
@@ -531,7 +531,7 @@ class Station:
             kind = ""
             if do_break:
                 kind = self._choose_segment()
-                if (kind != "sign_on" and was_request
+                if (kind != "sign_on" and was_request and not self._active_wish
                         and config.station.get("requests.acknowledge_on_air", True)):
                     kind = "track_intro"
             previous = self._last_track
@@ -555,6 +555,8 @@ class Station:
                     subject = active_wish["subject"]
                     context["topic"] = subject
                     context["topic_stories"] = rss.search(subject, limit=3)
+                if active_wish and kind == "article":
+                    context["article"] = json.loads(active_wish['payload'])
                 lines = writers.compose(kind, context)
 
             voices = self._render(lines)
@@ -573,6 +575,10 @@ class Station:
                 if not any(i.meta.get("key") == track["key"] for i in self.schedule.music_items()):
                     self._lineup.insert(0, entry)
                 return
+            if active_wish:
+                wish_state = db.one('SELECT status FROM wishes WHERE id=?', (active_wish['id'],))
+                if not wish_state or wish_state['status'] not in ('pending', 'active'):
+                    voices, lines, placement = [], [], 'none'
             self._place(track, voices, placement)
             self._recent_host_lines = (getattr(self, "_recent_host_lines", [])
                                        + [line.text for line in lines])[-32:]
@@ -580,7 +586,8 @@ class Station:
             if do_break:
                 db.mark_aired(kind)
                 if self._active_wish:
-                    wishes.close(self._active_wish["id"], "done")
+                    db.write("UPDATE wishes SET status='done' WHERE id=? AND status IN ('pending','active')",
+                             (self._active_wish['id'],))
                     self._active_wish = None
                 self._songs_since_break = 0
                 self._break_after = self._roll_break_gap()
@@ -603,6 +610,8 @@ class Station:
 
     def _speech_budget(self, kind: str, track: dict[str, Any]) -> float:
         """Roughly how long this break has to play with."""
+        if kind == 'article':
+            return 45.0
         if kind in ("news", "patch_notes", "game_ad"):
             return 28.0
         intro = db.intro_of(
