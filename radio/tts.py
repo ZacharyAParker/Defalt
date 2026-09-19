@@ -37,11 +37,24 @@ def backend() -> str:
     return str(config.station.get("tts.backend", "edge") or "edge").lower()
 
 
+def _resolved_voice(voice: dict[str, Any]) -> dict[str, Any]:
+    voice = dict(voice)
+    voice["engine"] = str(voice.get("engine") or backend()).lower()
+    if voice["engine"] == "openrouter":
+        voice["model"] = voice.get("model") or config.station.get(
+            "tts.openrouter.model", "fish-audio/s2.1-pro-free:free")
+        voice["openrouter_voice"] = voice.get("openrouter_voice") or config.station.get(
+            "tts.openrouter.voice")
+    return voice
+
+
 def _key(text: str, voice: dict[str, Any]) -> str:
-    blob = json.dumps([voice.get("engine") or backend(), text,
+    voice = _resolved_voice(voice)
+    blob = json.dumps([voice["engine"], text,
                        voice.get("name"), voice.get("rate"), voice.get("pitch"),
                        voice.get("volume"), voice.get("model"),
-                       voice.get("openrouter_voice"), voice.get("speed")],
+                       voice.get("openrouter_voice"), voice.get("speed"),
+                       voice.get("instructions"), "speech-v2"],
                       sort_keys=True)
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:20]
 
@@ -104,15 +117,10 @@ SPEECH_ENDPOINT = "https://openrouter.ai/api/v1/audio/speech"
 
 
 def _say_openrouter(text: str, path: Path, voice: dict[str, Any]) -> bool:
-    """Speak via OpenRouter's OpenAI-compatible /audio/speech endpoint.
+    """Render one host; Gemini accepts performance direction in its prompt.
 
-    Note this is a different endpoint from the chat models -- speech models do
-    not appear in /models, so `cli tts-models` cannot enumerate them. You have
-    to know the id, e.g. fish-audio/s2.1-pro-free:free.
-
-    Voice support varies sharply by model: the free Fish model accepts only
-    `alloy`, which is why `engine` is settable per persona. Two hosts on one
-    voice is not a two-host show.
+    Speech models are discoverable with /models?output_modalities=speech.
+    Keep directions separate from the transcript and from fallback engines.
     """
     key = config.env("OPENROUTER_API_KEY")
     if not key:
@@ -121,17 +129,23 @@ def _say_openrouter(text: str, path: Path, voice: dict[str, Any]) -> bool:
     model = str(voice.get("model")
                 or config.station.get("tts.openrouter.model",
                                       "fish-audio/s2.1-pro-free:free"))
+    gemini = model.startswith("google/gemini-") and "tts" in model
+    instructions = str(voice.get("instructions") or "").strip()
+    prompt = text
+    if gemini and instructions:
+        prompt = ("Generate speech for the transcript below. Speak only the transcript, "
+                  "not the performance directions. Do not add any words.\n\n"
+                  f"Performance directions:\n{instructions}\n\nTranscript:\n{text}")
     payload: dict[str, Any] = {
         "model": model,
-        "input": text,
-        # Only mp3 and pcm are accepted. mp3 saves us a conversion pass.
-        "response_format": "mp3",
+        "input": prompt,
+        "response_format": "pcm" if gemini else "mp3",
     }
     name = voice.get("openrouter_voice") or config.station.get(
         "tts.openrouter.voice")
     if name:
         payload["voice"] = str(name)
-    if voice.get("speed"):
+    if voice.get("speed") and not gemini:
         payload["speed"] = float(voice["speed"])
 
     try:
@@ -147,13 +161,31 @@ def _say_openrouter(text: str, path: Path, voice: dict[str, Any]) -> bool:
             },
             json=payload, timeout=120)
         if response.status_code >= 400:
-            if config.DEBUG:
-                print("[tts] openrouter", response.status_code,
-                      response.text[:300], flush=True)
+            print(f"[tts] {model}: HTTP {response.status_code}; trying fallback", flush=True)
             return False
         if not response.content or len(response.content) < 512:
             return False
-        path.write_bytes(response.content)
+        content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
+        if content_type not in {"audio/mpeg", "audio/mp3", "audio/pcm", "audio/l16", "audio/wav", "audio/x-wav"}:
+            return False
+        with tempfile.TemporaryDirectory(dir=path.parent) as directory:
+            raw = Path(directory) / "speech"
+            converted = Path(directory) / "speech.mp3"
+            raw.write_bytes(response.content)
+            args = [config.FFMPEG, "-nostdin", "-v", "error", "-y"]
+            if content_type in {"audio/pcm", "audio/l16"}:
+                # Gemini's native output is little-endian 24 kHz, mono PCM.
+                if not gemini or len(response.content) % 2:
+                    return False
+                args += ["-f", "s16le", "-ar", "24000", "-ac", "1"]
+            result = subprocess.run(
+                [*args, "-i", str(raw), "-vn", "-ar", "48000", "-ac", "1",
+                 "-codec:a", "libmp3lame", "-b:a", "128k", str(converted)],
+                capture_output=True, timeout=60,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            if result.returncode or not converted.exists() or _duration(converted) <= 0:
+                return False
+            converted.replace(path)
     except Exception as error:  # noqa: BLE001
         if config.DEBUG:
             print("[tts] openrouter failed", error, flush=True)
@@ -172,40 +204,39 @@ def say(text: str, voice: dict[str, Any]) -> dict[str, Any] | None:
         return None
 
     VOICE_DIR.mkdir(parents=True, exist_ok=True)
-    path = VOICE_DIR / f"{_key(text, voice)}.mp3"
-
-    if path.exists() and path.stat().st_size > 512:
-        return levelled(path)
-
-    # A persona may name its own engine, so one host can be on a hosted voice
-    # and the other on Edge. Falls back to the station-wide setting.
-    if str(voice.get("engine") or backend()).lower() == "openrouter":
-        if _say_openrouter(text, path, voice):
-            duration = _duration(path)
-            if duration > 0:
-                return levelled(path)
-        # Never lose a line because a hosted engine was unavailable.
-        if config.DEBUG:
-            print("[tts] openrouter unavailable, falling back to edge", flush=True)
-
-    attempts = [voice.get("name"), *FALLBACK_VOICES]
-    for name in attempts:
-        if not name:
-            continue
+    primary = _resolved_voice(voice)
+    candidates = [primary] if primary["engine"] == "openrouter" else []
+    fallback = voice.get("fallback")
+    edge = dict(voice)
+    if isinstance(fallback, dict):
+        previous = _resolved_voice(fallback)
+        if previous["engine"] == "openrouter":
+            candidates.append(previous)
+        edge.update(fallback)
+    # Preserve each host's previous Edge settings as the final fallback.
+    for name in dict.fromkeys([edge.get("name"), *FALLBACK_VOICES]):
+        if name:
+            candidates.append({**edge, "engine": "edge", "name": name,
+                               "model": None, "openrouter_voice": None,
+                               "instructions": None, "speed": None})
+    for index, candidate in enumerate(candidates):
+        path = VOICE_DIR / f"{_key(text, candidate)}.mp3"
         try:
-            asyncio.run(_synthesise(text, path, {**voice, "name": name}))
-        except Exception as error:  # noqa: BLE001 - edge_tts raises broadly
+            if not (path.exists() and path.stat().st_size > 512 and _duration(path) > 0):
+                if candidate["engine"] == "openrouter":
+                    if not _say_openrouter(text, path, candidate):
+                        continue
+                else:
+                    asyncio.run(_synthesise(text, path, candidate))
+            if path.exists() and path.stat().st_size > 512 and _duration(path) > 0:
+                return {**levelled(path), "engine": candidate["engine"],
+                        "model": candidate.get("model"),
+                        "voice": candidate.get("openrouter_voice") if candidate["engine"] == "openrouter" else candidate["name"],
+                        "fallback": index > 0}
+            path.unlink(missing_ok=True)
+        except Exception as error:  # noqa: BLE001 - providers raise broadly
             if config.DEBUG:
-                print("[tts] failed", name, error, flush=True)
-            continue
-        if path.exists() and path.stat().st_size > 512:
-            duration = _duration(path)
-            if duration > 0:
-                return levelled(path)
-        try:
-            path.unlink()
-        except OSError:
-            pass
+                print(f"[tts] {candidate['engine']} failed: {type(error).__name__}", flush=True)
     return None
 
 

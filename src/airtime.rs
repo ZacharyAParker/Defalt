@@ -197,6 +197,8 @@ pub struct Scheduled {
     pub bpm: Option<f64>,
     pub camelot: Option<String>,
     pub key: String,
+    pub host: String,
+    pub segment: String,
 }
 
 impl Scheduled {
@@ -487,6 +489,18 @@ impl Airtime {
     /// True when the station has something on a deck.
     pub fn live(&self) -> bool {
         self.decks.iter().any(|d| d.is_some())
+    }
+
+    pub fn host_levels(&self, peaks: &[f32; crate::engine::playout::CHANNELS]) -> [f32; 2] {
+        let mut levels = [0.0f32; 2];
+        if !self.on { return levels; }
+        for (id, channel) in &self.voices {
+            let Some(item) = self.schedule.iter().find(|s| &s.id == id) else { continue };
+            if self.station_now < item.start_at || self.station_now >= item.ends_at() { continue; }
+            let host = match item.host.to_lowercase().as_str() { "mav" => 0, "rue" => 1, _ => continue };
+            levels[host] = levels[host].max(peaks.get(*channel).copied().unwrap_or(0.0));
+        }
+        levels
     }
 
     /// What this deck is carrying, for the panel to label.
@@ -1524,12 +1538,32 @@ fn item_from(value: &serde_json::Value) -> Option<Scheduled> {
         bpm: meta["bpm"].as_f64(),
         camelot: meta["camelot"].as_str().map(str::to_string),
         key: meta["key"].as_str().unwrap_or("").to_string(),
+        host: meta["host"].as_str().unwrap_or("").to_string(),
+        segment: meta["segment"].as_str().unwrap_or("Host break").to_string(),
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn studio_levels_follow_each_active_host_channel_and_stop_with_playback() {
+        let mut air = Airtime::new(Path::new("."), 8090, 48000);
+        let snapshot = snapshot_from(&serde_json::json!({"now": 1, "items": [
+            {"id":"m", "url":"/m", "kind":"voice", "start_at":0, "duration":3, "meta":{"host":"mav"}},
+            {"id":"r", "url":"/r", "kind":"voice", "start_at":0, "duration":1.5, "meta":{"host":"rue"}}
+        ]}), 0);
+        air.schedule = snapshot.items; air.station_now = 1.0; air.on = true;
+        air.voices.insert("m".into(), 2); air.voices.insert("r".into(), 0);
+        let mut peaks = [0.0; crate::engine::playout::CHANNELS];
+        peaks[0] = 0.2; peaks[2] = 0.7;
+        assert_eq!(air.host_levels(&peaks), [0.7, 0.2]);
+        air.station_now = 2.0;
+        assert_eq!(air.host_levels(&peaks), [0.7, 0.0]);
+        air.on = false;
+        assert_eq!(air.host_levels(&peaks), [0.0, 0.0]);
+    }
 
     /// A schedule shaped exactly like the station's, taken from a live one.
     const REAL: &str = r#"{

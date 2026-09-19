@@ -28,6 +28,9 @@ pub struct OnAir {
     pub transcript: Vec<TranscriptLine>,
     pub mix_config: serde_json::Value,
     pub vibe: Option<String>,
+    pub track_key: String,
+    pub position: f64,
+    pub duration: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -279,6 +282,9 @@ pub fn on_air_from(body: &serde_json::Value) -> OnAir {
         transcript,
         mix_config: body["mix_config"].clone(),
         vibe: body["vibe"]["description"].as_str().map(str::to_string),
+        track_key: playing["key"].as_str().unwrap_or("").to_string(),
+        position: playing["position"].as_f64().unwrap_or(0.0),
+        duration: playing["duration"].as_f64().unwrap_or(0.0),
     }
 }
 

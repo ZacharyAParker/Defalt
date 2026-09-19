@@ -20,7 +20,7 @@ class Catalog(unittest.TestCase):
 
     def test_search_preserves_credits_duration_and_caches_token_and_results(self):
         result = {"tracks": {"items": [{"name": "Song", "artists": [{"name": "One"}, {"name": "Two"}],
-                   "album": {"name": "Album", "release_date": "2024-03-02"}, "duration_ms": 123456}]}}
+                   "album": {"name": "Album", "release_date": "2024-03-02", "images": [{"url": "https://i.scdn.co/image/cover"}]}, "duration_ms": 123456}]}}
         with patch.object(spotify.httpx, "post", return_value=self.response({"access_token": "test", "expires_in": 3600})) as post, \
              patch.object(spotify.httpx, "get", return_value=self.response(result)) as get:
             tracks = spotify.search("Song")
@@ -28,7 +28,7 @@ class Catalog(unittest.TestCase):
             spotify.search("Song two")
         self.assertEqual(post.call_count, 1)
         self.assertEqual(get.call_count, 2)
-        self.assertEqual(tracks[0], {"artist": "One, Two", "title": "Song", "album": "Album", "year": "2024", "duration_ms": 123456})
+        self.assertEqual(tracks[0], {"artist": "One, Two", "title": "Song", "album": "Album", "artwork": "https://i.scdn.co/image/cover", "year": "2024", "duration_ms": 123456})
 
     def test_short_queries_and_links_never_reach_spotify(self):
         with patch.object(spotify.httpx, "post") as post:

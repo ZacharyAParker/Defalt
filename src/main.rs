@@ -115,6 +115,8 @@ pub struct Defalt {
     pub records: Vec<Record>,
     /// The loudest the radio bus was last frame.
     pub air_peak: f32,
+    pub host_levels: [f32; 2],
+    pub studio: ui::studio::Studio,
     pub library_error: Option<String>,
     pub search: String,
     pub sort: (ui::Column, bool),
@@ -246,6 +248,8 @@ impl Defalt {
             engine_error,
             records,
             air_peak: 0.0,
+            host_levels: [0.0; 2],
+            studio: ui::studio::Studio::new(&root_for_station),
             library_error,
             search: String::new(),
             sort: (ui::Column::Artist, true),
@@ -1192,6 +1196,7 @@ impl Defalt {
 
         self.master_peak = telemetry.peak();
         self.air_peak = telemetry.air_peak();
+        self.host_levels = self.airtime.host_levels(&telemetry.voice_peaks());
         self.underruns = telemetry.underruns.load(std::sync::atomic::Ordering::Relaxed);
 
         for deck in 0..DECKS {

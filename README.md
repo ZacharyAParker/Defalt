@@ -11,7 +11,7 @@ it runs locally on Windows
 
 ## what works
 
-Current release: **0.2.0**. Read the [patch notes](CHANGELOG.md),
+Current release: **0.3.0**. Read the [patch notes](CHANGELOG.md),
 [privacy policy](PRIVACY.md), [terms of use](TERMS.md), and
 [copyright information](COPYRIGHT.md). The same pages open from the app footer
 without leaving Console or Radio or stopping playback.
@@ -78,6 +78,17 @@ powershell -ExecutionPolicy Bypass -File tools\ship.ps1
 close Defalt before replacing its executable
 
 ## radio and requests
+
+Radio now opens on the live studio. Mav and Rue animate from their separate
+voice channels, and the vinyl uses Spotify album art or a YouTube thumbnail.
+**Studio settings** controls rain, city lights, cat antics, and reduced motion.
+The cat keeps breathing and snoozing between occasional interruptions. Turn
+off **Studio view** in the native app to use the full transcript layout.
+
+Host speech uses Gemini 3.1 Flash TTS through OpenRouter, with Andrew and Ava
+as the fallback voices. Voice and delivery settings live in each host's
+persona file. Generated speech uses your provider account; cached lines are
+reused. No extra key is needed for YouTube thumbnails.
 
 **Request** is for songs, artists, topics, or a one-off change. **Set vibe** is
 for something you want it to stick with, like "studying, calm and jazzy" or
@@ -159,4 +170,4 @@ command above skips them. Node is only needed for the browser tests
 third-party audio code and its licenses are listed in [vendor/README.md](vendor/README.md)
 
 ---
-Defalt v0.2.0 · © 2026 Zachary Parker
+Defalt v0.3.0 · © 2026 Zachary Parker

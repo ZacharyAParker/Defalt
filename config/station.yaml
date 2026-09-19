@@ -225,13 +225,13 @@ tts:
   backend: edge
 
   openrouter:
-    # Speech models do NOT appear in OpenRouter's /models list, so nothing can
-    # enumerate them for you -- you need the id. This one is free.
+    # Station fallback for personas without their own hosted model.
+    # Discover speech models with /models?output_modalities=speech.
     model: fish-audio/s2.1-pro-free:free
     # Voice support varies hard by model. The free Fish model accepts only
     # "alloy" and rejects every other name with a 400.
     voice: alloy
-    # response_format is forced to mp3; only mp3 and pcm are accepted.
+    # Gemini PCM is converted to MP3; other hosted models request MP3.
 
   # Worth knowing before you switch: a hosted model that offers one voice will
   # make both hosts sound identical. Setting `engine: openrouter` on one

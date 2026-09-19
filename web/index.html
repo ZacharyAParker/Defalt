@@ -11,6 +11,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Archivo:ital,wght@0,400..800;1,400..700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/radio.css">
 <link rel="stylesheet" href="/static/about.css">
+<link rel="stylesheet" href="/static/studio.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23100e0c'/><circle cx='16' cy='16' r='6' fill='%23ffb020'/></svg>">
 </head>
 <body>
@@ -68,14 +69,39 @@
 
   <!-- ─── DECK ─────────────────────────────────────────────── -->
   <main class="deck">
+<div class="booth-column">
+        <section class="studio live-booth" aria-label="Mav and Rue in their radio studio">
+          <img class="scene" src="/static/studio/studio-idle.png" alt="Mav and Rue at a wooden broadcast desk, overlooking a rainy town at night." width="1536" height="1024">
+          <svg class="window-life" id="window-life" viewBox="0 0 1536 1024" aria-hidden="true">
+            <defs><clipPath id="window-glass"><path d="M465 125H551V207L474 188H465Z M575 125H990V277L978 294L940 326L912 364L888 408L864 442L843 480L826 507H790L762 481L709 460L666 448L675 390L671 330L640 275L590 231L575 223Z M1009 125H1130V260L1070 262L1030 277H1009Z"/></clipPath></defs>
+            <g clip-path="url(#window-glass)"><g id="city-lights"></g><g id="window-rain"></g></g>
+          </svg>
+          <div class="cat-life" id="cat-life" aria-hidden="true">
+            <img class="scene cat-frame cat-awake" src="/static/studio/cat-awake.png" alt="" width="1536" height="1024">
+            <img class="scene cat-frame cat-yawn" src="/static/studio/cat-yawn.png" alt="" width="1536" height="1024">
+            <img class="scene cat-frame cat-groom" src="/static/studio/cat-groom.png" alt="" width="1536" height="1024">
+            <img class="scene cat-breath" src="/static/studio/studio-idle.png" alt="" width="1536" height="1024">
+            <span class="cat-dream">z</span><span class="cat-dream second">z</span>
+          </div>
+          <button class="cat-hotspot" id="cat-pet" aria-label="Say hello to the studio cat" title="Say hello to the studio cat"></button>
+          <img class="scene mouth mav-mouth" src="/static/studio/studio-speaking.png" alt="" aria-hidden="true" width="1536" height="1024">
+          <img class="scene mouth rue-mouth" src="/static/studio/studio-speaking.png" alt="" aria-hidden="true" width="1536" height="1024">
+          <img class="scene eyes mav-eyes" src="/static/studio/studio-blink.png" alt="" aria-hidden="true" width="1536" height="1024">
+          <img class="scene eyes rue-eyes" src="/static/studio/studio-blink.png" alt="" aria-hidden="true" width="1536" height="1024">
+          <div class="studio-status"><span class="signal-dot"></span><span id="studio-status">Between records</span></div>
+          <div class="host-tags"><span id="mav-tag"><i></i>MAV <small>the anchor</small></span><span id="rue-tag"><i></i>RUE <small>the wildcard</small></span></div>
+        </section>
+
+<details class="booth-options"><summary>Studio settings</summary><div class="ambience-controls"><label><input type="checkbox" id="rain-enabled" checked> Rain</label><label><input type="checkbox" id="lights-enabled" checked> City lights</label><label><input type="checkbox" id="cat-enabled" checked> Cat antics</label><label><input type="checkbox" id="reduced"> Reduced motion</label><button id="cat-preview" type="button">Meet the cat</button><span id="cat-note">Sleeping on the job.</span></div></details>
     <section class="deck__now" aria-labelledby="np-heading">
       <h2 class="sr-only" id="np-heading">Now playing</h2>
 
+      <div class="live-now"><div class="live-record" aria-hidden="true"><div id="studio-vinyl"><img id="studio-cover" alt="" hidden><span id="studio-cover-label">DEFALT</span></div></div>
       <div class="now" id="now">
         <p class="now__eyebrow" id="now-source">on air</p>
         <p class="now__title" id="now-title">Side Room is off the air</p>
         <p class="now__artist" id="now-artist">Press start to bring it up</p>
-      </div>
+      </div></div>
 
       <div class="scope">
         <canvas id="scope" class="scope__canvas" aria-hidden="true"></canvas>
@@ -128,6 +154,7 @@
     </section>
 
     <!-- ─── TALKBACK ───────────────────────────────────────── -->
+</div>
     <aside class="talkback" aria-labelledby="tb-heading">
       <div class="panel__head">
         <svg class="icon icon--sm" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-mic"/></svg>
@@ -253,5 +280,7 @@
 </dialog>
 <script src="/static/about.js" defer></script>
 <script src="/static/radio.js" defer></script>
+<script src="/static/studio-live.js"></script>
+<script src="/static/studio-ambience.js"></script>
 </body>
 </html>

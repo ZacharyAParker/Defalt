@@ -13,4 +13,4 @@ Dependencies and vendored components retain their own copyrights and licenses. S
 Music, recordings, lyrics, article text, artwork, artist names, trademarks, and other third-party material remain the property of their respective owners. Availability through Defalt does not grant permission to copy, distribute, or commercially use that material. No affiliation or endorsement is implied.
 
 ---
-Defalt v0.2.0 · © 2026 Zachary Parker
+Defalt v0.3.0 · © 2026 Zachary Parker

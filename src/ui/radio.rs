@@ -37,7 +37,8 @@ pub fn draw(app: &mut Defalt, ui: &mut Ui) {
         [rail.right_top(), rail.right_bottom()],
         egui::Stroke::new(1.0, theme::EDGE),
     );
-    on_air(app, ui, main);
+    if app.studio.enabled { super::studio::draw(app, ui, main); }
+    else { on_air(app, ui, main); }
     if has_queue {
         ui.painter().line_segment(
             [queue.left_top(), queue.left_bottom()],
@@ -220,7 +221,7 @@ fn queue_panel(app: &mut Defalt, ui: &mut Ui, rect: Rect) {
                      "the station is not running", 11.0, theme::TEXT_MUTE);
         return;
     }
-    if app.airtime.queue.is_empty() {
+    if app.airtime.queue.is_empty() && app.airtime.schedule.is_empty() {
         super::label(ui, body.center(), Align2::CENTER_CENTER,
                      "nothing lined up yet", 11.0, theme::TEXT_MUTE);
         return;
@@ -234,6 +235,25 @@ fn queue_panel(app: &mut Defalt, ui: &mut Ui, rect: Rect) {
         .auto_shrink([false, false])
         .show(&mut area, |ui| {
             ui.spacing_mut().item_spacing.y = 3.0;
+            ui.label(super::rich("Coming up", 15.0, theme::TEXT));
+            let now = app.airtime.station_now;
+            let mut upcoming: Vec<_> = app.airtime.schedule.iter().filter(|item| item.start_at > now).collect();
+            upcoming.sort_by(|a,b|a.start_at.total_cmp(&b.start_at));
+            let mut previous_break: Option<(String,f64)> = None;
+            let mut shown=0;
+            for item in upcoming {
+                if !item.is_music() {
+                    if previous_break.as_ref().is_some_and(|(kind,end)|kind==&item.segment && item.start_at-*end<3.0) {
+                        previous_break=Some((item.segment.clone(),item.ends_at()));continue;
+                    }
+                    previous_break=Some((item.segment.clone(),item.ends_at()));
+                } else { previous_break=None; }
+                let label=if item.is_music() {format!("{} · {}",item.title,item.artist)}else{item.segment.clone()};
+                ui.label(super::rich(&format!("+{}  {}",super::mmss(item.start_at-now),super::elide(&label,45)),11.0,if item.is_music(){theme::TEXT_DIM}else{theme::CYAN}));
+                shown+=1;if shown>=6 {break;}
+            }
+            if shown==0 {ui.small("The next segments are being prepared.");}
+            ui.add_space(8.0);ui.separator();
             let rows = app.airtime.queue.clone();
             let movable = rows.iter().filter(|row| row.stage == "queued").count();
             let mut seen_movable = 0usize;
@@ -382,6 +402,7 @@ fn controls_content(app: &mut Defalt, mut column: &mut Ui) {
     }
 
     column.add_space(4.0);
+    if column.checkbox(&mut app.studio.enabled, "Studio view").changed() { app.studio.save(); }
     let running = app.station.running();
     let width = column.available_width();
     if super::chip(&mut column, if running { "Stop" } else { "Go on air" },

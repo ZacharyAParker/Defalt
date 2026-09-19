@@ -42,6 +42,21 @@ def release_info():
     return jsonify(about.release_info())
 
 
+@app.get("/api/artwork")
+def track_artwork():
+    from . import artwork
+    key = request.args.get("key", "")
+    if not key or len(key) > 500:
+        return jsonify(error="Track key required"), 400
+    result = artwork.resolve(key)
+    if result is None:
+        return jsonify(error="No artwork available"), 404
+    path, source = result
+    response = send_file(path, mimetype="image/png", conditional=True, max_age=3600)
+    response.headers["X-Artwork-Source"] = source
+    return response
+
+
 # --------------------------------------------------------------------------
 # Playout
 # --------------------------------------------------------------------------

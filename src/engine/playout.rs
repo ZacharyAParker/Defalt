@@ -108,6 +108,7 @@ pub struct Playout {
     pub frame: u64,
     pub gain: f32,
     pub peak: f32,
+    pub channel_peaks: [f32; CHANNELS],
 }
 
 impl Default for Playout {
@@ -117,6 +118,7 @@ impl Default for Playout {
             frame: 0,
             gain: 1.0,
             peak: 0.0,
+            channel_peaks: [0.0; CHANNELS],
         }
     }
 }
@@ -160,7 +162,7 @@ impl Playout {
         let seconds_per_frame = 1.0 / device_rate as f64;
         let mut peak = self.peak;
 
-        for channel in self.channels.iter_mut() {
+        for (channel_index, channel) in self.channels.iter_mut().enumerate() {
             let Some(item) = channel.item.as_ref() else { continue };
 
             // A part with no rate cannot be read at any speed. Let it go
@@ -202,6 +204,7 @@ impl Playout {
                 pair[0] += left;
                 pair[1] += right;
                 peak = peak.max(left.abs()).max(right.abs());
+                self.channel_peaks[channel_index] = self.channel_peaks[channel_index].max(left.abs()).max(right.abs());
             }
 
             if finished {
@@ -324,6 +327,9 @@ mod tests {
         let mut out = vec![0.0; 32 * 2];
         playout.mix_into(&mut out, 48_000, |_| {});
         assert!((out[0] - 0.5).abs() < 1e-5, "they did not sum: {}", out[0]);
+        assert!((playout.channel_peaks[0] - 0.25).abs() < 1e-5);
+        assert!((playout.channel_peaks[1] - 0.25).abs() < 1e-5);
+        assert_eq!(playout.channel_peaks[2], 0.0);
     }
 
     #[test]

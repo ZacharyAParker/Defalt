@@ -1,5 +1,23 @@
 # Patch notes
 
+## 0.3.0 — September 18, 2026
+
+### A room for the radio
+
+- Added the cozy studio to Radio in the app and browser. Mav and Rue's mouths follow their own speech, including pauses and overlapping lines.
+- Rain falls behind the hosts, city lights pulse gently, and reflections move on the water. Each effect can be switched off; reduced motion keeps the scene still.
+- The cat keeps breathing and has floating Z's while asleep. Other antics happen between 90–180-second naps. Clicking the cat gets a greeting.
+- The current record appears on a vinyl disc. Artwork uses a matching Spotify album cover, then the resolved YouTube video's thumbnail if Spotify is unavailable or has no reliable match. Missing images use a plain record label.
+- The native rundown now includes upcoming host breaks, news, and ads alongside records. The transcript, requests, mix settings, and queue controls remain available.
+
+### Host voices
+
+- Mav and Rue now use Gemini 3.1 Flash TTS through OpenRouter, with separate voices and delivery instructions.
+- The original Andrew and Ava voices remain the fallback. Failed renders cannot overwrite Gemini's cache entries.
+- Speech output is validated, converted for playback, and levelled before airing.
+
+Artwork is fetched and cached in the background. Studio animation does not control or interrupt playback.
+
 ## 0.2.0 — September 18, 2026
 
 ### Mixing and playback
@@ -52,4 +70,4 @@
 Earlier development builds used version 0.1.0. The 0.2.0 notes collect the current release changes; they are not a claim that every feature was first written on the release date.
 
 ---
-Defalt v0.2.0 · © 2026 Zachary Parker
+Defalt v0.3.0 · © 2026 Zachary Parker

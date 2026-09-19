@@ -580,6 +580,10 @@ class Station:
                 if not wish_state or wish_state['status'] not in ('pending', 'active'):
                     voices, lines, placement = [], [], 'none'
             self._place(track, voices, placement)
+            for item in self.schedule.items:
+                if item.kind == "voice" and item.meta.get("segment") is None:
+                    item.meta["segment"] = {"game_ad": "Ad break", "news": "News", "article": "News",
+                                            "patch_notes": "Game updates", "sign_on": "Station welcome"}.get(kind, "Host break")
             self._recent_host_lines = (getattr(self, "_recent_host_lines", [])
                                        + [line.text for line in lines])[-32:]
 

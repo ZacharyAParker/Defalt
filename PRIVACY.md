@@ -1,6 +1,6 @@
 # Privacy policy
 
-Effective September 18, 2026. Applies to Defalt 0.2.0 as distributed in this repository.
+Effective September 18, 2026. Applies to Defalt 0.3.0 as distributed in this repository.
 
 ## The short version
 
@@ -15,8 +15,9 @@ The browser player uses local storage for playback preferences such as volume an
 ## What leaves your machine
 
 - OpenRouter and the selected model provider receive prompts for enabled language-model features. These can include requests, track details, vibe instructions, selected listening-history facts, host dialogue, headlines, and the full text of submitted articles. API credentials authenticate these requests.
-- Microsoft Edge TTS, or the configured OpenRouter speech provider, receives the written lines it converts to speech. Those lines can include personal details from your requests or history.
+- Gemini speech through OpenRouter receives host lines and delivery instructions. Microsoft Edge TTS receives the written lines if the primary voice provider fails. Those lines can include personal details from your requests or history.
 - YouTube receives searches, metadata requests, and requests for selected videos or audio. Spotify receives search queries and application credentials for its search feature; Spotify search does not provide playback audio.
+- Cover-art lookup sends the track artist and title to Spotify when configured, and downloads matching album artwork from Spotify's image host. YouTube's image host receives the resolved video identifier when a thumbnail is needed. Images are cached locally; the studio scene itself is bundled with the app.
 - Steam receives the configured SteamID and applicable credentials when library, wishlist, or news features are used. RSS publishers and article websites receive requests for their pages or feeds.
 - The browser player loads fonts from Google Fonts. Optional model or dependency downloads contact their respective hosts.
 
@@ -39,4 +40,4 @@ The server binds to loopback by default and has no public-facing authentication.
 Material changes to these practices will be reflected in this document with a new effective date. The version bundled with a native executable describes that build; the repository may describe a newer release. Contact the maintainer through the Defalt repository on GitHub. Do not include credentials, private listening records, or other sensitive data in public issues.
 
 ---
-Defalt v0.2.0 · © 2026 Zachary Parker
+Defalt v0.3.0 · © 2026 Zachary Parker

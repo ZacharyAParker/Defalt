@@ -61,6 +61,8 @@ def search(query):
                 continue
             album = item.get("album") or {}
             results.append({"artist": artist, "title": title, "album": album.get("name"),
+                            "artwork": next((image.get("url") for image in album.get("images", [])
+                                             if isinstance(image, dict) and str(image.get("url", "")).startswith("https://i.scdn.co/")), None),
                             "year": str(album.get("release_date") or "")[:4],
                             "duration_ms": item.get("duration_ms") or 0})
         with _lock:

@@ -82,6 +82,7 @@ pub struct Telemetry {
     /// of these, so the UI has to be able to read it.
     frame: AtomicU64,
     air_peak: AtomicU32,
+    voice_peaks: [AtomicU32; playout::CHANNELS],
 }
 
 impl Telemetry {
@@ -126,6 +127,10 @@ impl Telemetry {
 
     pub fn air_peak(&self) -> f32 {
         f32::from_bits(self.air_peak.load(Ordering::Relaxed))
+    }
+
+    pub fn voice_peaks(&self) -> [f32; playout::CHANNELS] {
+        std::array::from_fn(|i| f32::from_bits(self.voice_peaks[i].load(Ordering::Relaxed)))
     }
 
     pub fn peak(&self) -> [f32; 2] {
@@ -307,6 +312,10 @@ where
                 telemetry.frame.store(air.frame, Ordering::Relaxed);
                 telemetry.air_peak.store(air.peak.to_bits(), Ordering::Relaxed);
                 air.peak = 0.0;
+                for (i, peak) in air.channel_peaks.iter_mut().enumerate() {
+                    telemetry.voice_peaks[i].store(peak.to_bits(), Ordering::Relaxed);
+                    *peak = 0.0;
+                }
                 telemetry.peak[0].store(peak[0].to_bits(), Ordering::Relaxed);
                 telemetry.peak[1].store(peak[1].to_bits(), Ordering::Relaxed);
                 for (index, deck) in decks.iter_mut().enumerate() {

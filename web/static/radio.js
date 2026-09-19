@@ -282,7 +282,12 @@ function scheduleItem(item, buffer) {
   for (const [time, rate] of rates) {
     if (time > offset) source.playbackRate.linearRampToValueAtTime(rate, startAt + time - offset);
   }
-  source.connect(chain.input);
+  let hostAnalyser = null;
+  if (item.kind === "voice") {
+    hostAnalyser = ctx.createAnalyser();
+    hostAnalyser.fftSize = 512;
+    source.connect(hostAnalyser); hostAnalyser.connect(chain.input);
+  } else source.connect(chain.input);
 
   applyEnvelope(chain.gain.gain, item.envelope, startAt, offset);
   source.start(startAt, (item.offset || 0) + playback.source);
@@ -293,11 +298,13 @@ function scheduleItem(item, buffer) {
     if (entry && entry.source === source) scheduled.delete(item.id);
     try {
       chain.gain.disconnect();
+      hostAnalyser?.disconnect();
       for (const node of chain.nodes) node.disconnect();
     } catch { /* already torn down */ }
   };
 
-  scheduled.set(item.id, { source, gain: chain.gain, item });
+  scheduled.set(item.id, { source, gain: chain.gain, item, hostAnalyser,
+    hostSamples: hostAnalyser ? new Float32Array(hostAnalyser.fftSize) : null });
 }
 
 async function pumpAudio() {
@@ -703,6 +710,17 @@ let frameErrors = 0;
    timeline and the clock. */
 function frame() {
   try {
+    if (window.LiveStudio && !document.hidden) {
+      const levels = {mav:0, rue:0}, now = stationNow();
+      if (running && ctx?.state === "running") for (const entry of scheduled.values()) {
+        if (!entry.hostAnalyser || now < entry.item.start_at || now >= entry.item.start_at + entry.item.duration) continue;
+        entry.hostAnalyser.getFloatTimeDomainData(entry.hostSamples);
+        const level = Math.sqrt(entry.hostSamples.reduce((sum,x)=>sum+x*x,0)/entry.hostSamples.length);
+        const host = entry.item.meta?.host;
+        if (host in levels) levels[host] = Math.max(levels[host], level);
+      }
+      window.LiveStudio.update(levels, running ? currentMusic(now) : null);
+    }
     if (running) {
       updateNowPlaying();
       renderLines();

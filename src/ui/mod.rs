@@ -10,6 +10,7 @@ pub mod browser;
 pub mod decks;
 pub mod racks;
 pub mod radio;
+pub mod studio;
 pub mod theme;
 pub mod toolbar;
 pub mod waveform;
