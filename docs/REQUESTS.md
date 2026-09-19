@@ -74,7 +74,18 @@ duration and mix points still come from audio analysis.
 
 Console saves the song details and YouTube identity in the downloaded FLAC,
 so imports and retries preserve them. Radio keeps them in the library record.
-Unavailable audio fails visibly rather than playing a different search result.
+An unavailable linked video fails visibly; Defalt keeps that exact recording pinned.
+
+for a song requested by name or selected from Spotify, a sign-in-only or
+unavailable upload no longer ends the request immediately. Console and Radio
+try up to three matching uploads and remember unavailable ones for a day.
+fallbacks still have to pass the recording, duration, and edition checks;
+clean versions stay excluded unless requested. a timeout doesn't start a
+fresh round of downloads
+
+if preparation still fails, the request stays in the queue with its reason.
+hover over it on desktop to read the details, then dismiss it or request the
+song again. retrying replaces the old failure in the queue
 
 Radio now offers the same **Spotify song suggestions** as Console, including
 the browser view. Type a song or artist, choose a result, then send the request.

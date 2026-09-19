@@ -213,7 +213,21 @@ def _candidate_score(entry: dict[str, Any], artist: str, title: str,
     return score
 
 
-def resolve(artist: str, title: str, expected_ms: int = 0) -> str | None:
+def _same_recording(entry: dict[str, Any], artist: str, title: str) -> bool:
+    name = entry.get('title') or ''
+    name = re.sub(r'\s*[\[(](?:official(?: music)?(?: video| audio)?|audio|lyrics?|explicit|uncensored)[^\])]*[\])]',
+                  '', name, flags=re.I).strip()
+    parts = re.split(r'\s[-–—]\s', name, maxsplit=1)
+    credit, song = parts if len(parts) == 2 else ('', name)
+    primary = db.norm(db.primary_artist(artist))
+    channel = db.norm(entry.get('channel') or entry.get('uploader') or '')
+    channel = re.sub(r'\s*(?:official|vevo|topic)$', '', channel).strip()
+    named_artist = not primary or primary == 'unknown' or (
+        primary in db.norm(credit) if credit else channel in (primary, db.norm(artist)))
+    return db.norm(song) == db.norm(title) and named_artist
+
+
+def resolve(artist: str, title: str, expected_ms: int = 0, *, exclude=()) -> str | None:
     """Return the best matching source video id, or None."""
     count = int(config.station.get("downloader.search_results", 5) or 5)
     query = f"ytsearch{count}:{artist} - {title}"
@@ -247,7 +261,16 @@ def resolve(artist: str, title: str, expected_ms: int = 0) -> str | None:
             except Exception as error:  # Keep the original video fallback usable.
                 _log("explicit-edition search failed", artist, title, error)
         best: tuple[float, dict[str, Any]] | None = None
+        require_identity = any(entry['id'] in exclude for entry in candidates)
         for entry in candidates:
+            if entry['id'] in exclude:
+                continue
+            if require_identity:
+                # A fallback must still identify this recording; a merely
+                # high-ranked search result is not enough after the first fails.
+                if (not _same_recording(entry, artist, title) or
+                        classify(entry, artist, title)['variant']):
+                    continue
             score = _candidate_score(entry, artist, title, expected_ms,
                                      allow_video=allow_video)
             if score is None:
@@ -304,6 +327,61 @@ def _download_raw(video_id: str, destination: Path) -> Path | None:
         raise
     matches = sorted(destination.parent.glob(destination.stem + ".*"))
     return matches[0] if matches else None
+
+
+def _unavailable(error: Exception) -> bool:
+    """Only source-specific failures warrant trying a different upload."""
+    message = str(error).lower()
+    return any(phrase in message for phrase in (
+        'please sign in', 'sign in to confirm', 'video unavailable',
+        'video is unavailable', 'private video', 'video has been removed',
+        'not available in your country', 'copyright', 'http error 403',
+        'requested format is not available'))
+
+
+def fetch_recording(artist: str, title: str, expected_ms: int = 0, *,
+                    video_id: str | None = None, pinned: bool = False,
+                    use_cache: bool = False, on_attempt=None) -> tuple[str, Path | None]:
+    """Try up to three matching uploads; explicit video links stay pinned.
+
+    Returns the chosen ID and raw audio, or the finished cache file on a hit.
+    Timeouts and disk/encoding failures do not trigger another download.
+    """
+    if pinned and not video_id:
+        raise sourceio.SourceError('The requested video link has no usable video ID.')
+    excluded = {row['video_id'] for row in db.query(
+        'SELECT video_id FROM unavailable_sources WHERE retry_after>?', (time.time(),))}
+    attempted = set()
+    last_error = None
+    for attempt in range(1 if pinned else 3):
+        if not video_id or (not pinned and video_id in excluded):
+            video_id = resolve(artist, title, expected_ms, exclude=excluded | attempted)
+        if not video_id or video_id in attempted:
+            break
+        attempted.add(video_id)
+        if on_attempt:
+            on_attempt(video_id, attempt)
+        cached = _cache_path(video_id)
+        if use_cache and cached.is_file():
+            return video_id, cached
+        try:
+            raw = _download_raw(video_id, AUDIO_DIR / f'.raw_{video_id}')
+            if raw:
+                db.write('DELETE FROM unavailable_sources WHERE video_id=?', (video_id,))
+            return video_id, raw
+        except sourceio.SourceError as error:
+            if pinned or not _unavailable(error):
+                raise
+            last_error = error
+            excluded.add(video_id)
+            db.write('INSERT OR REPLACE INTO unavailable_sources(video_id,retry_after,reason) VALUES(?,?,?)',
+                     (video_id, time.time() + 86400, str(error)[:400]))
+            _log('source unavailable; trying another matching upload', video_id)
+            video_id = None
+    if last_error:
+        raise sourceio.SourceError('Matching uploads were unavailable. Try another video link or retry later. '
+                                   + str(last_error)[:220]) from last_error
+    return '', None
 
 
 def _render(source: Path, target: Path, gain_db: float,
@@ -544,8 +622,9 @@ def _ensure_locked(track: dict[str, Any]) -> dict[str, Any] | None:
     if (not db.field(existing, "source_url")
             and config.station.get("selection.avoid_clean_versions", True)):
         saved_id = None
-    video_id = saved_id or resolve(
-        track["artist"], track["title"], track.get("expected_ms") or 0)
+    video_id, raw = fetch_recording(
+        track['artist'], track['title'], track.get('expected_ms') or 0,
+        video_id=saved_id, pinned=bool(db.field(existing, 'source_url')), use_cache=True)
     if not video_id:
         db.write("UPDATE tracks SET blocked=1 WHERE key=?", (key,))
         return None
@@ -553,10 +632,10 @@ def _ensure_locked(track: dict[str, Any]) -> dict[str, Any] | None:
 
     final = _cache_path(video_id)
     measured: dict[str, Any] | None = None
+    if raw and raw != final and final.exists():
+        raw.unlink(missing_ok=True)
 
     if not final.exists():
-        staging = AUDIO_DIR / f".raw_{video_id}"
-        raw = _download_raw(video_id, staging)
         if not raw:
             return None
 
@@ -585,7 +664,7 @@ def _ensure_locked(track: dict[str, Any]) -> dict[str, Any] | None:
     tonal = analysis.profile(final)
 
     db.write(
-        "UPDATE tracks SET file=?, duration=?, intro_sec=?, outro_sec=?, "
+        "UPDATE tracks SET blocked=0, file=?, duration=?, intro_sec=?, outro_sec=?, "
         "lufs=?, bpm=?, bpm_confidence=?, key_tonic=?, key_mode=?, "
         "key_confidence=?, camelot=?, beat_offset=?, beat_period=?, "
         "beat_residual_ms=?, downbeat_offset=? WHERE key=?",

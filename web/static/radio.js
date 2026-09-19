@@ -1039,7 +1039,7 @@ ui.vibeClear.addEventListener("click", async () => {
 });
 
 /* ── The queue ─────────────────────────────────────────────────────── */
-const STAGE_LABEL = { on_deck: "on deck", queued: "queued", finding: "finding", article: "article" };
+const STAGE_LABEL = { on_deck: "on deck", queued: "queued", finding: "finding", article: "article", failed: "failed" };
 
 function iconButton(symbol, label, handler) {
   const button = document.createElement("button");
@@ -1114,6 +1114,10 @@ async function loadQueue() {
 
     li.append(tagged(row.playing ? "on air" : STAGE_LABEL[row.stage], row.stage),
               labelled(name));
+    if (row.note) {
+      li.title = row.note;
+      li.append(noted(row.note));
+    }
 
     if (row.playing) {
       li.append(noted("now"));

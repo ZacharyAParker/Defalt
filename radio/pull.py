@@ -185,16 +185,15 @@ def pull(query: str, expected_ms: int = 0) -> int:
     # The duration is the whole reason a suggestion is worth taking: the
     # resolver scores against it, which is what separates a record from a
     # featurette about the record.
-    video_id = link["video_id"] if link else library.resolve(artist, title, expected_ms)
+    video_id, raw = library.fetch_recording(artist, title, expected_ms,
+        video_id=link['video_id'] if link else None, pinned=bool(link),
+        on_attempt=lambda video, attempt: emit('fetching', key=key, video_id=video,
+            note='Trying another matching upload.' if attempt else 'Downloading audio.'))
     if not video_id:
         emit("failed", key=key, error="nothing usable found")
         return 1
-    emit("fetching", key=key, video_id=video_id)
-
     # The station's own downloader gets the audio and levels it; we then take
     # the file out of its cache rather than leaving it there to be evicted.
-    staging = library.AUDIO_DIR / f".raw_{video_id}"
-    raw = library._download_raw(video_id, staging)
     if not raw:
         emit("failed", key=key, error="the download failed")
         return 1

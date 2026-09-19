@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from radio import config, db, director, importer, library, pull, sourceio, timeline
+from radio.app import app
 
 
 class RequestFeederTests(unittest.TestCase):
@@ -77,6 +78,84 @@ class RequestFeederTests(unittest.TestCase):
         with patch.object(library, "ensure") as prepare:
             self.assertFalse(self.station._feed_once())
             prepare.assert_not_called()
+
+    def test_failed_request_stays_visible_and_can_be_dismissed(self):
+        db.write("UPDATE requests SET status='failed',note='This upload needs sign-in.' WHERE id=?", (self.request_id,))
+        self.station._lineup = []
+        with patch('radio.app.director.station', return_value=self.station):
+            client = app.test_client()
+            row = client.get('/api/queue').json['items'][0]
+            self.assertEqual(row['stage'], 'failed')
+            self.assertIn('sign-in', row['note'])
+            self.assertTrue(row['can_remove'])
+            self.assertEqual(client.post('/api/queue/' + row['id'] + '/remove').status_code, 200)
+            self.assertFalse(client.get('/api/queue').json['items'])
+
+    def test_new_request_replaces_old_failure_in_queue(self):
+        db.write("UPDATE requests SET status='failed',note='old failure'")
+        new_id = db.write("INSERT INTO requests(ts,query,track_key) VALUES (1,'Verity','verity')")
+        self.station._lineup = []
+        with patch('radio.app.director.station', return_value=self.station):
+            rows = app.test_client().get('/api/queue').json['items']
+        self.assertEqual([row['id'] for row in rows], [f'req:{new_id}'])
+
+    def test_unavailable_upload_falls_back_and_is_remembered(self):
+        audio = Path('replacement.m4a')
+        def resolve(artist, title, duration, *, exclude):
+            return 'replacement' if 'unavailable' in exclude else 'unavailable'
+        with patch.object(library, 'resolve', side_effect=resolve), \
+                patch.object(library, '_download_raw', side_effect=[sourceio.SourceError('Please sign in'), audio]) as download:
+            selected, raw = library.fetch_recording('Artist', 'Song', 123000)
+        self.assertEqual(selected, 'replacement')
+        self.assertEqual(raw, audio)
+        self.assertEqual([call.args[0] for call in download.call_args_list], ['unavailable', 'replacement'])
+        with patch.object(library, 'resolve', side_effect=resolve), \
+                patch.object(library, '_download_raw', return_value=audio) as download:
+            library.fetch_recording('Artist', 'Song', 123000)
+        self.assertEqual(download.call_args.args[0], 'replacement')
+        self.assertEqual(download.call_count, 1)
+
+    def test_pinned_link_never_changes_upload_after_failure(self):
+        with patch.object(library, 'resolve') as resolve, \
+                patch.object(library, '_download_raw', side_effect=sourceio.SourceError('Please sign in')):
+            with self.assertRaisesRegex(sourceio.SourceError, 'sign in'):
+                library.fetch_recording('Artist', 'Song', video_id='exact_video', pinned=True)
+        resolve.assert_not_called()
+
+    def test_timeouts_do_not_multiply_download_waits(self):
+        with patch.object(library, 'resolve', return_value='first'), \
+                patch.object(library, '_download_raw', side_effect=sourceio.SourceError('download timed out')) as download:
+            with self.assertRaisesRegex(sourceio.SourceError, 'timed out'):
+                library.fetch_recording('Artist', 'Song')
+        self.assertEqual(download.call_count, 1)
+        self.assertFalse(db.query('SELECT * FROM unavailable_sources'))
+
+    def test_fallback_attempts_are_bounded_and_expire(self):
+        with patch.object(library, 'resolve', side_effect=['one', 'two', 'three']), \
+                patch.object(library, '_download_raw', side_effect=sourceio.SourceError('Video unavailable')) as download:
+            with self.assertRaisesRegex(sourceio.SourceError, 'Matching uploads were unavailable'):
+                library.fetch_recording('Artist', 'Song')
+        self.assertEqual(download.call_count, 3)
+        db.write('UPDATE unavailable_sources SET retry_after=0')
+        with patch.object(library, 'resolve', return_value='one') as resolve, \
+                patch.object(library, '_download_raw', return_value=None):
+            library.fetch_recording('Artist', 'Song')
+        self.assertEqual(resolve.call_args.kwargs['exclude'], set())
+
+    def test_resolver_fallback_keeps_recording_and_edition_checks(self):
+        def entry(ident, name, channel='Artist', duration=200):
+            return {'id': ident, 'title': name, 'channel': channel, 'duration': duration}
+        entries = [entry('unavailable', 'Artist - Song (Official Audio)'),
+                   entry('clean000000', 'Artist - Song (Clean)'),
+                   entry('other000000', 'Artist - Other Song (Official Audio)'),
+                   entry('wrong000000', 'Song (Official Audio)', 'Other Artist'),
+                   entry('live0000000', 'Artist - Song (Live at Wembley)'),
+                   entry('speed000000', 'Artist - Song (Sped Up)'),
+                   entry('cover000000', 'Artist - Song (Piano Version)'),
+                   entry('correct0000', 'Artist - Song (Lyrics)')]
+        with patch.object(sourceio, 'search', return_value={'entries': entries}):
+            selected = library.resolve('Artist', 'Song', 200000, exclude={'unavailable'})
+        self.assertEqual(selected, 'correct0000')
 
 
 class SourceWorkerTests(unittest.TestCase):

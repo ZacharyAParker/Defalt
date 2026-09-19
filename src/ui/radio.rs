@@ -241,7 +241,8 @@ fn queue_panel(app: &mut Defalt, ui: &mut Ui, rect: Rect) {
             for (index, row) in rows.iter().enumerate() {
                 let width = ui.available_width();
                 let (slot, response) = ui.allocate_exact_size(vec2(width, 56.0), Sense::hover());
-                if row.stage == "article" { response.on_hover_text(format!("{}\n{}", row.title, row.artist)); }
+                if !row.note.is_empty() { response.on_hover_text(&row.note); }
+                else if row.stage == "article" { response.on_hover_text(format!("{}\n{}", row.title, row.artist)); }
                 else if !row.selection_reason.is_empty() { response.on_hover_text(&row.selection_reason); }
 
                 // Stage reads as colour: on air, on the clock, waiting, still
@@ -252,6 +253,7 @@ fn queue_panel(app: &mut Defalt, ui: &mut Ui, rect: Rect) {
                     match row.stage.as_str() {
                         "on_deck" => (theme::PANEL, theme::EDGE_LIT),
                         "finding" => (theme::WELL, theme::EDGE),
+                        "failed" => (theme::WELL, theme::RED),
                         _ => (theme::PANEL, theme::EDGE),
                     }
                 };
@@ -267,6 +269,8 @@ fn queue_panel(app: &mut Defalt, ui: &mut Ui, rect: Rect) {
                     "finding...".to_string()
                 } else if row.stage == "article" {
                     "news article".to_string()
+                } else if row.stage == "failed" {
+                    "failed - hover for details".to_string()
                 } else {
                     let mut parts = Vec::new();
                     if let Some(bpm) = row.bpm {

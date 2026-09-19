@@ -582,6 +582,11 @@ textarea.request__input:not([hidden]) + .btn--send { align-self: flex-start; min
 }
 .queue__kind[data-stage="on_deck"] { color: var(--amber); }
 .queue__kind[data-stage="wish"]    { color: var(--green); }
+.queue__kind[data-stage="failed"]  { color: var(--red); }
+.queue__item[data-stage="failed"] { flex-wrap: wrap; }
+.queue__item[data-stage="failed"] .queue__note {
+  order: 3; flex-basis: 100%; overflow-wrap: anywhere; line-height: 1.5;
+}
 .queue__item[data-playing="1"] .queue__kind { color: var(--red); }
 
 .queue__label {

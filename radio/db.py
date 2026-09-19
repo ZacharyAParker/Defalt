@@ -107,6 +107,12 @@ CREATE TABLE IF NOT EXISTS requests (
     note      TEXT
 );
 
+CREATE TABLE IF NOT EXISTS unavailable_sources (
+    video_id TEXT PRIMARY KEY,
+    retry_after REAL NOT NULL,
+    reason TEXT
+);
+
 -- Anything you ask the station for that is not a single track: a topic to
 -- cover, a genre to explore, a standing "stop playing so much X".
 CREATE TABLE IF NOT EXISTS wishes (

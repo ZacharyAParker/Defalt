@@ -282,6 +282,7 @@ pub struct QueueRow {
     pub can_move: bool,
     pub can_remove: bool,
     pub selection_reason: String,
+    pub note: String,
 }
 
 impl QueueRow {
@@ -1404,6 +1405,7 @@ pub fn queue_from(body: &serde_json::Value) -> Vec<QueueRow> {
                         can_move: row["can_move"].as_bool().unwrap_or(false),
                         can_remove: row["can_remove"].as_bool().unwrap_or(false),
                         selection_reason: row["selection"]["reason"].as_str().unwrap_or("").to_string(),
+                        note: row["note"].as_str().unwrap_or("").to_string(),
                     })
                 })
                 .collect()

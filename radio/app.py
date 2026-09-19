@@ -213,12 +213,15 @@ def get_queue():
                      "can_move": True, "can_remove": True})
 
     for row in db.query(
-            "SELECT r.id, r.query, t.artist, t.title FROM requests r "
+            "SELECT r.id, r.query, r.status, r.note, t.artist, t.title FROM requests r "
             "LEFT JOIN tracks t ON t.key = r.track_key "
-            "WHERE r.status IN ('pending','preparing') ORDER BY r.ts"):
+            "WHERE r.status IN ('pending','preparing') OR (r.status='failed' AND NOT EXISTS "
+            "(SELECT 1 FROM requests newer WHERE newer.track_key=r.track_key AND newer.id>r.id)) "
+            "ORDER BY (r.status='failed'), CASE WHEN r.status='failed' THEN -r.ts ELSE r.ts END LIMIT 30"):
         rows.append({
-            "id": f"req:{row['id']}", "stage": "finding", "playing": False,
+            "id": f"req:{row['id']}", "stage": "failed" if row['status'] == 'failed' else "finding", "playing": False,
             "eta": None, "artist": row["artist"], "title": row["title"] or row["query"],
+            "note": row['note'] if row['status'] == 'failed' else None,
             "source": "request", "can_move": False, "can_remove": True,
         })
 
@@ -260,7 +263,7 @@ def queue_action(entry_id: str, action: str):
             return jsonify(error="not a request"), 400
         with station.lock:
             db.write("UPDATE requests SET status='cancelled' WHERE id=? "
-                     "AND status IN ('pending','preparing')", (request_id,))
+                     "AND status IN ('pending','preparing','failed')", (request_id,))
         return jsonify(ok=True)
 
     if action == "remove":
