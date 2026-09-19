@@ -1,9 +1,19 @@
 # Patch notes
 
-## 0.3.0 — September 18, 2026
+## 0.3.1 — September 18, 2026
 
+- Added **Next host break** and **Play now** ad controls to Radio in the app and browser, with writing, voice preparation, queued, and on-air status.
+- Ads now have fictional house products when Steam or a game watchlist cannot provide material. An empty source no longer silently becomes ordinary banter labeled as an ad.
+- Added Gen Z and TikTok sketch directions, product-specific fallback jokes, and a short speech budget. Real-game claims stay tied to source material; the reads are unsponsored comedy.
+- Forced ads preserve the song timeline, wait for existing host speech, and duck both decks. Browser gain automation updates when an ad is added during playback.
+- Song searches prefer original recordings and check source descriptions for hidden live or acoustic versions. Cached recordings are checked too. Explicit edition requests and exact YouTube links still work.
+- Each play now records whether the listener or station chose it. Hosts own automatic picks; old requests no longer count as current requests. Queue labels show **YOU** or **AUTO**.
+- Requests leave the queue when played, removed, or replaced. Two requests for the same song are tracked separately.
+- Both hosts use occasional Gen Z and TikTok humor across their dialogue. Stock “that's not X, that's Y” punchlines are rejected.
 - Radio's studio now fits the window height, keeping the full scene, current record, and live transcript visible together. Only transcript history scrolls.
 - Windows background helpers no longer open command prompt windows when starting Radio, downloading a song, separating stems, or opening the browser.
+
+## 0.3.0 — September 18, 2026
 
 ### A room for the radio
 
@@ -73,4 +83,4 @@ Artwork is fetched and cached in the background. Studio animation does not contr
 Earlier development builds used version 0.1.0. The 0.2.0 notes collect the current release changes; they are not a claim that every feature was first written on the release date.
 
 ---
-Defalt v0.3.0 · © 2026 Zachary Parker
+Defalt v0.3.1 · © 2026 Zachary Parker

@@ -50,8 +50,21 @@ ads:
   upcoming_window_days: 60
   # Length target for a read, in seconds of speech.
   target_seconds: 22
+  # Keep comedy ads available without Steam credentials or a public wishlist.
+  house_fallback: true
+  humour: "Gen Z and TikTok sketch comedy. Specific setups, escalating absurdity, sharply personal callouts, and dry payoffs. Slang is seasoning, not the joke."
+  house_products:
+    - name: "Queue Insurance"
+      blurb: "A fictional policy covering the embarrassment of being handed the aux."
+    - name: "Grass Touch Simulator"
+      blurb: "An imaginary game about finally going outside, played indoors."
+    - name: "One More Song Alarm"
+      blurb: "A fake alarm clock that accepts one more song as a valid sleep schedule."
   # Styles the writer may pick from. Add your own -- they are free text.
   styles:
+    - "POV: a targeted ad knows a little too much about your music queue"
+    - "fake influencer testimonial; Rue is sold, Mav is reading the fine print"
+    - "comment-section argument accidentally delivered as an ad read"
     - "late-night infomercial, unreasonable enthusiasm"
     - "local car dealership, shouting, terrible"
     - "prestige-drama voiceover that gradually falls apart"

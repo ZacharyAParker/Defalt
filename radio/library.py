@@ -61,10 +61,9 @@ VIDEO_MARKERS = (
     r"\(\s*video\s*\)", r"\bvisuali[sz]er\b", r"\bshort film\b",
 )
 
-# A different recording of the same song. Not rejected outright -- sometimes
-# the alternate take is the only upload -- but pushed well down.
+# Alternate editions require an explicit request when original preference is on.
 VARIANT_WORDS = (
-    "acoustic", "demo", "alternate version", "alternative version",
+    "acoustic", "unplugged", "demo", "alternate version", "alternative version",
     "alt version", "alt. version", "reprise", "rework", "radio edit",
     "single version", "extended mix", "extended version", "mono mix",
     "re-recorded", "rerecorded", "taylor's version", "instrumental version",
@@ -75,6 +74,7 @@ VARIANT_WORDS = (
 LIVE_IN_DESCRIPTION = (
     r"\blive (?:at|in|from|performance|recording)\b", r"\brecorded live\b",
     r"\bperformed live\b", r"\bin concert\b",
+    r"\blive audio\b",
 )
 VIDEO_IN_DESCRIPTION = (
     r"\bofficial (?:music )?video\b", r"\bmusic video by\b",
@@ -126,7 +126,7 @@ def classify(entry: dict[str, Any], artist: str, title: str) -> dict[str, Any]:
     clean, explicit = versions.source_edition(name, artist, title)
 
     return {
-        "live": bool(_matches(name, LIVE_MARKERS, wanted)
+        "live": not versions._tagged(title, r"live(?:\s+(?:at|in|from)[^\])]+)?") and bool(_matches(name, LIVE_MARKERS, wanted)
                      or _matches(description, LIVE_IN_DESCRIPTION, wanted)
                      or (entry.get("live_status") or "") in
                      ("is_live", "was_live", "post_live")),
@@ -141,7 +141,9 @@ def classify(entry: dict[str, Any], artist: str, title: str) -> dict[str, Any]:
         # guards correctly against a result titled "Creep (Acoustic)". A
         # bracketed pattern would miss the dashed request entirely.
         "variant": any(word in name and word not in wanted
-                       for word in VARIANT_WORDS),
+                       for word in VARIANT_WORDS) or any(
+                           word not in wanted and re.search(r"\b" + word + r"\s+(?:version|performance|session|recording|take)\b", description)
+                           for word in ("acoustic", "stripped", "unplugged")),
         "official_audio": bool(re.search(r"\bofficial audio\b", name)),
         "name": name, "channel": channel,
     }
@@ -171,6 +173,8 @@ def _candidate_score(entry: dict[str, Any], artist: str, title: str,
     if wants_clean and kind["explicit"]:
         return None
     if kind["live"] or kind["tampered"]:
+        return None
+    if kind["variant"] and config.station.get("selection.prefer_original_recording", True):
         return None
     if kind["video"] and not allow_video:
         return None
@@ -227,6 +231,28 @@ def _same_recording(entry: dict[str, Any], artist: str, title: str) -> bool:
     return db.norm(song) == db.norm(title) and named_artist
 
 
+def _source_info(video_id: str) -> dict[str, Any]:
+    """Cache source labels separately from catalogue titles and user edits."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id or ""):
+        return {}
+    path = config.CACHE_DIR / "source-info" / f"{video_id}.json"
+    try:
+        info = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(info, dict) and info.get("id") == video_id:
+            return info
+    except (OSError, ValueError):
+        pass
+    try:
+        info = sourceio.describe(video_id)
+        if isinstance(info, dict) and info.get("title"):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(info), encoding="utf-8")
+            return info
+    except (sourceio.SourceError, OSError):
+        pass
+    return {}
+
+
 def resolve(artist: str, title: str, expected_ms: int = 0, *, exclude=()) -> str | None:
     """Return the best matching source video id, or None."""
     count = int(config.station.get("downloader.search_results", 5) or 5)
@@ -260,7 +286,7 @@ def resolve(artist: str, title: str, expected_ms: int = 0, *, exclude=()) -> str
                                   if e and re.fullmatch(r"[\w-]{11}", e.get("id") or ""))
             except Exception as error:  # Keep the original video fallback usable.
                 _log("explicit-edition search failed", artist, title, error)
-        best: tuple[float, dict[str, Any]] | None = None
+        ranked = []
         require_identity = any(entry['id'] in exclude for entry in candidates)
         for entry in candidates:
             if entry['id'] in exclude:
@@ -275,11 +301,15 @@ def resolve(artist: str, title: str, expected_ms: int = 0, *, exclude=()) -> str
                                      allow_video=allow_video)
             if score is None:
                 continue
-            if best is None or score > best[0]:
-                best = (score, entry)
+            ranked.append((score, entry))
 
-        if best:
+        for best in sorted(ranked, key=lambda candidate: -candidate[0]):
             entry = best[1]
+            details = _source_info(entry["id"])
+            checked = {**entry, **{k: v for k, v in details.items() if v is not None}}
+            if _candidate_score(checked, artist, title, expected_ms, allow_video=allow_video) is None:
+                continue
+            entry = checked
             kind = classify(entry, artist, title)
             tags = [k for k in ("art_track", "official_audio", "video", "lyrics", "explicit", "clean")
                     if kind[k]]
@@ -587,7 +617,16 @@ def _ensure_locked(track: dict[str, Any]) -> dict[str, Any] | None:
         from . import youtube
         track = youtube.hydrate(dict(existing))
         existing = track
-    if existing and existing["file"]:
+    use_existing = True
+    if (existing and existing["file"] and existing["video_id"]
+            and db.field(existing, "source") != "local" and not db.field(existing, "source_url")
+            and config.station.get("selection.prefer_original_recording", True)):
+        info = _source_info(existing["video_id"])
+        if info and _candidate_score(info, track["artist"], track["title"],
+                                     track.get("expected_ms") or 0, allow_video=True) is None:
+            use_existing = False
+            _log("replacing alternate cached recording for", track["artist"], track["title"])
+    if existing and existing["file"] and use_existing:
         path = Path(existing["file"])
         if path.exists():
             # Upgrade genre/embedded lyric evidence on the one track being
@@ -620,7 +659,8 @@ def _ensure_locked(track: dict[str, Any]) -> dict[str, Any] | None:
     # Re-resolve it under the current rules instead of downloading it blindly.
     saved_id = existing["video_id"] if existing else None
     if (not db.field(existing, "source_url")
-            and config.station.get("selection.avoid_clean_versions", True)):
+            and (config.station.get("selection.avoid_clean_versions", True)
+                 or config.station.get("selection.prefer_original_recording", True))):
         saved_id = None
     video_id, raw = fetch_recording(
         track['artist'], track['title'], track.get('expected_ms') or 0,

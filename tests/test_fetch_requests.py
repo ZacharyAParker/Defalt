@@ -153,7 +153,7 @@ class RequestFeederTests(unittest.TestCase):
                    entry('speed000000', 'Artist - Song (Sped Up)'),
                    entry('cover000000', 'Artist - Song (Piano Version)'),
                    entry('correct0000', 'Artist - Song (Lyrics)')]
-        with patch.object(sourceio, 'search', return_value={'entries': entries}):
+        with patch.object(sourceio, 'search', return_value={'entries': entries}), patch.object(library, '_source_info', return_value={}):
             selected = library.resolve('Artist', 'Song', 200000, exclude={'unavailable'})
         self.assertEqual(selected, 'correct0000')
 

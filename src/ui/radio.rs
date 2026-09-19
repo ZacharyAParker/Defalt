@@ -293,6 +293,11 @@ fn queue_panel(app: &mut Defalt, ui: &mut Ui, rect: Rect) {
                     "failed - hover for details".to_string()
                 } else {
                     let mut parts = Vec::new();
+                    match row.picked_by.as_str() {
+                        "listener" => parts.push("YOU".to_string()),
+                        "director" => parts.push("AUTO".to_string()),
+                        _ => {},
+                    }
                     if let Some(bpm) = row.bpm {
                         parts.push(format!("{bpm:.0}"));
                     }
@@ -435,6 +440,29 @@ fn controls_content(app: &mut Defalt, mut column: &mut Ui) {
         let _ = crate::process::background("cmd")
             .args(["/C", "start", "", &url])
             .spawn();
+    }
+
+    column.add_space(5.0);
+    column.label(super::rich("Ad break", 12.0, theme::TEXT));
+    let (ad_busy, ads_enabled, ad_note) = match &app.station.health {
+        Health::Live(status) => (status.ad_busy, status.ads_enabled, status.ad_note.clone()),
+        _ => (false, true, String::new()),
+    };
+    column.horizontal(|row| {
+        let half = (width - 6.0) / 2.0;
+        if super::chip(row, "Next host break", vec2(half, 23.0), false, running && ads_enabled && !ad_busy)
+            .on_hover_text("Prepare an ad and add it to the next host break, including one already scheduled.").clicked() {
+            app.airtime.request_ad(false);
+        }
+        if super::chip(row, "Play now", vec2(half, 23.0), false, running && ads_enabled && !ad_busy)
+            .on_hover_text("Play as soon as writing and voices are ready. Music ducks; existing host speech finishes first.").clicked() {
+            app.airtime.request_ad(true);
+        }
+    });
+    if !ad_note.is_empty() {
+        column.label(super::rich(&ad_note, 10.0, theme::TEXT_DIM));
+    } else if !ads_enabled {
+        column.label(super::rich("Ads disabled in games.yaml", 10.0, theme::TEXT_DIM));
     }
 
     if app.airtime.on {

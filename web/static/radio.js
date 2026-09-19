@@ -37,6 +37,7 @@ const ui = {
   timeline: el("timeline"), timelineWrap: document.querySelector(".timeline"),
   faders: el("faders"), panelToggle: el("panel-toggle"), panelBody: el("panel-body"),
   toast: el("toast"),
+  adNext: el("ad-next"), adNow: el("ad-now"), adStatus: el("ad-status"),
 };
 
 /* ── State ─────────────────────────────────────────────────────────── */
@@ -332,6 +333,42 @@ async function pumpAudio() {
   }
 }
 
+function refreshScheduledGains() {
+  // Late-added speech must duck music already handed to Web Audio.
+  for (const item of items) {
+    const entry = scheduled.get(item.id);
+    if (entry && JSON.stringify(entry.item.envelope) !== JSON.stringify(item.envelope)) {
+      const offset = Math.max(0, stationNow() - item.start_at);
+      applyEnvelope(entry.gain.gain, item.envelope,
+                    Math.max(ctx.currentTime, clockOffset + item.start_at), offset);
+      entry.item = item;
+    }
+  }
+}
+
+let adRequestBusy = false;
+function updateAdControls(ad = {}) {
+  ui.adNext.disabled = ui.adNow.disabled = !running || adRequestBusy || !!ad.busy || ad.enabled === false;
+  ui.adStatus.textContent = ad.message || (ad.enabled === false ? "Ads are disabled in games.yaml." :
+    running ? "Unsponsored comedy. Play now airs after preparation and any host speech already in progress." :
+    "Start playback to queue a comedy ad.");
+}
+async function requestAd(timing) {
+  if (!running || adRequestBusy) return;
+  adRequestBusy = true;
+  updateAdControls({message: "Writing and voicing an ad..."});
+  try {
+    const result = await api("/api/ads", {method: "POST", body: JSON.stringify({timing})});
+    adRequestBusy = false;
+    updateAdControls(result.ad);
+  } catch (error) {
+    adRequestBusy = false;
+    updateAdControls({message: error.message});
+  }
+}
+ui.adNext.addEventListener("click", () => requestAd("next_break"));
+ui.adNow.addEventListener("click", () => requestAd("now"));
+
 function stopAll() {
   for (const { source } of scheduled.values()) {
     try { source.stop(); } catch { /* not started */ }
@@ -363,6 +400,8 @@ async function poll() {
 
     const known = new Set(items.map((i) => i.id));
     items = snapshot.items;
+    updateAdControls(snapshot.ad);
+    refreshScheduledGains();
     for (const item of items) {
       if (!known.has(item.id) && item.kind === "voice") queueLine(item);
     }
@@ -854,6 +893,7 @@ function watchAudioPermission() {
 
 function stop() {
   running = false;
+  updateAdControls();
   stopAll();
   if (ctx) ctx.suspend();
   ui.root.dataset.state = "idle";
@@ -1132,6 +1172,8 @@ async function loadQueue() {
 
     li.append(tagged(row.playing ? "on air" : STAGE_LABEL[row.stage], row.stage),
               labelled(name));
+    if (row.selection_origin?.by === "listener") li.append(noted("you queued"));
+    if (row.selection_origin?.by === "director") li.append(noted("auto pick"));
     if (row.note) {
       li.title = row.note;
       li.append(noted(row.note));

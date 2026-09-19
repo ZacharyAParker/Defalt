@@ -11,7 +11,18 @@ it runs locally on Windows
 
 ## what works
 
-Current release: **0.3.0**. Read the [patch notes](CHANGELOG.md),
+Radio's **Ad break** controls let you queue an unsponsored comedy read for the
+next host break or play it as soon as writing and voice preparation finish.
+Existing host speech finishes first and music ducks underneath. Without Steam
+material, fictional house products keep ads available. Edit `ads` in
+`config/games.yaml` for their humor, styles, target length, or to disable them.
+
+Song search prefers original recordings, including when checking cached audio.
+Ask for an acoustic or live edition explicitly, or paste its exact YouTube link
+to play that version. **Mix settings** includes the original-recording preference.
+Queue labels show who picked each play, and the hosts get that same information.
+
+Current release: **0.3.1**. Read the [patch notes](CHANGELOG.md),
 [privacy policy](PRIVACY.md), [terms of use](TERMS.md), and
 [copyright information](COPYRIGHT.md). The same pages open from the app footer
 without leaving Console or Radio or stopping playback.
@@ -170,4 +181,4 @@ command above skips them. Node is only needed for the browser tests
 third-party audio code and its licenses are listed in [vendor/README.md](vendor/README.md)
 
 ---
-Defalt v0.3.0 · © 2026 Zachary Parker
+Defalt v0.3.1 · © 2026 Zachary Parker

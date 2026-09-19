@@ -285,6 +285,7 @@ pub struct QueueRow {
     pub can_remove: bool,
     pub selection_reason: String,
     pub note: String,
+    pub picked_by: String,
 }
 
 impl QueueRow {
@@ -684,6 +685,13 @@ impl Airtime {
     /// Fire a POST at the station and say so if it refuses.
     pub fn clear_vibe(&mut self) {
         self.post("/api/vibe/clear", None);
+    }
+
+    pub fn request_ad(&mut self, immediately: bool) {
+        self.post("/api/ads", Some(serde_json::json!({
+            "timing": if immediately { "now" } else { "next_break" }
+        })));
+        self.note = Some("Preparing a comedy ad...".into());
     }
 
     /// Fire a POST at the station and say so if it refuses.
@@ -1420,6 +1428,7 @@ pub fn queue_from(body: &serde_json::Value) -> Vec<QueueRow> {
                         can_remove: row["can_remove"].as_bool().unwrap_or(false),
                         selection_reason: row["selection"]["reason"].as_str().unwrap_or("").to_string(),
                         note: row["note"].as_str().unwrap_or("").to_string(),
+                        picked_by: row["selection_origin"]["by"].as_str().unwrap_or("").to_string(),
                     })
                 })
                 .collect()

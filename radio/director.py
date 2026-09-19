@@ -83,8 +83,9 @@ class Station:
         config.ensure_dirs()
         taste.import_seed()
         # In-memory queues do not survive a backend restart.
-        db.write("UPDATE requests SET status='pending', note=NULL "
-                 "WHERE status IN ('preparing','queued')")
+        db.write("UPDATE requests SET status='pending', note=NULL WHERE status='preparing'")
+        db.write("UPDATE requests SET status='cancelled', note='Station restarted before this queue entry finished' "
+                 "WHERE status IN ('queued','scheduled')")
 
         self.clock = Clock()
         self.schedule = timeline.Schedule()
@@ -179,6 +180,7 @@ class Station:
                         or not math.isfinite(offset) or not 0 <= offset < duration
                         or not track.get("file") or not Path(track["file"]).is_file()):
                     raise ValueError(f"opening track is not playable: {key}")
+                track["selection_origin"] = {"by": "listener", "method": "preloaded_deck"}
                 prepared.append((deck, track, offset))
 
             if prepared:
@@ -190,7 +192,14 @@ class Station:
                     item.meta["deck"] = deck
                 schedule.seal()
                 keys = {track["key"] for _, track, _ in prepared}
+                for entry in self._lineup:
+                    if entry["track"].get("key") in keys:
+                        self._cancel_entry(entry, "Started from a preloaded deck")
                 self._lineup = [e for e in self._lineup if e["track"].get("key") not in keys]
+                self._finish_requests(self.clock.now())
+                for old in self.schedule.music_items():
+                    self._cancel_entry({"request_id": (old.meta.get("selection_origin") or {}).get("request_id")},
+                                       "Replaced by preloaded decks")
                 self.schedule = schedule
                 self._pending_skip = None
                 self._last_track = prepared[-1][1]
@@ -255,6 +264,7 @@ class Station:
             for kind, weight in weights.items()
             if kind in writers.WRITERS and float(weight or 0) > 0
             and self._cooldown_ok(kind)
+            and (kind != "game_ad" or config.games.get("ads.enabled", True))
         ]
         if not pool:
             return "banter"
@@ -358,6 +368,7 @@ class Station:
                 if not state or state["status"] != "preparing":
                     return True  # Cancelled while audio was downloading.
                 db.write("UPDATE requests SET status='queued', note=NULL WHERE id=?", (request_id,))
+                prepared = {**prepared, "_request_id": request_id}
             placement = str(config.station.get("requests.placement", "after_break") or "after_break")
             self._enqueue(prepared, "request" if was_request else "auto",
                           front=was_request and placement != "queue")
@@ -367,10 +378,17 @@ class Station:
     def _enqueue(self, track: dict[str, Any], source: str,
                  front: bool = False) -> str:
         """Put a prepared track into the queue. Returns its handle."""
+        track = dict(track)
+        request_id = track.pop("_request_id", None) if source == "request" else None
+        track.pop("_request_id", None)
+        track["selection_origin"] = {"by": "listener" if source == "request" else "director",
+                                     "method": ("request" if request_id else "manual_queue") if source == "request" else "automatic",
+                                     "request_id": request_id}
         entry = {
             "id": uuid.uuid4().hex[:10],
             "track": track,
             "source": source,
+            "request_id": request_id,
             "added_at": time.time(),
         }
         with self.lock:
@@ -400,6 +418,7 @@ class Station:
                 "bpm": entry["track"].get("bpm"),
                 "camelot": entry["track"].get("camelot"),
                 "source": entry["source"],
+                "selection_origin": entry["track"].get("selection_origin", {"by": "unknown"}),
                 "selection": entry["track"].get("selection"),
             }
             for entry in entries
@@ -428,8 +447,27 @@ class Station:
             for index, entry in enumerate(self._lineup):
                 if entry["id"] == entry_id:
                     self._lineup.pop(index)
+                    self._cancel_entry(entry, "Removed from queue")
                     return True
         return False
+
+    def _cancel_entry(self, entry, note):
+        request_id = entry.get("request_id")
+        if request_id:
+            db.write("UPDATE requests SET status='cancelled', note=? WHERE id=? AND status IN ('queued','scheduled')",
+                     (note, request_id))
+
+    def _finish_requests(self, now):
+        finished = getattr(self, "_finished_request_ids", set())
+        for item in self.schedule.music_items():
+            request_id = (item.meta.get("selection_origin") or {}).get("request_id")
+            if request_id and request_id not in finished and item.start_at <= now:
+                if now < item.end_at:
+                    db.write("UPDATE requests SET status='aired', note=NULL WHERE id=? AND status='scheduled'", (request_id,))
+                else:
+                    self._cancel_entry({"request_id": request_id}, "Passed without a playback report")
+                finished.add(request_id)
+        self._finished_request_ids = finished
 
     def refresh_vibe(self):
         """Replace unplanned automatic picks; decks and explicit requests stay."""
@@ -444,6 +482,8 @@ class Station:
                 self._lineup = [e for e in self._lineup
                                 if e["source"] == "request"]
             else:
+                for entry in self._lineup:
+                    self._cancel_entry(entry, "Queue cleared")
                 self._lineup = []
             return before - len(self._lineup)
 
@@ -474,6 +514,10 @@ class Station:
                 return False
 
             cut = target.start_at
+            for item in self.schedule.music_items():
+                if item.start_at >= cut:
+                    self._cancel_entry({"request_id": (item.meta.get("selection_origin") or {}).get("request_id")},
+                                       "Removed from the planned schedule")
             self.schedule.items = [i for i in self.schedule.items
                                    if i.start_at < cut]
             surviving = [i for i in self.schedule.items if i.kind == "music"]
@@ -495,6 +539,9 @@ class Station:
 
     def _builder_loop(self) -> None:
         while not self._stop.is_set():
+            if hasattr(self, "ads"):
+                with self.lock:
+                    self.ads.tick()
             if not self._listening():
                 self.clock.stop()
                 self._stop.wait(1.0)
@@ -588,7 +635,8 @@ class Station:
                                        + [line.text for line in lines])[-32:]
 
             if do_break:
-                db.mark_aired(kind)
+                if kind != "game_ad" or voices:
+                    db.mark_aired(kind)
                 if self._active_wish:
                     db.write("UPDATE wishes SET status='done' WHERE id=? AND status IN ('pending','active')",
                              (self._active_wish['id'],))
@@ -600,10 +648,12 @@ class Station:
             self._last_track = track
             self._recent_keys.append(track["key"])
             self._recent_keys = self._recent_keys[-40:]
-            if was_request:
-                db.write("UPDATE requests SET status='aired' WHERE track_key=? "
-                         "AND status='queued'", (track["key"],))
+            if entry.get("request_id"):
+                db.write("UPDATE requests SET status='scheduled', note=NULL WHERE id=? AND status='queued'",
+                         (entry["request_id"],))
             self.status_note = "on air"
+            if hasattr(self, "ads"):
+                self.ads.tick()
             pending = getattr(self, "_pending_skip", None)
             if pending:
                 self._pending_skip = None
@@ -704,6 +754,12 @@ class Station:
         )
         start = max(start, self.clock.now() + 1.0)
 
+        # A manually inserted ad may already occupy this part of the clock.
+        # Keep new host breaks after it without moving either music deck.
+        for voice in sorted((i for i in self.schedule.items if i.kind == "voice"), key=lambda i: i.start_at):
+            if voice.start_at < start + speech_length + 0.6 and voice.end_at + 0.6 > start:
+                start = voice.end_at + 0.6
+
         for line, offset in laid:
             self.schedule.add_voice(
                 line.url, start + (offset - speech_start_rel), line.duration,
@@ -725,6 +781,7 @@ class Station:
                 break
             try:
                 with self.lock:
+                    self._finish_requests(self.clock.now())
                     self.schedule.trim_before(self.clock.now())
                     protect = {i.url for i in self.schedule.items}
                 keep_audio = {
@@ -744,6 +801,9 @@ class Station:
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
             now = self.clock.now()
+            self._finish_requests(now)
+            if hasattr(self, "ads"):
+                self.ads.tick()
             self.transcript()
             self.schedule.trim_before(now)
             items = self.schedule.as_dict()
@@ -754,6 +814,7 @@ class Station:
             "running": self.clock.running,
             "queued": len(self._lineup),
             "epoch": self._epoch,
+            "ad": self.ads.public() if hasattr(self, "ads") else {"enabled": bool(config.games.get("ads.enabled", True)), "busy": False},
         }
 
     def transcript(self) -> list[dict[str, Any]]:
@@ -869,7 +930,13 @@ class Station:
         artist = row["artist"] if row else ""
         if kind == "started":
             taste.mark_played(key)
-            db.log_event("played", key, 0.0)
+            with self.lock:
+                now = self.clock.now()
+                self._finish_requests(now)
+                current = next((i for i in reversed(self.schedule.music_items())
+                                if i.meta.get("key") == key and i.start_at <= now < i.end_at), None)
+                origin = current.meta.get("selection_origin") if current else {"by": "unknown"}
+            db.log_event("played", key, 0.0, selection_origin=origin)
             return
         taste.record(kind, key, artist, position=position, duration=duration)
 

@@ -85,8 +85,11 @@ def track_intro(context: dict[str, Any]) -> list[Line]:
     facts = [f"Coming up next: {_track_line(incoming)}."]
     if outgoing:
         facts.append(f"Just played: {_track_line(outgoing)}.")
-    if context.get("was_request"):
+    origin = (incoming or {}).get("selection_origin") or {}
+    if origin.get("by") == "listener":
         facts.append("The next song was REQUESTED by the listener. Acknowledge that.")
+    elif origin.get("by") == "director":
+        facts.append("The station chose the next song automatically. Own this choice; the listener did not queue it.")
     if incoming and incoming.get("play_count"):
         facts.append(f"The station has played the next song "
                      f"{incoming['play_count']} times before.")
@@ -219,7 +222,7 @@ def game_ad(context: dict[str, Any]) -> list[Line]:
     anchor, wildcard = _hosts()
     subject = steam.ad_subject()
     if not subject:
-        return banter(context)
+        return []
     context["_ad"] = subject
 
     styles = config.games.get("ads.styles") or ["over-enthusiastic infomercial"]
@@ -242,18 +245,63 @@ OFFICIAL BLURB (your only factual source): {subject.get('blurb') or 'none provid
 
 STYLE TO PERFORM: {style}
 
+COMEDY DIRECTION: {config.games.get('ads.humour', 'Gen Z and TikTok sketch comedy: a specific premise, escalation, and a hard deadpan payoff.')}
+Use a recognizable internet-comedy structure: a suspiciously personal targeted
+ad, a fake influencer testimonial, a POV sketch, or a comment-section argument.
+Make the joke about THIS product and these two hosts. Rue sells an absurd
+benefit with complete confidence; Mav exposes the very specific catch.
+Use slang sparingly, only where it sharpens a joke. No random slang pileups,
+generic hype, hashtags, spoken stage directions, or explaining the punchline.
+Do not claim a meme is trending, impersonate a real creator, or invent quotes.
+Never invent bugs, save corruption, performance problems, developer headcount,
+player counts, reviews, or promises about a real game. Roast the supplied premise
+and the hosts' reactions, not made-up defects. A joke does not make a factual
+accusation true. Never pretend this station has a paid sponsor, even ironically.
+{'This product is explicitly fictional. Invent ridiculous features consistent with its supplied premise; never pretend it can actually be bought.' if subject.get('fictional') else 'The product is real. Keep every factual claim inside its supplied blurb.'}
+Recent lines to avoid repeating: {context.get('recent_host_lines', [])[-12:]}
+
 Both hosts are in the ad. It should be clearly, obviously a bit -- committed
 but absurd. Do not invent a price, a review score, or a release date.
 {'End on a line making clear this is not a real advert. ' + str(hint) if disclaim else ''}
 Four to six lines. Target about {seconds:.0f} seconds."""
+    brief += f"\nKeep the ENTIRE ad under {max(25, min(100, int(seconds * 2.6)))} spoken words, across both hosts combined. Cut setup, keep the payoff."
 
     fallback = [
-        Line(wildcard, f"{subject['name']}. it's a game. it exists."),
-        Line(anchor, "Nobody is paying us to say this."),
-        Line(wildcard, "NOBODY PAYS US ANYTHING"),
-        Line(anchor, "That's true."),
+        Line(wildcard, f"{subject['name']}. For when your screen-time report starts using your full government name."),
+        Line(anchor, "You described a customer profile and a cry for help."),
+        Line(wildcard, "It's called knowing your audience. All one of them."),
+        Line(anchor, "Nobody paid for this ad. The budget is a cry for help too."),
     ]
-    return write(brief, fallback=fallback, max_tokens=650)
+    house_bits = {
+        "Queue Insurance": [
+            "Introducing Queue Insurance. Because handing you the aux should not count as an extreme sport.",
+            "Your deductible is one normal song.",
+            "Okay, so we're uninsured.",
+            "Completely fictional. Completely unsponsored. Somehow still declined.",
+        ],
+        "Grass Touch Simulator": [
+            "Grass Touch Simulator. Finally, going outside has graphics settings.",
+            "You lowered the grass quality.",
+            "For performance.",
+            "Fake game. No sponsors. Still a skill issue.",
+        ],
+        "One More Song Alarm": [
+            "One More Song Alarm. For when your bedtime has a terms and conditions loophole.",
+            "Your sleep schedule has entered early access.",
+            "The roadmap looks incredible.",
+            "Fake product. No sponsors. No release date for a healthy routine.",
+        ],
+    }
+    if subject.get("fictional") and subject["name"] in house_bits:
+        fallback = [Line(wildcard if i % 2 == 0 else anchor, text)
+                    for i, text in enumerate(house_bits[subject["name"]])]
+    lines = write(brief, fallback=fallback, max_tokens=650)
+    if sum(len(line.text.split()) for line in lines) > max(32, min(120, int(seconds * 3.1))):
+        lines = fallback
+    if disclaim and not any(phrase in lines[-1].text.lower() for phrase in
+                            ("unsponsored", "no sponsor", "nobody paid", "nobody is paying")):
+        lines = lines[:7] + [Line(anchor, "Unsponsored comedy. Nobody paid for this.")]
+    return lines
 
 
 def station_id(context: dict[str, Any]) -> list[Line]:
@@ -380,7 +428,7 @@ though it means something. Two or three lines. Under ten seconds."""
 
     fallback = [
         Line(anchor, f"It's {_spoken_time()}."),
-        Line(wildcard, "that's not a real time. that's a made up time"),
+        Line(wildcard, "my sleep schedule has filed a formal complaint"),
     ]
     return write(brief, fallback=fallback, max_tokens=200)
 

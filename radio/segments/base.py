@@ -79,6 +79,16 @@ text-to-speech engine and then broadcast:
    this", no "coming up". You do not know what follows this break, and the
    director may well pick something else.
 9. Do not read a station ident unless the brief asks for one.
+10. Gen Z / TikTok humor is occasional seasoning: a well-timed POV joke,
+    oddly specific observation, or dry reaction when it fits. Most sentences
+    should sound like normal conversation. Never stack slang or force a meme
+    into news or a serious story. Mav stays dry; Rue stays impulsive.
+11. Avoid stock contrast punchlines such as "that's not X, that's Y",
+    "this isn't X, it's Y", and "not just X, but Y". State the sharp observation
+    directly. No generic AI jokes, formulaic reframes, or explaining the bit.
+12. Only explicit selection evidence for THIS airing lets you say the listener
+    chose or requested a song. The station owns its automatic picks and mixes.
+    Play counts and old requests are history, not proof of who queued this play.
 
 Valid host ids: {ids}
 
@@ -167,7 +177,12 @@ def write(brief: str, *, fallback: list[Line], max_tokens: int = 600,
     payload = llm.complete_json(system_prompt(), brief,
                                 max_tokens=max_tokens, temperature=temperature)
     lines = parse(payload) if payload is not None else []
-    if lines:
+    stock_contrast = re.compile(
+        r"\b(?:(?:that|this|it)(?:'s not| is not| isn't))\s+[^.!?\n]{1,100}"
+        r"(?:[,;.]|[\u2014\u2013])\s*(?:that(?:'s| is)|it(?:'s| is))\b|"
+        r"\bnot just\s+[^.!?\n]{1,100}\bbut\s+", re.I)
+    formulaic = any(stock_contrast.search(line.text.replace('\u2019', "'")) for line in lines)
+    if lines and not formulaic:
         return lines
     if config.DEBUG:
         print("[segments] falling back to canned lines", flush=True)

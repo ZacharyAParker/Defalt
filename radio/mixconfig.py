@@ -63,6 +63,7 @@ FIELDS = [
     ("tts.target_lufs", "Voice loudness target (LUFS)", -16.0, [-24.0, -12.0]),
     ("tts.true_peak_db", "Voice peak ceiling (dB)", -1.5, [-6.0, -1.0]),
     ("selection.avoid_clean_versions", "Avoid clean/censored song versions", True, None),
+    ("selection.prefer_original_recording", "Prefer original recordings unless a version is requested", True, None),
     ("selection.compatibility.enabled", "Consider how consecutive songs fit", True, None),
     ("selection.compatibility.genre_weight", "Genre connection", 0.65, [0.0, 1.0]),
     ("selection.compatibility.artist_weight", "Artist connection", 0.25, [0.0, 1.0]),

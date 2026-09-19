@@ -26,6 +26,7 @@ def facts(track):
         metadata_sources = {}
     return {
         "title": known.get("title") or "Untitled", "artist": artist,
+        "selected_for_this_play": dict(track.get("selection_origin") or {"by": "unknown"}),
         "genre_tag": known.get("genre") or None,
         "metadata_sources": metadata_sources,
         "recorded_plays": known.get("play_count") if row else None,
@@ -37,8 +38,11 @@ def facts(track):
 
 
 def evidence(context):
+    incoming = context.get("next") or {}
+    origin = incoming.get("selection_origin")
+    requested = (origin.get("by") == "listener" and origin.get("method") == "request") if origin else bool(context.get("was_request"))
     return {"outgoing": facts(context.get("previous")), "incoming": facts(context.get("next")),
-            "incoming_is_listener_request": bool(context.get("was_request"))}
+            "incoming_is_listener_request": requested}
 
 
 def roast_rules():
@@ -72,21 +76,21 @@ def fallback(data, anchor, wildcard, recent, introduce):
             f"You specifically requested {title}. We have your confession in writing.",
             f"{artist}, by request. You had every song in the world and still filled out that form."]
     if (track.get("recorded_plays") or 0) >= 3 or track["requests"] >= 3:
-        options += [f"{artist} again. Your queue has a very small comfort zone."] if gentle else [
-            f"{artist} again. Your shuffle button has filed for redundancy.",
+        options += [f"{artist} again. Our rotation has a very small comfort zone."] if gentle else [
+            f"{artist} again. Our shuffle button has filed for redundancy.",
             f"Another round of {title}. This is a loyalty scheme with no rewards."]
     if track["early_skips"] and track["requests"]:
         options.append(f"You request {title}, then skip it early. Even your taste has commitment issues.")
     if not options:
         options = [f"{title}, by {artist}. That title is doing a lot of the introduction for me."] if gentle else [
-            f"{title}, by {artist}. Your queue has chosen its next hill to die on.",
+            f"{title}, by {artist}. Our queue has chosen its next hill to die on.",
             f"{artist}. I'm writing {title} on the incident report.",
-            f"{title}. An interesting choice to make where we can both see it."]
+            f"{title}. We have both seen the title. Neither of us has prepared a defense."]
     fresh = [text for text in options if text not in recent]
     joke = random.choice(fresh or options)
     reply = (f"{title}. {artist}." if introduce else
              random.choice(["That is a lot of judgment from someone with no record collection.",
-                            "You can complain after the record.", "The listener has the controls. Unfortunately."]))
+                            "You can complain after the record.", "We work here. Allegedly."]))
     return [Line(wildcard, joke), Line(anchor, reply)]
 
 
@@ -126,6 +130,15 @@ progress, surroundings or personal facts. Their activity is not a news topic.
 These counts are actual station records when the break was prepared. Null
 means unknown. Requests are not plays. Do not call someone a repeat listener
 to a song with no recorded repeats, or invent a listening streak or reason.
+SELECTION ATTRIBUTION: selected_for_this_play identifies who picked THIS airing.
+When by=director, the station chose it: say 'we picked' or roast our own rotation.
+Never say the listener chose, queued, requested, or jumped between these songs.
+When by=listener, method=request is an explicit request; manual_queue and
+preloaded_deck are manual choices, not messages to the hosts. Unknown means do
+not attribute the choice to anybody. Historical request counts and library
+origin do not make today's automatic play a listener request. A vibe suggestion
+also does not mean the listener picked every song. Distinguish outgoing and
+incoming selectors; the director always chooses the automatic transition.
 The outgoing track may still be playing: don't claim the listener heard all
 of it. Genre tags are tags, not proof of how this exact recording sounds.
 Metadata sources labelled director_inferred, title_parse or channel_parse are

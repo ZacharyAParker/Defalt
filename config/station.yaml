@@ -275,6 +275,8 @@ clock:
 selection:
   # Skip labeled censored editions in automatic picks and prefer explicit sources.
   avoid_clean_versions: true
+  # Acoustic, demo, stripped, and other alternate takes require an explicit request.
+  prefer_original_recording: true
   # Soft connections, never a genre gate. Novelty grows after similar songs.
   # Missing embedded lyrics are neutral; no lyrics are inferred from titles.
   compatibility:

@@ -207,6 +207,8 @@ def pick_next(exclude_keys: set[str] | None = None,
     pool = [t for t in candidates() if t["key"] not in exclude]
     if config.station.get("selection.avoid_clean_versions", True):
         pool = [t for t in pool if not versions.clean_track(t)]
+    if config.station.get("selection.prefer_original_recording", True):
+        pool = [t for t in pool if not versions.alternate_track(t)]
     if not pool:
         return None
 

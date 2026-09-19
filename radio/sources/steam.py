@@ -253,9 +253,6 @@ def ad_subject() -> dict[str, Any] | None:
     pool: list[int] = [w["appid"] for w in wishlist()]
     if not pool:
         pool = [g["appid"] for g in tracked_titles() if g.get("appid")]
-    if not pool:
-        return None
-
     import random
     random.shuffle(pool)
     for appid in pool[:8]:
@@ -264,11 +261,30 @@ def ad_subject() -> dict[str, Any] | None:
         details = app_details(int(appid))
         if details and details.get("name"):
             return details
-    return None
+    manual = [dict(name=g["name"], blurb=g.get("notes", ""), ad_key="manual:" + g["name"])
+              for g in (config.games.get("watchlist") or [])
+              if isinstance(g, dict) and g.get("name") and not g.get("appid")]
+    if manual:
+        return random.choice(manual)
+    if not config.games.get("ads.house_fallback", True):
+        return None
+    products = config.games.get("ads.house_products") or [
+        {"name": "Queue Insurance", "blurb": "A fictional policy covering the embarrassment of being handed the aux."},
+        {"name": "Grass Touch Simulator", "blurb": "An imaginary game about finally going outside, played indoors."},
+        {"name": "One More Song Alarm", "blurb": "A fake alarm clock that accepts one more song as a valid sleep schedule."},
+    ]
+    products = [{**p, "fictional": True, "ad_key": "house:" + str(p["name"])} for p in products
+                if isinstance(p, dict) and p.get("name")]
+    random.shuffle(products)
+    # Rotate the least recently used house product instead of exhausting the pool.
+    def last_used(product):
+        row = db.one("SELECT ts FROM seen WHERE kind='ad' AND ident=?", (product["ad_key"],))
+        return row["ts"] if row else 0
+    return min(products, key=last_used) if products else None
 
 
 def mark_ad_used(details: dict[str, Any]) -> None:
-    db.mark_seen("ad", str(details["appid"]))
+    db.mark_seen("ad", str(details.get("ad_key") or details.get("appid") or details["name"]))
 
 
 def status() -> dict[str, Any]:

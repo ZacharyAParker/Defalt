@@ -31,6 +31,9 @@ pub struct OnAir {
     pub track_key: String,
     pub position: f64,
     pub duration: f64,
+    pub ad_note: String,
+    pub ad_busy: bool,
+    pub ads_enabled: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -285,6 +288,9 @@ pub fn on_air_from(body: &serde_json::Value) -> OnAir {
         track_key: playing["key"].as_str().unwrap_or("").to_string(),
         position: playing["position"].as_f64().unwrap_or(0.0),
         duration: playing["duration"].as_f64().unwrap_or(0.0),
+        ad_note: body["ad"]["message"].as_str().unwrap_or("").to_string(),
+        ad_busy: body["ad"]["busy"].as_bool().unwrap_or(false),
+        ads_enabled: body["ad"]["enabled"].as_bool().unwrap_or(true),
     }
 }
 

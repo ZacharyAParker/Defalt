@@ -40,3 +40,10 @@ def source_edition(name: str, artist: str, title: str) -> tuple[bool, bool]:
 
 def clean_track(track: dict) -> bool:
     return any(is_clean_label(track.get(field) or "") for field in ("title", "album"))
+
+
+def alternate_track(track: dict) -> bool:
+    """Edition labels in the catalogue are not fresh requests for that edition."""
+    marker = (r"(?:acoustic|unplugged|stripped|demo|live|remix|instrumental|"
+              r"sped up|slowed|extended|re-recorded|rerecorded)")
+    return any(_tagged(track.get(field) or "", marker) for field in ("title", "album"))

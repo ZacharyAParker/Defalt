@@ -122,6 +122,19 @@ def skip():
     return jsonify(director.station().skip())
 
 
+@app.post("/api/ads")
+def request_ad():
+    from . import ads
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict) or payload.get("timing") not in ("next_break", "now"):
+        return jsonify(error="Choose next_break or now."), 400
+    try:
+        result = ads.for_station(director.station()).queue(payload["timing"])
+        return jsonify(ok=True, ad=result, message=result["message"]), 202
+    except ValueError as error:
+        return jsonify(error=str(error)), 409
+
+
 @app.post("/api/rate")
 def rate():
     payload = request.get_json(silent=True) or {}
@@ -226,6 +239,7 @@ def get_queue():
                 "camelot": item.meta.get("camelot"),
                 "transition": item.meta.get("transition"),
                 "selection": item.meta.get("selection"),
+                "selection_origin": item.meta.get("selection_origin", {"by": "unknown"}),
                 "can_move": False,
                 "can_remove": item.start_at > now,
             })
@@ -355,11 +369,13 @@ def clear_vibe():
 def status():
     from . import llm
     from . import mixconfig
+    from . import ads
     station = director.station()
     return jsonify({
         "identity": config.station.get("identity", {}) or {},
         "now_playing": station.now_playing(),
         "transcript": station.transcript(),
+        "ad": ads.for_station(station).public(),
         "mix_config": mixconfig.snapshot(),
         "vibe": vibe.public(),
         "note": station.status_note,

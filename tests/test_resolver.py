@@ -116,7 +116,8 @@ class TestPreference(unittest.TestCase):
         acoustic = score("Creep (Acoustic)", "Radiohead", "Creep",
                          description="Provided to YouTube by XL Recordings")
         plain = score("Radiohead - Creep", "Radiohead", "Creep")
-        self.assertLess(acoustic, plain)
+        self.assertIsNone(acoustic)
+        self.assertIsNotNone(plain)
 
     def test_asking_for_a_variant_gets_you_the_variant(self):
         self.assertFalse(kind("Creep (Acoustic)", "Radiohead",

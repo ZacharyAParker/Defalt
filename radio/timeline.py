@@ -551,6 +551,7 @@ class Schedule:
                     envelope=[], offset=offset, meta={
                         "title": track.get("title"), "artist": track.get("artist"),
                         "key": track.get("key"),
+                        "selection_origin": dict(track.get("selection_origin") or {"by": "unknown"}),
                         "intro_sec": effective_track.get("intro_override"),
                         "playback_rate": rate,
                         "key_lock": bool(cfg.get("transitions.native_key_lock", False)),

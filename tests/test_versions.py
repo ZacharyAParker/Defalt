@@ -15,6 +15,9 @@ class EditionTests(unittest.TestCase):
         p = patch.object(config.station, "get", side_effect=lambda k, d=None: self.settings.get(k, d))
         p.start()
         self.addCleanup(p.stop)
+        p = patch.object(library, "_source_info", return_value={})
+        p.start()
+        self.addCleanup(p.stop)
 
     def score(self, title, artist="Artist", song="Song", **extra):
         return library._candidate_score(entry(title, **extra), artist, song, 0)
@@ -43,7 +46,8 @@ class EditionTests(unittest.TestCase):
         self.assertGreater(self.score("Artist - Song (Uncensored) (Official Audio)"), plain)
         self.assertGreater(self.score("Artist - Song", channel="Artist - Topic"),
                            self.score("Artist - Song (Explicit Lyrics)"))
-        self.assertIsNotNone(self.score("Artist - Song (Radio Edit)"))  # Shortened is not necessarily censored.
+        self.assertIsNone(self.score("Artist - Song (Radio Edit)"))
+        self.assertIsNotNone(self.score("Artist - Song (Radio Edit)", song="Song (Radio Edit)"))
 
     def test_description_links_do_not_classify_the_wrong_edition(self):
         self.assertEqual(self.score("Artist - Song", description="Get the clean version at example.com"),
