@@ -394,6 +394,9 @@ downloader:
 # ---------------------------------------------------------------------------
 learning:
   enabled: true
+  # Ignore future skips as feedback and omit skip history from host commentary.
+  # Existing affinity scores are retained; this does not rewrite past learning.
+  ignore_skips: false
   # A skip before this many seconds counts as a real rejection.
   skip_is_rejection_before: 30.0
   # Playing past this fraction of a track counts as approval.
@@ -460,3 +463,13 @@ requests:
 
   # A topic request is dropped if it has not aired within this long.
   topic_ttl_minutes: 45
+# Text generation. Codex uses the existing local CLI login; OpenRouter remains
+# the fallback. Personal vault paths belong in private overrides.yaml.
+director_backend:
+  provider: openrouter       # openrouter | codex
+  model: gpt-5.6-luna
+  reasoning: medium          # low | medium
+  utility_reasoning: low     # short request and metadata tasks
+  timeout_seconds: 25        # reserves time for the fallback within each request
+  memory_vault: ""           # optional curated Obsidian vault; read-only
+  executable: ""             # optional CLI path; otherwise discovered locally

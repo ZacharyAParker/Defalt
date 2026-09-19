@@ -46,7 +46,7 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
     key = bool(config.env("OPENROUTER_API_KEY"))
     healthy &= _ok("OpenRouter key", key,
                    "hosts fall back to canned lines without it", optional=True)
-    if key:
+    if llm.status()['configured']:
         # Free models rate-limit constantly and a cold one can time out on the
         # first call. One retry before reporting, and never fail the whole
         # check over it -- the station falls back to canned lines and stays up.
@@ -56,7 +56,7 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
             reply = llm.complete("Reply with the single word: ready.",
                                  "Say ready.", max_tokens=12, temperature=0)
         healthy &= _ok(
-            f"OpenRouter reachable ({llm._models()[0]})", bool(reply),
+            "Writing backend reachable", bool(reply),
             "no response twice -- free tiers throttle hard. The hosts will "
             "use canned lines until it recovers.", optional=True)
 

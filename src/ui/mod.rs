@@ -15,6 +15,7 @@ pub mod theme;
 pub mod toolbar;
 pub mod waveform;
 pub mod widgets;
+pub mod visualizer;
 
 use egui::{vec2, Align, Color32, FontId, Layout, Rect, Response, RichText, Sense, Stroke, Ui};
 
@@ -37,6 +38,9 @@ pub enum Column {
 pub const NOT_WIRED: &str = "Not wired up yet.";
 
 pub fn draw(app: &mut Defalt, ui: &mut Ui) {
+    if let Some(engine) = &app.engine {
+        engine.telemetry.visualizer.set_enabled(app.view == crate::View::Radio && app.studio.visualizer && app.airtime.on);
+    }
     let ctx = ui.ctx().clone();
     let reading = app.info_page.is_some();
     about::footer(app, ui);

@@ -49,6 +49,8 @@ def system_prompt() -> str:
     identity = config.station.get("identity", {}) or {}
     blocks = "\n\n".join(_persona_block(p) for p in personas.values())
     ids = ", ".join(personas.keys())
+    skip_policy = ("Skips are private transport actions, not taste evidence. Never mention or joke about the listener skipping, rejecting, or abandoning songs. Ignore skip counts and old skip jokes in any supplied history."
+                   if config.station.get("learning.ignore_skips", False) else "")
 
     return f"""You write dialogue for a two-host radio show on {identity.get('name', 'a small station')} \
 ({identity.get('call_sign', '')}), broadcasting to exactly one listener in {identity.get('city', 'nowhere')}.
@@ -89,6 +91,8 @@ text-to-speech engine and then broadcast:
 12. Only explicit selection evidence for THIS airing lets you say the listener
     chose or requested a song. The station owns its automatic picks and mixes.
     Play counts and old requests are history, not proof of who queued this play.
+
+{skip_policy}
 
 Valid host ids: {ids}
 
@@ -171,11 +175,41 @@ def parse(payload: Any) -> list[Line]:
 # --------------------------------------------------------------------------
 # Entry point
 # --------------------------------------------------------------------------
+def valid_dialogue(payload: Any) -> bool:
+    entries = payload.get('lines') if isinstance(payload, dict) else payload
+    if not isinstance(entries, list) or not 1 <= len(entries) <= MAX_LINES:
+        return False
+    hosts = config.personas()
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get('host') not in hosts:
+            return False
+        text = entry.get('text')
+        if not isinstance(text, str) or not text.strip() or len(text.split()) > MAX_WORDS_PER_LINE:
+            return False
+        if re.search(r"\b(?:that|this|it)(?:'s not| is not| isn't)\b|\bnot just\b",
+                     text.replace('\u2019', "'"), re.I):
+            return False
+    return len(entries) == 1 or len({e['host'] for e in entries}) >= 2
+
+
 def write(brief: str, *, fallback: list[Line], max_tokens: int = 600,
           temperature: float = 0.95) -> list[Line]:
     """Write one break. Never raises, never returns empty."""
+    duration = re.search(r'\b(?:about|under)\s+(\d+(?:\.\d+)?|eight|ten|fifteen)\s+seconds', brief, re.I)
+    words = 180
+    if duration:
+        value = duration[1].lower()
+        seconds = {'eight': 8, 'ten': 10, 'fifteen': 15}.get(value)
+        seconds = seconds if seconds is not None else float(value)
+        words = max(18, min(180, int(seconds * 2.6)))
+    def within_budget(payload):
+        entries = payload.get('lines') if isinstance(payload, dict) else payload
+        return (valid_dialogue(payload)
+                and sum(len(line['text'].split()) for line in entries) <= words)
+    brief += f'\nHard limit: {words} spoken words TOTAL across all hosts. Keep the exchange concise.'
     payload = llm.complete_json(system_prompt(), brief,
-                                max_tokens=max_tokens, temperature=temperature)
+                                max_tokens=max_tokens, temperature=temperature,
+                                purpose='dialogue', validator=within_budget)
     lines = parse(payload) if payload is not None else []
     stock_contrast = re.compile(
         r"\b(?:(?:that|this|it)(?:'s not| is not| isn't))\s+[^.!?\n]{1,100}"

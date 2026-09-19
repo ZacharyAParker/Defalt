@@ -120,6 +120,10 @@ def _apply(entity_type: str, entity_key: str, delta: float) -> None:
     )
 
 
+def ignore_skips() -> bool:
+    return bool(config.station.get("learning.ignore_skips", False))
+
+
 def record(signal: str, track_key: str, artist: str = "",
            position: float | None = None, duration: float | None = None) -> None:
     """Fold a listening signal into the profile.
@@ -128,6 +132,8 @@ def record(signal: str, track_key: str, artist: str = "",
     'skipped' / 'played' which get classified by position first.
     """
     if not config.station.get("learning.enabled", True):
+        return
+    if ignore_skips() and signal in {"skipped", "skipped_early", "skipped_late"}:
         return
 
     weights = config.station.get("learning.signal_weights", {}) or {}

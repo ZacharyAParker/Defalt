@@ -9,6 +9,8 @@ have way too much to say about what i'm listening to
 the console is Rust with egui and cpal. the optional radio backend is Python.
 it runs locally on Windows
 
+Writing backends and optional personal memory are described in [Writing backends](docs/WRITING-BACKENDS.md).
+
 ## what works
 
 Radio's **Ad break** controls let you queue an unsponsored comedy read for the
@@ -16,6 +18,18 @@ next host break or play it as soon as writing and voice preparation finish.
 Existing host speech finishes first and music ducks underneath. Without Steam
 material, fictional house products keep ads available. Edit `ads` in
 `config/games.yaml` for their humor, styles, target length, or to disable them.
+Recent scripts persist across restarts so each read can use a different premise.
+
+Radio's **Audio visualizer** follows local playback with a compact frequency
+spectrum. Its toggle is saved; **Reduced motion** softens the response and
+removes peak markers and reflections. In the browser, find the toggle under
+**Studio settings**.
+
+**Mix settings > Song choice and variety > Ignore skips for taste and host
+banter** lets you use Skip without teaching the station that you dislike a song.
+It also hides skip history from new host commentary. This takes effect for
+future feedback and scripts; it does not undo existing scores or prepared audio.
+The configuration key is `learning.ignore_skips`.
 
 Song search prefers original recordings and avoids music videos, including
 when checking cached audio.
@@ -23,7 +37,7 @@ Ask for an acoustic or live edition explicitly, or paste its exact YouTube link
 to play that version. **Mix settings** includes the original-recording preference.
 Queue labels show who picked each play, and the hosts get that same information.
 
-Current release: **0.3.2**. Read the [patch notes](CHANGELOG.md),
+Current release: **0.3.3**. Read the [patch notes](CHANGELOG.md),
 [privacy policy](PRIVACY.md), [terms of use](TERMS.md), and
 [copyright information](COPYRIGHT.md). The same pages open from the app footer
 without leaving Console or Radio or stopping playback.
@@ -182,4 +196,4 @@ command above skips them. Node is only needed for the browser tests
 third-party audio code and its licenses are listed in [vendor/README.md](vendor/README.md)
 
 ---
-Defalt v0.3.2 · © 2026 Zachary Parker
+Defalt v0.3.3 · © 2026 Zachary Parker

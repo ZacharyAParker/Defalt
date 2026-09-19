@@ -27,10 +27,12 @@ struct Art {
 type Cover = (String, Option<(egui::ColorImage, String)>);
 pub struct Studio {
     pub enabled: bool,
+    pub visualizer: bool,
+    pub spectrum: super::visualizer::State,
     rain: bool,
     lights: bool,
     cat: bool,
-    reduced: bool,
+    pub(super) reduced: bool,
     preferences: PathBuf,
     art: Option<Art>,
     clock: f32,
@@ -56,6 +58,8 @@ impl Studio {
         let (cover_out, cover_in) = mpsc::channel();
         Self {
             enabled: settings["enabled"].as_bool().unwrap_or(true),
+            visualizer: settings["visualizer"].as_bool().unwrap_or(true),
+            spectrum: super::visualizer::State::default(),
             rain: settings["rain"].as_bool().unwrap_or(true),
             lights: settings["lights"].as_bool().unwrap_or(true),
             cat: settings["cat"].as_bool().unwrap_or(true),
@@ -80,7 +84,7 @@ impl Studio {
         if let Some(parent) = self.preferences.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let data = serde_json::json!({"enabled":self.enabled,"rain":self.rain,"lights":self.lights,"cat":self.cat,"reduced":self.reduced});
+        let data = serde_json::json!({"enabled":self.enabled,"visualizer":self.visualizer,"rain":self.rain,"lights":self.lights,"cat":self.cat,"reduced":self.reduced});
         let _ = std::fs::write(&self.preferences, data.to_string());
     }
     fn artwork(&mut self, ctx: &egui::Context, key: &str, url: &str) {

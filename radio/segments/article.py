@@ -42,7 +42,7 @@ qualification. Never imply that you checked another source yourself.
 """
     payload = llm.complete_json(system_prompt() + rules,
         json.dumps({'today': time.strftime('%Y-%m-%d'), 'article': article}, ensure_ascii=False),
-        max_tokens=800, temperature=.1, timeout=20)
+        max_tokens=800, temperature=.1, timeout=20, purpose='article')
     entries = payload.get('lines', []) if isinstance(payload, dict) else []
     body = ' '.join(str(article.get('text', '')).lower().split())
     supported = []

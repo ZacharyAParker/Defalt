@@ -115,6 +115,13 @@ class AdScheduling(unittest.TestCase):
 
 
 class AdMaterial(unittest.TestCase):
+    def setUp(self):
+        # Existing copy checks must never write to the listener's station database.
+        for mock in [patch.object(writers.ad_copy, 'recent', return_value=[]),
+                     patch.object(writers.ad_copy, 'finish', side_effect=lambda s,p,lines,a,w: lines)]:
+            mock.start()
+            self.addCleanup(mock.stop)
+
     def test_missing_steam_uses_real_house_ad_material_instead_of_banter(self):
         with patch.object(steam,'wishlist',return_value=[]), patch.object(steam,'tracked_titles',return_value=[]), \
              patch.object(config.games,'get',side_effect=lambda k,d=None:d), patch.object(steam.db,'one',return_value=None):

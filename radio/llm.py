@@ -1,4 +1,4 @@
-"""OpenRouter client -- writes everything the hosts say.
+"""Text generation through a local session or OpenRouter, with fallback.
 
 Free models rate-limit constantly, so every call walks a fallback chain before
 giving up. Nothing here is allowed to take the station off the air: on total
@@ -54,8 +54,8 @@ def _benched(model: str, seconds: float) -> None:
         _COOLDOWN[model] = time.time() + seconds
 
 
-def complete(system: str, user: str, *, max_tokens: int = 700,
-             temperature: float = 0.9, timeout: float = 45.0) -> str | None:
+def _openrouter_complete(system: str, user: str, *, max_tokens: int = 700,
+                         temperature: float = 0.9, timeout: float = 45.0) -> str | None:
     """Return generated text, or None if every model in the chain failed."""
     key = config.env("OPENROUTER_API_KEY")
     if not key:
@@ -82,11 +82,15 @@ def complete(system: str, user: str, *, max_tokens: int = 700,
         "temperature": temperature,
     }
 
+    deadline = time.monotonic() + max(0.0, timeout)
     for model in _models():
         if not _available(model):
             continue
 
         for attempt in (0, 1):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
             payload = {**payload_base, "model": model}
             # Nothing the hosts say needs a chain of thought, and a reasoning
             # model will happily spend the entire budget thinking and return
@@ -97,7 +101,7 @@ def complete(system: str, user: str, *, max_tokens: int = 700,
 
             try:
                 response = httpx.post(ENDPOINT, headers=headers, json=payload,
-                                      timeout=timeout)
+                                      timeout=remaining)
             except httpx.HTTPError as error:
                 if config.DEBUG:
                     print("[llm] transport error", model, error, flush=True)
@@ -154,17 +158,8 @@ def complete(system: str, user: str, *, max_tokens: int = 700,
 _FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 
 
-def complete_json(system: str, user: str, **kwargs: Any) -> Any | None:
-    """Ask for JSON and actually get JSON back.
-
-    Small free models wrap output in prose or code fences roughly half the
-    time, so we strip fences and fall back to grabbing the outermost bracketed
-    span before giving up.
-    """
-    system = (system + "\n\nRespond with valid JSON only. No prose, no code "
-                       "fences, no explanation before or after.")
-    raw = complete(system, user, **kwargs)
-    if not raw:
+def _parse_json(raw: str) -> Any | None:
+    if not isinstance(raw, str) or not raw:
         return None
 
     cleaned = _FENCE.sub("", raw).strip()
@@ -185,12 +180,55 @@ def complete_json(system: str, user: str, **kwargs: Any) -> Any | None:
     return None
 
 
+def complete(system: str, user: str, *, max_tokens: int = 700,
+             temperature: float = 0.9, timeout: float = 45.0,
+             purpose: str = 'utility', json_mode: bool = False,
+             validator=None) -> str | None:
+    from . import session_backend
+    deadline = time.monotonic() + max(0.0, timeout)
+    use_session = session_backend.enabled()
+    failure = None
+    if use_session:
+        memory, fingerprint, memory_error = session_backend.prepare(user, purpose)
+        try:
+            session_limit = float(session_backend.setting('timeout_seconds', 25))
+        except (TypeError, ValueError):
+            session_limit = 25.0
+        budget = max(0.0, min(session_limit, timeout * .65))
+        result = session_backend.complete(system, user, purpose=purpose, memory=memory,
+            memory_fingerprint=fingerprint, timeout=budget, json_mode=json_mode,
+            validator=validator, memory_warning=memory_error) if budget > 0 else None
+        if result is not None:
+            return result
+        failure = session_backend.status()['last_result'].get('error') or memory_error
+        # Keep the exact same approved facts and current task when falling back.
+        system = session_backend.augment(system, memory)
+    remaining = deadline - time.monotonic()
+    raw = (_openrouter_complete(system, user, max_tokens=max_tokens,
+            temperature=temperature, timeout=remaining) if remaining > 0 else None)
+    if raw and (json_mode or validator):
+        parsed = _parse_json(raw) if json_mode else raw
+        if parsed is None or (validator is not None and not validator(parsed)):
+            raw = None
+    if use_session:
+        session_backend.record('openrouter' if raw else 'canned', fallback_reason=failure)
+    return raw
+
+
+def complete_json(system: str, user: str, **kwargs: Any) -> Any | None:
+    system += "\n\nRespond with valid JSON only. No prose, no code fences."
+    raw = complete(system, user, json_mode=True, **kwargs)
+    return _parse_json(raw) if raw else None
+
+
 def status() -> dict[str, Any]:
+    from . import session_backend
     with _LOCK:
         benched = {m: round(t - time.time(), 1)
                    for m, t in _COOLDOWN.items() if t > time.time()}
     return {
-        "configured": bool(config.env("OPENROUTER_API_KEY")),
+        "configured": bool(config.env("OPENROUTER_API_KEY")) or (session_backend.enabled() and bool(session_backend.executable())),
         "models": _models(),
         "benched": benched,
+        "director": session_backend.status(),
     }

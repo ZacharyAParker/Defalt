@@ -1,5 +1,17 @@
 # Patch notes
 
+## 0.3.3 — September 18, 2026
+
+- Added an optional Codex writing backend with Luna medium for host dialogue and low reasoning for short request and metadata tasks.
+- The hosts can use reviewed facts from a dedicated Obsidian vault. Only relevant, broadcast-enabled notes are included; source documents stay out of prompts.
+- Dialogue sessions remember recent exchanges, reset when memory or personas change, and keep current requests separate from old conversation history.
+- OpenRouter takes over if the session is unavailable, busy, late, or returns unusable output. Existing speech synthesis and audio scheduling stay separate from text generation.
+- Added total spoken-word limits so host exchanges fit their segment budgets more closely.
+- Session helpers run without a console window. Backend status reports which provider answered and whether fallback was needed.
+- Ad copy now remembers recent scripts across restarts, rotates sketch premises, and replaces near-duplicate reads. Each fictional house product has six fallback sketches when generation is unavailable.
+- Added a saved Audio visualizer toggle to Radio. The spectrum follows the local audio output with warm-to-cool frequency bars, smooth decay, and peak markers. It fits beneath the studio and respects Reduced motion.
+- Added **Ignore skips for taste and host banter** under Mix settings > Song choice and variety. When enabled, future skips do not change taste scores or skip counts, and new host scripts omit skip history and skip-based roasts. Existing learned scores and already prepared speech are retained.
+
 ## 0.3.2 — September 18, 2026
 
 - Fixed transitions collapsing into near-instant cuts when a song starts with vocals. Selected styles retain their overlap; automatic blends default to a three-second minimum, subject to available audio and song-length limits.
@@ -91,4 +103,4 @@ Artwork is fetched and cached in the background. Studio animation does not contr
 Earlier development builds used version 0.1.0. The 0.2.0 notes collect the current release changes; they are not a claim that every feature was first written on the release date.
 
 ---
-Defalt v0.3.2 · © 2026 Zachary Parker
+Defalt v0.3.3 · © 2026 Zachary Parker

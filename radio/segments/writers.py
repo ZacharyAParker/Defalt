@@ -10,7 +10,7 @@ import random
 import time
 from typing import Any
 
-from .. import config, db, taste
+from .. import config, db, taste, ad_copy
 from ..sources import rss, steam
 from .base import Line, write
 from . import personal, article
@@ -226,7 +226,8 @@ def game_ad(context: dict[str, Any]) -> list[Line]:
     context["_ad"] = subject
 
     styles = config.games.get("ads.styles") or ["over-enthusiastic infomercial"]
-    style = random.choice([str(s) for s in styles])
+    proposal = ad_copy.plan(subject, styles)
+    style = proposal["style"]
     seconds = float(config.games.get("ads.target_seconds", 22) or 22)
     disclaim = config.games.get("ads.require_disclaimer", True)
     hint = config.games.get("ads.disclaimer_hint", "")
@@ -244,6 +245,10 @@ STATUS: {timing}
 OFFICIAL BLURB (your only factual source): {subject.get('blurb') or 'none provided'}
 
 STYLE TO PERFORM: {style}
+NEW PREMISE FOR THIS READ: {proposal["angle"]}
+Avoid these previous ads, especially their openings and punchlines:
+{proposal["history"][:4]}
+Keep the new premise distinct. Changing a few words is not a new ad.
 
 COMEDY DIRECTION: {config.games.get('ads.humour', 'Gen Z and TikTok sketch comedy: a specific premise, escalation, and a hard deadpan payoff.')}
 Use a recognizable internet-comedy structure: a suspiciously personal targeted
@@ -266,42 +271,15 @@ but absurd. Do not invent a price, a review score, or a release date.
 Four to six lines. Target about {seconds:.0f} seconds."""
     brief += f"\nKeep the ENTIRE ad under {max(25, min(100, int(seconds * 2.6)))} spoken words, across both hosts combined. Cut setup, keep the payoff."
 
-    fallback = [
-        Line(wildcard, f"{subject['name']}. For when your screen-time report starts using your full government name."),
-        Line(anchor, "You described a customer profile and a cry for help."),
-        Line(wildcard, "It's called knowing your audience. All one of them."),
-        Line(anchor, "Nobody paid for this ad. The budget is a cry for help too."),
-    ]
-    house_bits = {
-        "Queue Insurance": [
-            "Introducing Queue Insurance. Because handing you the aux should not count as an extreme sport.",
-            "Your deductible is one normal song.",
-            "Okay, so we're uninsured.",
-            "Completely fictional. Completely unsponsored. Somehow still declined.",
-        ],
-        "Grass Touch Simulator": [
-            "Grass Touch Simulator. Finally, going outside has graphics settings.",
-            "You lowered the grass quality.",
-            "For performance.",
-            "Fake game. No sponsors. Still a skill issue.",
-        ],
-        "One More Song Alarm": [
-            "One More Song Alarm. For when your bedtime has a terms and conditions loophole.",
-            "Your sleep schedule has entered early access.",
-            "The roadmap looks incredible.",
-            "Fake product. No sponsors. No release date for a healthy routine.",
-        ],
-    }
-    if subject.get("fictional") and subject["name"] in house_bits:
-        fallback = [Line(wildcard if i % 2 == 0 else anchor, text)
-                    for i, text in enumerate(house_bits[subject["name"]])]
+    fallback = [Line(wildcard if i % 2 == 0 else anchor, text)
+                for i, text in enumerate(ad_copy.fallback(subject, proposal['history']))]
     lines = write(brief, fallback=fallback, max_tokens=650)
     if sum(len(line.text.split()) for line in lines) > max(32, min(120, int(seconds * 3.1))):
         lines = fallback
     if disclaim and not any(phrase in lines[-1].text.lower() for phrase in
                             ("unsponsored", "no sponsor", "nobody paid", "nobody is paying")):
         lines = lines[:7] + [Line(anchor, "Unsponsored comedy. Nobody paid for this.")]
-    return lines
+    return ad_copy.finish(subject, proposal, lines, anchor, wildcard)
 
 
 def station_id(context: dict[str, Any]) -> list[Line]:
@@ -338,6 +316,7 @@ def listener_note(context: dict[str, Any]) -> list[Line]:
         "SELECT title, artist FROM tracks WHERE last_played IS NOT NULL "
         "ORDER BY last_played DESC LIMIT 4")
     recent_text = "; ".join(f"{r['title']} by {r['artist']}" for r in recent) or "nothing yet"
+    skip_evidence = "" if taste.ignore_skips() else f"TOTAL SKIPS: {profile['total_skips']}"
 
     brief = f"""Segment: the hosts talk about the listener's habits. Affectionate,
 never mean. They know exactly one person is out there.
@@ -345,7 +324,7 @@ never mean. They know exactly one person is out there.
 MOST-PLAYED ARTISTS: {artists}
 PLAYED RECENTLY: {recent_text}
 TOTAL SONGS PLAYED: {profile['total_plays']}
-TOTAL SKIPS: {profile['total_skips']}
+{skip_evidence}
 
 Use only these facts. {wildcard} draws a wild conclusion from the data.
 {anchor} points out the actual number. Three to four lines.

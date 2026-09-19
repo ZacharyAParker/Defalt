@@ -575,66 +575,18 @@ function meterScale(amplitude) {
   return clamp((db - METER_FLOOR_DB) / -METER_FLOOR_DB, 0, 1);
 }
 
-/* The trace gets a display gain so quiet passages stay legible. This is a
-   scope, not a meter -- it shows shape, and the meters carry the level. */
-const SCOPE_GAIN = 2.0;
-
+/* Draw only while visible; the spectrum reads the same master bus as playback. */
 function drawScope() {
-  const canvas = ui.scope;
-  const size = fitCanvas(canvas);
-  if (!size) return;
-  const { width, height, dpr } = size;
-  const g = canvas.getContext("2d");
-  g.setTransform(dpr, 0, 0, dpr, 0, 0);
-  g.clearRect(0, 0, width, height);
-
-  if (!analyser) return;
-  if (!wave.data) wave.data = new Uint8Array(analyser.fftSize);
+  window.RadioVisualizer?.draw(ui.scope, running ? analyser : null);
+  if (!analyser || document.hidden || ui.scope.parentElement?.hidden) return;
+  if (!wave.data || wave.data.length !== analyser.fftSize) wave.data = new Uint8Array(analyser.fftSize);
   analyser.getByteTimeDomainData(wave.data);
-
-  const talking = ui.root.dataset.talking === "1";
-  const colour = talking ? "#6ee7a8" : "#ffb020";
-  const mid = height / 2;
-
-  // Centre line
-  g.strokeStyle = "#ffffff0d";
-  g.lineWidth = 1;
-  g.beginPath(); g.moveTo(0, mid); g.lineTo(width, mid); g.stroke();
-
-  // Waveform, drawn as a filled envelope rather than a hairline — reads as
-  // a signal on a scope instead of a sparkline.
-  const step = Math.max(1, Math.floor(wave.data.length / width));
-  g.beginPath();
   let peak = 0;
-  for (let x = 0; x < width; x++) {
-    let max = 0;
-    for (let i = 0; i < step; i++) {
-      const sample = Math.abs(wave.data[x * step + i] - 128) / 128;
-      if (sample > max) max = sample;
-    }
-    if (max > peak) peak = max;
-    const y = Math.min(max * SCOPE_GAIN, 1) * (mid - 3);
-    if (x === 0) g.moveTo(x, mid - y); else g.lineTo(x, mid - y);
-  }
-  for (let x = width - 1; x >= 0; x--) {
-    let max = 0;
-    for (let i = 0; i < step; i++) {
-      const sample = Math.abs(wave.data[x * step + i] - 128) / 128;
-      if (sample > max) max = sample;
-    }
-    g.lineTo(x, mid + max * (mid - 3));
-  }
-  g.closePath();
-  g.fillStyle = colour + "33";
-  g.fill();
-  g.strokeStyle = colour;
-  g.lineWidth = 1.2;
-  g.stroke();
-
+  for (const sample of wave.data) peak = Math.max(peak, Math.abs(sample - 128) / 128);
   wave.peak = Math.max(peak, wave.peak * 0.92);
-  const level = meterScale(wave.peak);
-  ui.meterL.style.setProperty("--h", level.toFixed(3));
-  ui.meterR.style.setProperty("--h", (level * 0.96).toFixed(3));
+  const level = meterScale(wave.peak).toFixed(3);
+  ui.meterL.style.setProperty("--h", level);
+  ui.meterR.style.setProperty("--h", level);
 }
 
 /* ── Timeline ──────────────────────────────────────────────────────── */
@@ -763,10 +715,10 @@ function frame() {
     if (running) {
       updateNowPlaying();
       renderLines();
-      drawScope();
       drawTimeline();
       ui.uptime.textContent = hhmmss((performance.now() - startedAt) / 1000);
     }
+    drawScope();
     const now = new Date();
     ui.wallclock.textContent =
       `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
@@ -1411,7 +1363,7 @@ async function boot() {
       hostNames = names.length === 2 ? names.join(" and ") : names.join(", ");
     }
     if (!status.llm.configured) {
-      toast("No OPENROUTER_API_KEY set — the hosts will fall back to canned lines.", "bad");
+      toast("No writing backend configured — the hosts will use fallback lines.", "bad");
     }
   } catch { /* the status panel is not worth blocking the page for */ }
 

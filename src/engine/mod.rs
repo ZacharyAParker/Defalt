@@ -13,6 +13,7 @@ pub mod decode;
 pub mod filters;
 pub mod stretch;
 pub mod playout;
+pub mod visualizer;
 
 #[cfg(test)]
 mod soundcheck;
@@ -68,6 +69,7 @@ pub enum Command {
 /// playhead would show the UI a position that never existed.
 #[derive(Default)]
 pub struct Telemetry {
+    pub visualizer: visualizer::Capture,
     position: [AtomicU64; DECKS],
     playing: [AtomicBool; DECKS],
     loaded: [AtomicBool; DECKS],
@@ -290,10 +292,12 @@ where
                     let _ = graveyard.push(track);
                 });
 
+                let visualizing = telemetry.visualizer.enabled();
                 let mut peak = [0.0_f32; 2];
                 for (index, frame) in bus.chunks_exact_mut(2).enumerate() {
                     let left = (frame[0] * master).clamp(-1.0, 1.0);
                     let right = (frame[1] * master).clamp(-1.0, 1.0);
+                    if visualizing { telemetry.visualizer.push(left, right); }
                     peak[0] = peak[0].max(left.abs());
                     peak[1] = peak[1].max(right.abs());
 

@@ -1,8 +1,9 @@
 """Song-specific comedy grounded in the station's actual listening records."""
 import json
 import random
+import re
 
-from .. import config, db, memes, vibe
+from .. import config, db, memes, vibe, taste
 from .base import Line, write
 
 
@@ -24,7 +25,7 @@ def facts(track):
                             if isinstance(value, dict)}
     except (TypeError, ValueError, AttributeError):
         metadata_sources = {}
-    return {
+    result = {
         "title": known.get("title") or "Untitled", "artist": artist,
         "selected_for_this_play": dict(track.get("selection_origin") or {"by": "unknown"}),
         "genre_tag": known.get("genre") or None,
@@ -35,6 +36,10 @@ def facts(track):
         "early_skips": counts.get("skipped_early", 0), "late_skips": counts.get("skipped_late", 0),
         "other_frequently_played_titles_by_artist": [dict(r) for r in artist_rows],
     }
+    if taste.ignore_skips():
+        result.pop("early_skips")
+        result.pop("late_skips")
+    return result
 
 
 def evidence(context):
@@ -52,8 +57,9 @@ def roast_rules():
         "sharp": "Dry, pointed roasts. Be mean enough to land an actual punchline; the listener opted in.",
         "savage": "Go hard on these music choices. Cutting, inventive, unapologetic roasts; the listener explicitly enjoys it.",
     }
-    return styles.get(level, styles["sharp"]) + """
-Target the listener's song choices, repeat requests, skips, and loyalty to an
+    targets = "song choices, repeat requests, and loyalty" if taste.ignore_skips() else "song choices, repeat requests, skips, and loyalty"
+    return styles.get(level, styles["sharp"]) + f"""
+Target the listener's {targets} to an
 artist. Artist jokes may mock the supplied titles, stage name, genre tag or
 artistic brand as opinion. No invented biography, scandals, quotes or lyrics.
 Only the supplied VERIFIED MEME opening may quote a meme. Do not add any other
@@ -79,7 +85,7 @@ def fallback(data, anchor, wildcard, recent, introduce):
         options += [f"{artist} again. Our rotation has a very small comfort zone."] if gentle else [
             f"{artist} again. Our shuffle button has filed for redundancy.",
             f"Another round of {title}. This is a loyalty scheme with no rewards."]
-    if track["early_skips"] and track["requests"]:
+    if not taste.ignore_skips() and track.get("early_skips") and track["requests"]:
         options.append(f"You request {title}, then skip it early. Even your taste has commitment issues.")
     if not options:
         options = [f"{title}, by {artist}. That title is doing a lot of the introduction for me."] if gentle else [
@@ -97,6 +103,8 @@ def fallback(data, anchor, wildcard, recent, introduce):
 def comment(context, anchor, wildcard, *, introduce=False):
     data = evidence(context)
     recent = list(context.get("recent_host_lines") or [])[-16:]
+    if taste.ignore_skips():
+        recent = [line for line in recent if not re.search(r'\bskip(?:s|ped|ping)?\b', line, re.I)]
     reference = memes.prepare(data, recent)
     backup = fallback(data, anchor, wildcard, recent, introduce)
     meme_brief = "No verified meme was selected. Use an original song joke; no meme quotes or attributions."
@@ -146,7 +154,7 @@ estimates. An uploader_fallback artist is an uploader, not a verified performer.
 Use these as display labels only; never turn them into claims of verified credits.
 
 Make ONE specific observation that needs this song, artist, or listening
-pattern to work. Prefer a real repeat/request/skip contradiction when present;
+pattern to work. Prefer a real repeat/request contradiction when present;
 otherwise use a title or artist-name joke, or the contrast between this pair.
 Artist criticism and absurd comparisons are opinions. No fake music trivia.
 Avoid generic AI jokes, imaginary callers, broken studio equipment, or the

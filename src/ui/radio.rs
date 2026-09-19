@@ -37,8 +37,14 @@ pub fn draw(app: &mut Defalt, ui: &mut Ui) {
         [rail.right_top(), rail.right_bottom()],
         egui::Stroke::new(1.0, theme::EDGE),
     );
-    if app.studio.enabled { super::studio::draw(app, ui, main); }
-    else { on_air(app, ui, main); }
+    let spectrum_height = if app.studio.visualizer { 76.0_f32.min(main.height() * 0.14) } else { 0. };
+    let content = Rect::from_min_max(main.min, main.max - vec2(0., spectrum_height));
+    if app.studio.enabled { super::studio::draw(app, ui, content); }
+    else { on_air(app, ui, content); }
+    if app.studio.visualizer {
+        let spectrum = Rect::from_min_max(egui::pos2(main.left() + 10., content.bottom() + 4.), main.max - vec2(10., 8.));
+        super::visualizer::draw(app, ui, spectrum);
+    }
     if has_queue {
         ui.painter().line_segment(
             [queue.left_top(), queue.left_bottom()],
@@ -140,7 +146,7 @@ fn mix_percent(key: &str, kind: &str) -> bool {
 }
 
 fn mix_group(key: &str) -> &'static str {
-    if key.starts_with("selection.") { return "Song choice and variety"; }
+    if key.starts_with("selection.") || key == "learning.ignore_skips" { return "Song choice and variety"; }
     if key.starts_with("ducking.") || key.starts_with("tts.") || key.starts_with("hosts.") { return "Hosts and speech"; }
     if key.starts_with("transitions.eq_") || key.starts_with("transitions.echo_")
         || (key.starts_with("transitions.vocal_") && key != "transitions.vocal_collision_weight")
@@ -408,6 +414,7 @@ fn controls_content(app: &mut Defalt, mut column: &mut Ui) {
 
     column.add_space(4.0);
     if column.checkbox(&mut app.studio.enabled, "Studio view").changed() { app.studio.save(); }
+    if column.checkbox(&mut app.studio.visualizer, "Audio visualizer").on_hover_text("A live spectrum of the sound playing here. Saved between launches.").changed() { app.studio.save(); }
     let running = app.station.running();
     let width = column.available_width();
     if super::chip(&mut column, if running { "Stop" } else { "Go on air" },

@@ -1,6 +1,6 @@
 # Privacy policy
 
-Effective September 18, 2026. Applies to Defalt 0.3.2 as distributed in this repository.
+Effective September 18, 2026. Applies to Defalt 0.3.3 as distributed in this repository.
 
 ## The short version
 
@@ -15,6 +15,7 @@ The browser player uses local storage for playback preferences such as volume an
 ## What leaves your machine
 
 - OpenRouter and the selected model provider receive prompts for enabled language-model features. These can include requests, track details, vibe instructions, selected listening-history facts, host dialogue, headlines, and the full text of submitted articles. API credentials authenticate these requests.
+- If the Codex writing backend is enabled, the locally signed-in Codex CLI sends those writing prompts to OpenAI using its existing authentication. This is cloud inference. Selected facts from a configured director memory vault may be included in dialogue prompts. OpenRouter fallback receives the same selected facts. Original source documents and provenance paths are not automatically imported into prompts.
 - Gemini speech through OpenRouter receives host lines and delivery instructions. Microsoft Edge TTS receives the written lines if the primary voice provider fails. Those lines can include personal details from your requests or history.
 - YouTube receives searches, metadata requests, and requests for selected videos or audio. Spotify receives search queries and application credentials for its search feature; Spotify search does not provide playback audio.
 - Cover-art lookup sends the track artist and title to Spotify when configured, and downloads matching album artwork from Spotify's image host. YouTube's image host receives the resolved video identifier when a thumbnail is needed. Images are cached locally; the studio scene itself is bundled with the app.
@@ -29,6 +30,8 @@ Audio cache settings control cached audio retention; they do not erase listening
 
 You control local files and backups. To remove local records, close Defalt and its backend before removing the relevant database, cache, logs, or vault files. Back up anything you want to keep; removing the database also removes library metadata and preferences. Browser site-data controls remove browser-local preferences. Provider-side deletion must be handled with that provider.
 
+Director memory notes can be excluded by setting `broadcast: false`, or the memory-vault setting can be cleared. Changed memory resets the dialogue session on its next request. Already prepared speech may still contain earlier context. Changing or deleting notes does not erase previous Codex session history, generated transcripts, cached speech, or provider records. Codex manages its own local session history and account usage separately from Defalt.
+
 Disable integrations you do not want to use and remove their credentials. Avoid putting private information in article requests, vibe prompts, host instructions, or files you plan to share. Credentials are stored in local configuration, not a dedicated encrypted credential vault.
 
 ## Local server and sharing
@@ -40,4 +43,4 @@ The server binds to loopback by default and has no public-facing authentication.
 Material changes to these practices will be reflected in this document with a new effective date. The version bundled with a native executable describes that build; the repository may describe a newer release. Contact the maintainer through the Defalt repository on GitHub. Do not include credentials, private listening records, or other sensitive data in public issues.
 
 ---
-Defalt v0.3.2 · © 2026 Zachary Parker
+Defalt v0.3.3 · © 2026 Zachary Parker

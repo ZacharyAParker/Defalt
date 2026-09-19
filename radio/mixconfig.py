@@ -30,6 +30,7 @@ FIELDS = [
     ("selection.avoid_music_videos", "Use audio recordings instead of music videos", True, None),
     ("selection.title_separation_hours", "Automatic song repeat cooldown (hours)", 5.0, [0.5, 48.0]),
     ("selection.artist_separation", "Songs between the same artist", 6, [0, 20]),
+    ("learning.ignore_skips", "Ignore skips for taste and host banter", False, None),
     ("transitions.exit_search_seconds", "End search when deeper cues are off (seconds)", 24.0, [0.0, 60.0]),
     ("transitions.max_intro_skip", "Opening skip when deeper cues are off (seconds)", 8.0, [0.0, 20.0]),
     ("transitions.mid_song_cues", "Use deeper structural mix points", True, None),

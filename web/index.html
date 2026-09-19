@@ -92,7 +92,7 @@
           <div class="host-tags"><span id="mav-tag"><i></i>MAV <small>the anchor</small></span><span id="rue-tag"><i></i>RUE <small>the wildcard</small></span></div>
         </section>
 
-<details class="booth-options"><summary>Studio settings</summary><div class="ambience-controls"><label><input type="checkbox" id="rain-enabled" checked> Rain</label><label><input type="checkbox" id="lights-enabled" checked> City lights</label><label><input type="checkbox" id="cat-enabled" checked> Cat antics</label><label><input type="checkbox" id="reduced"> Reduced motion</label><button id="cat-preview" type="button">Meet the cat</button><span id="cat-note">Sleeping on the job.</span></div></details>
+<details class="booth-options"><summary>Studio settings</summary><div class="ambience-controls"><label><input type="checkbox" id="rain-enabled" checked> Rain</label><label><input type="checkbox" id="lights-enabled" checked> City lights</label><label><input type="checkbox" id="cat-enabled" checked> Cat antics</label><label><input type="checkbox" id="visualizer-enabled" checked> Audio visualizer</label><label><input type="checkbox" id="reduced"> Reduced motion</label><button id="cat-preview" type="button">Meet the cat</button><span id="cat-note">Sleeping on the job.</span></div></details>
     <section class="deck__now" aria-labelledby="np-heading">
       <h2 class="sr-only" id="np-heading">Now playing</h2>
 
@@ -103,7 +103,7 @@
         <p class="now__artist" id="now-artist">Press start to bring it up</p>
       </div></div>
 
-      <div class="scope">
+      <div class="scope" id="audio-visualizer">
         <canvas id="scope" class="scope__canvas" aria-hidden="true"></canvas>
         <div class="scope__meters" aria-hidden="true">
           <div class="meter"><i style="--h:0" id="meter-l"></i></div>
@@ -285,6 +285,7 @@
   </footer>
 </dialog>
 <script src="/static/about.js" defer></script>
+<script src="/static/visualizer.js" defer></script>
 <script src="/static/radio.js" defer></script>
 <script src="/static/studio-live.js"></script>
 <script src="/static/studio-ambience.js"></script>
