@@ -330,3 +330,6 @@ brief or undo a clear. Unknown tags are neutral, exclusions still apply, and
 explicit requested tracks bypass automatic vibe scoring. The response explains
 that existing planned mixes finish first. Only unplanned automatic lineup
 entries are replaced, including stale downloads finishing after a change.
+
+---
+Defalt v0.2.0 ? ? 2026 Zachary Parker ? [Patches](../CHANGELOG.md) ? [Privacy](../PRIVACY.md) ? [Terms](../TERMS.md)

@@ -11,6 +11,11 @@ it runs locally on Windows
 
 ## what works
 
+Current release: **0.2.0**. Read the [patch notes](CHANGELOG.md),
+[privacy policy](PRIVACY.md), [terms of use](TERMS.md), and
+[copyright information](COPYRIGHT.md). The same pages open from the app footer
+without leaving Console or Radio or stopping playback.
+
 - Two decks with waveforms, cue points, tempo reset, pitch-preserving key lock,
   three-band EQ, filters, and stem controls.
 - Automatic transitions with beat matching, bass handoffs, filter sweeps, and
@@ -152,3 +157,6 @@ Python audio tests need FFmpeg. soundcheck tests use an output device, so the
 command above skips them. Node is only needed for the browser tests
 
 third-party audio code and its licenses are listed in [vendor/README.md](vendor/README.md)
+
+---
+Defalt v0.2.0 · © 2026 Zachary Parker

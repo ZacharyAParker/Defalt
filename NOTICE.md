@@ -4,7 +4,7 @@ Read this before you run it. It matters.
 
 ## What happens to audio here
 
-Side Room does not ship with music and does not stream music to anyone. What it
+Defalt does not ship with music or provide a public broadcast service. What it
 does is:
 
 1. pick a track it thinks you want to hear
@@ -13,8 +13,9 @@ does is:
    machine
 4. delete the file when the cache budget or age limit says to
 
-The cache lives in `cache/audio/`. It is gitignored. It never leaves the
-machine it was created on.
+The cache lives in `cache/audio/` by default and is excluded from version
+control. The local player serves cached media over its local HTTP interface.
+Keep that interface on loopback; the app has no public-facing authentication.
 
 ## The rules this project holds itself to
 
@@ -74,12 +75,22 @@ the original. Every story keeps its source URL.
 | Service | What it gets | Optional |
 |---|---|---|
 | OpenRouter | The segment brief: track titles, headlines, patch text, submitted articles | Yes — canned lines without it |
-| Microsoft Edge TTS | The written host lines, to synthesise speech | No |
+| Microsoft Edge TTS or configured OpenRouter speech provider | The written host lines, to synthesise speech | Provider is configurable |
 | Steam Web API | Your SteamID, to read your library and wishlist | Yes |
-| RSS feeds | Nothing about you; a plain GET | Yes |
+| RSS and article publishers | Page/feed requests, IP address, and request headers | Yes |
+| YouTube | Searches, metadata requests, and requests for selected audio | When fetching sources |
+| Spotify | Search queries and application credentials | Yes |
+| Google Fonts | Font requests from the browser player, including network information | Browser player only |
 
 The database and vault stay on this machine. When host dialogue or request
 interpretation uses OpenRouter, the prompt can include song details, your vibe
 brief, selected listening-history facts, and the full text of articles you
 submit for a host break. Article links are fetched from their publisher.
 Voice providers receive the lines they are asked to read.
+
+The [privacy policy](PRIVACY.md) covers storage, external providers, retention,
+and deletion limits. See the [terms](TERMS.md), [copyright notice](COPYRIGHT.md),
+and [patch notes](CHANGELOG.md) for the rest of the release information.
+
+---
+Defalt v0.2.0 · © 2026 Zachary Parker

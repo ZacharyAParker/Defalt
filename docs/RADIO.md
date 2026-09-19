@@ -209,3 +209,6 @@ lose the rest of the record, not the join. If there's genuinely nothing on deck
 it cuts and the builder refills, which is the only case where you'll hear a gap.
 
 [requests](REQUESTS.md) has every edge case it handles.
+
+---
+Defalt v0.2.0 ? ? 2026 Zachary Parker ? [Patches](../CHANGELOG.md) ? [Privacy](../PRIVACY.md) ? [Terms](../TERMS.md)

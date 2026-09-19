@@ -11,9 +11,9 @@ import secrets
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, jsonify, request, send_file
+from flask import Flask, jsonify, request, send_file, Response
 
-from . import config, db, director, intent, library, taste, tts, vault, wishes, vibe, spotify
+from . import about, config, db, director, intent, library, taste, tts, vault, wishes, vibe, spotify
 from .sources import steam
 
 app = Flask(__name__, static_folder=str(config.ROOT / "web" / "static"))
@@ -32,7 +32,14 @@ MEDIA_ROOTS = {"audio": library.AUDIO_DIR, "voice": tts.VOICE_DIR}
 @app.get("/")
 def index():
     """The same page the desktop app serves, for running this in a browser."""
-    return send_file(config.ROOT / "web" / "index.html", max_age=0)
+    html = (config.ROOT / "web" / "index.html").read_text(encoding="utf-8")
+    return Response(html.replace("{{APP_VERSION}}", about.VERSION), mimetype="text/html",
+                    headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/about")
+def release_info():
+    return jsonify(about.release_info())
 
 
 # --------------------------------------------------------------------------

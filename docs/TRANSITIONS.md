@@ -110,3 +110,6 @@ crossfade is doing.
 
 `crossfade.duration` is still the base length everything scales from, and
 `crossfade.max_fraction_of_track` still caps it against the shorter record.
+
+---
+Defalt v0.2.0 ? ? 2026 Zachary Parker ? [Patches](../CHANGELOG.md) ? [Privacy](../PRIVACY.md) ? [Terms](../TERMS.md)

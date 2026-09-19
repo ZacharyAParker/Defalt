@@ -25,6 +25,7 @@ fn main() {
         resource.set_icon("icons/icon.ico");
         resource.set("ProductName", "Defalt");
         resource.set("FileDescription", "Defalt");
+        resource.set("LegalCopyright", "Copyright © 2026 Zachary Parker");
         if let Err(error) = resource.compile() {
             // A missing resource compiler is not a reason to fail the build;
             // the application runs perfectly well with a default icon.

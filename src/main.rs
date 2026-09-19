@@ -143,6 +143,7 @@ pub struct Defalt {
     pub active_deck: usize,
     pub focus_search: bool,
     pub show_help: bool,
+    pub info_page: Option<ui::about::Page>,
     /// A line for the user, and when it stops being worth showing.
     pub notice: Option<(String, std::time::Instant)>,
 
@@ -266,6 +267,7 @@ impl Defalt {
             active_deck: 0,
             focus_search: false,
             show_help: false,
+            info_page: None,
             notice: None,
             splits: [None, None],
             stem_gain: [[1.0; engine::deck::STEMS]; DECKS],
@@ -1097,6 +1099,9 @@ impl Defalt {
                 }
             }
             if std::env::var_os("DEFALT_SHOT_RADIO").is_some() { self.view = View::Radio; }
+            if let Ok(page) = std::env::var("DEFALT_SHOT_INFO") {
+                self.info_page = ui::about::Page::from_name(&page);
+            }
             if std::env::var_os("DEFALT_SHOT_ARTICLE").is_some() {
                 self.airtime.request_is_article = true;
                 self.airtime.article = "https://www.mindstudio.ai/blog/gemini-4-release-date-rumors".into();

@@ -5,6 +5,7 @@
 //! and the browser is a fixed height, which is what stops a dense panel
 //! reflowing under your hands when the window is resized mid-mix.
 
+pub mod about;
 pub mod browser;
 pub mod decks;
 pub mod racks;
@@ -36,6 +37,8 @@ pub const NOT_WIRED: &str = "Not wired up yet.";
 
 pub fn draw(app: &mut Defalt, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
+    let reading = app.info_page.is_some();
+    about::footer(app, ui);
 
     egui::Panel::top("toolbar")
         .exact_size(42.0)
@@ -50,6 +53,7 @@ pub fn draw(app: &mut Defalt, ui: &mut Ui) {
             .show(ui, |ui| radio::draw(app, ui));
         notice(app, &ctx);
         help_overlay(app, &ctx);
+        about::overlay(app, &ctx);
         return;
     }
 
@@ -105,7 +109,10 @@ pub fn draw(app: &mut Defalt, ui: &mut Ui) {
 
     notice(app, &ctx);
     help_overlay(app, &ctx);
-    crate::keys::handle(app, &ctx);
+    if !reading && app.info_page.is_none() {
+        crate::keys::handle(app, &ctx);
+    }
+    about::overlay(app, &ctx);
 }
 
 /// Tall enough for a 200px jog with its pitch column beside it, no taller.
@@ -351,6 +358,7 @@ fn notice(app: &mut Defalt, ctx: &egui::Context) {
 }
 
 fn help_overlay(app: &mut Defalt, ctx: &egui::Context) {
+    if app.info_page.is_some() { return; }
     if ctx.input(|i| i.key_pressed(egui::Key::F1)) && !ctx.memory(|m| m.focused().is_some()) {
         app.show_help = !app.show_help;
     }

@@ -33,3 +33,6 @@ The source, review date and matching song travel with the voice item and
 transcript API as `reference` metadata. Existing transcript displays continue
 to show spoken words; they do not yet show clickable source links. Sources
 and exact catalog coverage are inspectable in the YAML above.
+
+---
+Defalt v0.2.0 ? ? 2026 Zachary Parker ? [Patches](../CHANGELOG.md) ? [Privacy](../PRIVACY.md) ? [Terms](../TERMS.md)

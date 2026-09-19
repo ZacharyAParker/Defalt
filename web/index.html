@@ -10,6 +10,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:ital,wght@0,400..800;1,400..700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/radio.css">
+<link rel="stylesheet" href="/static/about.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23100e0c'/><circle cx='16' cy='16' r='6' fill='%23ffb020'/></svg>">
 </head>
 <body>
@@ -224,6 +225,33 @@
 
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
+<footer class="app-footer">
+  <span>Defalt v{{APP_VERSION}} · © 2026 Zachary Parker</span>
+  <nav aria-label="Project information">
+    <button type="button" data-info-page="patches">Patches</button>
+    <button type="button" data-info-page="privacy">Privacy</button>
+    <button type="button" data-info-page="terms">Terms</button>
+    <button type="button" data-info-page="copyright">Copyright</button>
+  </nav>
+</footer>
+<dialog class="info-window" id="info-window" aria-labelledby="info-title">
+  <header class="info-window__head">
+    <h2 id="info-title">Defalt</h2>
+    <button type="button" id="info-close" autofocus>Close</button>
+  </header>
+  <nav class="info-window__nav" aria-label="Information pages">
+    <button type="button" data-info-page="patches">Patches</button>
+    <button type="button" data-info-page="privacy">Privacy</button>
+    <button type="button" data-info-page="terms">Terms</button>
+    <button type="button" data-info-page="copyright">Copyright</button>
+  </nav>
+  <article class="info-window__body" id="info-document" tabindex="0" aria-label="Document"></article>
+  <footer class="info-window__foot">
+    <span>v{{APP_VERSION}} · © 2026 Zachary Parker</span>
+    <a href="https://github.com/ZacharyAParker/Defalt" target="_blank" rel="noopener noreferrer">Repository</a>
+  </footer>
+</dialog>
+<script src="/static/about.js" defer></script>
 <script src="/static/radio.js" defer></script>
 </body>
 </html>
