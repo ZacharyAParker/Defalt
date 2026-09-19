@@ -17,7 +17,7 @@
 
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::mpsc::{channel, Receiver, Sender};
 
 /// Where a pull has got to.
@@ -124,7 +124,7 @@ pub fn start(root: &Path, query: &str, expected_ms: Option<u64>) -> Result<Job, 
         "Pulling needs the station's Python environment, which is not set up here.",
     )?;
 
-    let mut command = Command::new(python);
+    let mut command = crate::process::background(python);
     command.arg("-m").arg("radio.pull").arg(&query);
     if let Some(ms) = expected_ms.filter(|ms| *ms > 0) {
         command.arg("--duration-ms").arg(ms.to_string());
@@ -307,7 +307,7 @@ pub fn separate(root: &Path, deck: usize, audio: &Path) -> Result<Separation, St
     let python = python(root)
         .ok_or("Separation needs the station's Python environment, which is not set up here.")?;
 
-    let mut child = Command::new(python)
+    let mut child = crate::process::background(python)
         .arg("-m")
         .arg("radio.stems")
         .arg(audio)

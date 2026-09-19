@@ -2,6 +2,8 @@
 
 ## 0.3.0 — September 18, 2026
 
+- Windows background helpers no longer open command prompt windows when starting Radio, downloading a song, separating stems, or opening the browser.
+
 ### A room for the radio
 
 - Added the cozy studio to Radio in the app and browser. Mav and Rue's mouths follow their own speech, including pauses and overlapping lines.

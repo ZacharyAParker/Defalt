@@ -432,7 +432,7 @@ fn controls_content(app: &mut Defalt, mut column: &mut Ui) {
         .clicked()
     {
         let url = app.station.url();
-        let _ = std::process::Command::new("cmd")
+        let _ = crate::process::background("cmd")
             .args(["/C", "start", "", &url])
             .spawn();
     }

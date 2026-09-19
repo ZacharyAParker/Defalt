@@ -13,7 +13,7 @@
 
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
 
@@ -105,7 +105,7 @@ impl Station {
         let python = crate::pull::python(&self.root)
             .ok_or("The station needs its Python environment, which is not set up here.")?;
 
-        let mut child = Command::new(python)
+        let mut child = crate::process::background(python)
             .arg("-m")
             .arg("radio")
             .current_dir(&self.root)
