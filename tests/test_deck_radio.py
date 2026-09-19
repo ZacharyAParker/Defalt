@@ -103,7 +103,7 @@ class DeckRadio(unittest.TestCase):
         s = timeline.Schedule()
         s.add_music("a", self.tracks["a"])
         b = s.add_music("b", self.tracks["b"], offset=10)
-        self.assertLessEqual(b.meta["transition"]["overlap"], 2)
+        self.assertAlmostEqual(b.meta["transition"]["overlap"], 3)
 
     def test_uncertain_analysis_does_not_trigger_long_blends(self):
         a, b = dict(self.tracks["a"]), dict(self.tracks["b"])
@@ -118,7 +118,8 @@ class DeckRadio(unittest.TestCase):
 
     def test_beat_drift_limits_unsynced_overlap(self):
         plan = transitions.choose(dict(self.tracks["a"], bpm=128), dict(self.tracks["b"], bpm=135))
-        self.assertLess(plan.overlap, 3)
+        self.assertEqual(plan.overlap, 3)
+        self.assertEqual(plan.preset, "melt")
         self.assertIn("drift", plan.reason)
 
     def test_eq_stays_neutral_between_transition_windows(self):

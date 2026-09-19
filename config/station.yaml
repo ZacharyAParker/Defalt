@@ -74,6 +74,7 @@ crossfade:
 # combinations of those, so you can use a preset or build your own.
 # ---------------------------------------------------------------------------
 transitions:
+  minimum_blend_seconds: 3.0
   # Plan the next pair as soon as audio is ready, even on long songs.
   prepare_tracks_ahead: 1
   # Cached structure supplies candidate cue points; missing analysis uses the
@@ -170,7 +171,7 @@ skip:
   # bass swap, the sweep, and any link the hosts wrote over it. This is how
   # many seconds of the outgoing record you land on before the blend starts.
   # 0 drops you straight onto the crossfade.
-  lead_in: 4.0
+  lead_in: 10.0
 
 ducking:
   # How far the music drops (linear gain) while a host talks over it.
@@ -277,6 +278,7 @@ selection:
   avoid_clean_versions: true
   # Acoustic, demo, stripped, and other alternate takes require an explicit request.
   prefer_original_recording: true
+  avoid_music_videos: true
   # Soft connections, never a genre gate. Novelty grows after similar songs.
   # Missing embedded lyrics are neutral; no lyrics are inferred from titles.
   compatibility:

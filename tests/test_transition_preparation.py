@@ -61,7 +61,7 @@ class PreparationTests(unittest.TestCase):
         before = s.schedule.as_dict()
         result = s.skip()
         self.assertEqual(result["mode"], "transition")
-        self.assertAlmostEqual(s.clock.now(), b.start_at - 4)
+        self.assertAlmostEqual(s.clock.now(), b.start_at - 10)
         self.assertEqual(s.schedule.as_dict(), before)
         self.assertEqual(s._epoch, 1)
 
@@ -71,6 +71,26 @@ class PreparationTests(unittest.TestCase):
         self.station.skip()
         self.assertAlmostEqual(self.station.clock.now(), b.start_at - 7)
 
+    def test_skip_includes_entire_exchange_even_before_default_lead(self):
+        b = self.add("b")
+        s = self.station
+        s.schedule.add_voice("one", b.start_at - 24, 10)
+        s.schedule.add_voice("two", b.start_at - 13, 12)
+        s.skip()
+        self.assertAlmostEqual(s.clock.now(), b.start_at - 25)
+
+    def test_skip_during_speech_waits_and_then_jumps(self):
+        b = self.add("b")
+        s = self.station
+        s.schedule.add_voice("one", 18, 8)
+        s.schedule.add_voice("two", 27, 6)
+        self.assertEqual(s.skip()["mode"], "speaking")
+        self.assertEqual(s.clock.now(), 20)
+        s.clock.jump(13.2)
+        s._service_deferred_skip()
+        self.assertAlmostEqual(s.clock.now(), b.start_at - 10)
+        self.assertEqual(self.record.call_count, 1)
+
     def test_skip_waits_without_cutting_then_completes_once(self):
         s = self.station
         before = s.schedule.as_dict()
@@ -79,7 +99,7 @@ class PreparationTests(unittest.TestCase):
         self.assertEqual(s.schedule.as_dict(), before)
         self.assertEqual(s.clock.now(), 20)
         b = self.add("b")
-        self.assertAlmostEqual(s.clock.now(), b.start_at - 4)
+        self.assertAlmostEqual(s.clock.now(), b.start_at - 10)
         self.assertIsNone(s._pending_skip)
         self.assertEqual(self.record.call_count, 1)
 

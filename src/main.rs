@@ -398,6 +398,9 @@ impl Defalt {
             self.send(Command::Play { deck });
             self.decks[deck].playing = true;
         }
+        for (item_id, key) in plan.report_started {
+            self.airtime.report_started(&item_id, &key);
+        }
 
         let mut gains_moved = false;
         if let Some(duck) = plan.duck {

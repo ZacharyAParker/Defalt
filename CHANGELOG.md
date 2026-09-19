@@ -1,5 +1,13 @@
 # Patch notes
 
+## 0.3.2 — September 18, 2026
+
+- Fixed transitions collapsing into near-instant cuts when a song starts with vocals. Selected styles retain their overlap; automatic blends default to a three-second minimum, subject to available audio and song-length limits.
+- Skip now leads into the mix by ten seconds, configurable from two to thirty. It includes the complete host exchange around the handoff and waits for active speech to finish.
+- Native deck playback now updates listening history. Browser and native reports for the same airing count once, so song cooldowns work across both players.
+- Automatic rotation excludes duplicate recordings under different catalogue entries. Artist spacing relaxes before song cooldowns; an exhausted small library returns to its longest-rested songs. Explicit requests still take priority.
+- Normal searches and cached-source checks avoid music videos and labelled gameplay clips. Exact YouTube requests remain available. Added repeat and source preferences to Mix settings.
+
 ## 0.3.1 — September 18, 2026
 
 - Added **Next host break** and **Play now** ad controls to Radio in the app and browser, with writing, voice preparation, queued, and on-air status.
@@ -83,4 +91,4 @@ Artwork is fetched and cached in the background. Studio animation does not contr
 Earlier development builds used version 0.1.0. The 0.2.0 notes collect the current release changes; they are not a claim that every feature was first written on the release date.
 
 ---
-Defalt v0.3.1 · © 2026 Zachary Parker
+Defalt v0.3.2 · © 2026 Zachary Parker

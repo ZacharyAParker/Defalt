@@ -61,6 +61,9 @@ VIDEO_MARKERS = (
     r"\(\s*video\s*\)", r"\bvisuali[sz]er\b", r"\bshort film\b",
 )
 
+NON_MUSIC_MARKERS = (r"\bgameplay\b", r"\bbeamng(?:\.drive)?\b", r"\b(?:gaming|car) montage\b",
+                     r"\b(?:reaction|tutorial|walkthrough)\b")
+
 # Alternate editions require an explicit request when original preference is on.
 VARIANT_WORDS = (
     "acoustic", "unplugged", "demo", "alternate version", "alternative version",
@@ -132,6 +135,7 @@ def classify(entry: dict[str, Any], artist: str, title: str) -> dict[str, Any]:
                      ("is_live", "was_live", "post_live")),
         "video": titled_video or (described_video and not
                                   (official_audio or art_track)),
+        "non_music": bool(_matches(name, NON_MUSIC_MARKERS, wanted)),
         "art_track": art_track,
         "clean": clean,
         "explicit": explicit,
@@ -172,7 +176,7 @@ def _candidate_score(entry: dict[str, Any], artist: str, title: str,
         return None
     if wants_clean and kind["explicit"]:
         return None
-    if kind["live"] or kind["tampered"]:
+    if kind["live"] or kind["tampered"] or kind["non_music"]:
         return None
     if kind["variant"] and config.station.get("selection.prefer_original_recording", True):
         return None
@@ -267,8 +271,8 @@ def resolve(artist: str, title: str, expected_ms: int = 0, *, exclude=()) -> str
     candidates = [e for e in ((info or {}).get("entries") or [])
                   if e and re.fullmatch(r"[\w-]{11}", e.get("id") or "")]
 
-    # Prefer audio. If none survives, try an explicit-edition search before
-    # allowing music videos. The censorship check applies to every pass.
+    # Prefer audio. If none survives, try an explicit-edition search. Music
+    # video fallback is available only when explicitly enabled in settings.
     # The first refuses music videos outright, because a video is
     # routinely a different edit -- Weezer's Buddy Holly video runs 4:02
     # against a 2:40 record, all of it intro. The second allows them, so a
@@ -276,6 +280,8 @@ def resolve(artist: str, title: str, expected_ms: int = 0, *, exclude=()) -> str
     # Live takes, karaoke and pitched re-uploads are refused on both.
     for attempt in range(3):
         allow_video = attempt == 2
+        if allow_video and config.station.get("selection.avoid_music_videos", True):
+            continue
         if attempt == 1:
             if (not config.station.get("selection.avoid_clean_versions", True)
                     or versions.is_clean_label(title)):
@@ -620,10 +626,12 @@ def _ensure_locked(track: dict[str, Any]) -> dict[str, Any] | None:
     use_existing = True
     if (existing and existing["file"] and existing["video_id"]
             and db.field(existing, "source") != "local" and not db.field(existing, "source_url")
-            and config.station.get("selection.prefer_original_recording", True)):
+            and (config.station.get("selection.prefer_original_recording", True)
+                 or config.station.get("selection.avoid_music_videos", True))):
         info = _source_info(existing["video_id"])
         if info and _candidate_score(info, track["artist"], track["title"],
-                                     track.get("expected_ms") or 0, allow_video=True) is None:
+                                     track.get("expected_ms") or 0,
+                                     allow_video=not config.station.get("selection.avoid_music_videos", True)) is None:
             use_existing = False
             _log("replacing alternate cached recording for", track["artist"], track["title"])
     if existing and existing["file"] and use_existing:
@@ -660,7 +668,8 @@ def _ensure_locked(track: dict[str, Any]) -> dict[str, Any] | None:
     saved_id = existing["video_id"] if existing else None
     if (not db.field(existing, "source_url")
             and (config.station.get("selection.avoid_clean_versions", True)
-                 or config.station.get("selection.prefer_original_recording", True))):
+                 or config.station.get("selection.prefer_original_recording", True)
+                 or config.station.get("selection.avoid_music_videos", True))):
         saved_id = None
     video_id, raw = fetch_recording(
         track['artist'], track['title'], track.get('expected_ms') or 0,

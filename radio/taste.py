@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import math
 import random
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -198,13 +199,35 @@ def candidates() -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+def recording_ids(track):
+    title = re.sub(r"[\[(]\s*(?:feat\.?|ft\.?|with)\s+[^\])]+[\])]", "", track.get("title") or "", flags=re.I)
+    title = db.norm(title.replace("'", "").replace("\u2019", ""))
+    artist = db.norm(db.primary_artist(track.get("artist") or ""))
+    ids = {f"song:{artist}|{title}"}
+    if track.get("video_id"):
+        ids.add(f"video:{track['video_id']}")
+    return ids
+
+
 def pick_next(exclude_keys: set[str] | None = None,
               previous: dict[str, Any] | None = None,
               history: list[dict[str, Any]] | None = None) -> dict[str, Any] | None:
     """Choose the next track. Weighted sampling, not argmax -- a station that
     always plays its single favourite song is not a station."""
     exclude = set(exclude_keys or ())
-    pool = [t for t in candidates() if t["key"] not in exclude]
+    catalogue = candidates()
+    excluded_ids = set().union(*(recording_ids(t) for t in catalogue if t["key"] in exclude))
+    latest = {}
+    for track in catalogue:
+        for identity in recording_ids(track):
+            latest[identity] = max(latest.get(identity, 0), track.get("last_played") or 0)
+    pool, seen = [], set()
+    for track in catalogue:
+        identities = recording_ids(track)
+        if track["key"] in exclude or identities & (excluded_ids | seen):
+            continue
+        seen.update(identities)
+        pool.append({**track, "last_played": max(latest[i] for i in identities) or None})
     if config.station.get("selection.avoid_clean_versions", True):
         pool = [t for t in pool if not versions.clean_track(t)]
     if config.station.get("selection.prefer_original_recording", True):
@@ -231,12 +254,19 @@ def pick_next(exclude_keys: set[str] | None = None,
     if separation:
         blocked_artists.update(db.norm(db.primary_artist(t.get("artist") or ""))
                                for t in history[-separation:])
-    eligible = [t for t in pool
+    rested = [t for t in pool if not (title_hours and t["last_played"]
+                                    and now - t["last_played"] < title_hours * 3600)]
+    eligible = [t for t in rested
                 if db.norm(db.primary_artist(t["artist"])) not in blocked_artists
-                and not (title_hours and t["last_played"]
-                         and now - t["last_played"] < title_hours * 3600)]
+                ]
     relaxed = not eligible
-    pool = eligible or pool
+    if eligible or rested:
+        pool = eligible or rested  # Relax artist spacing before song cooldowns.
+    else:
+        # A small library eventually has to repeat. Give the longest-rested
+        # recordings their turn instead of repeatedly drawing the favourite.
+        oldest = min(t["last_played"] or 0 for t in pool)
+        pool = [t for t in pool if (t["last_played"] or 0) <= oldest + 1.0]
     explore = (bool(selection_settings.get("enabled", True))
                and random.random() < compatibility.setting("explore_chance", .18, settings=selection_settings))
 

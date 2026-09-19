@@ -113,6 +113,7 @@ def report():
         str(payload.get("key") or ""),
         float(payload.get("position") or 0),
         float(payload.get("duration") or 0),
+        str(payload.get("item_id") or ""),
     )
     return jsonify(ok=True)
 

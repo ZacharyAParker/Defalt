@@ -289,7 +289,10 @@ class Station:
         # Exclude what has just played AND what is already waiting. Without
         # the second half the selector happily queues the same record twice,
         # because as far as it knows nothing has played it yet.
-        exclude = set(self._recent_keys[-12:])
+        # Played records use persistent cooldowns in taste.pick_next. Only
+        # currently reserved records are absolute exclusions, so a small
+        # library can eventually return to its longest-rested recording.
+        exclude = set()
         with self.lock:
             exclude.update(e["track"].get("key") for e in self._lineup)
             exclude.update(i.meta.get("key") for i in self.schedule.music_items())
@@ -363,6 +366,14 @@ class Station:
         with self.lock:
             if not was_request and vibe_revision != vibe.revision():
                 return True  # A newer brief superseded this automatic pick.
+            if not was_request:
+                reserved = [e["track"] for e in self._lineup]
+                reserved.extend(i.meta for i in self.schedule.music_items())
+                building = getattr(self, "_building_entry", None)
+                if building:
+                    reserved.append(building["track"])
+                if any(taste.recording_ids(prepared) & taste.recording_ids(t) for t in reserved):
+                    return False  # A deck/request changed while this file was preparing.
             if request_id:
                 state = db.one("SELECT status FROM requests WHERE id=?", (request_id,))
                 if not state or state["status"] != "preparing":
@@ -539,6 +550,8 @@ class Station:
 
     def _builder_loop(self) -> None:
         while not self._stop.is_set():
+            with self.lock:
+                self._service_deferred_skip()
             if hasattr(self, "ads"):
                 with self.lock:
                     self.ads.tick()
@@ -800,6 +813,7 @@ class Station:
     # -- public surface --------------------------------------------------
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
+            self._service_deferred_skip()
             now = self.clock.now()
             self._finish_requests(now)
             if hasattr(self, "ads"):
@@ -864,6 +878,15 @@ class Station:
         with self.lock:
             return self._skip_locked()
 
+    def _service_deferred_skip(self):
+        pending = getattr(self, "_deferred_skip", None)
+        if not pending or self.clock.now() < pending[1]:
+            return
+        self._deferred_skip = None
+        if any(i.id == pending[0] and i.start_at <= self.clock.now() < i.end_at
+               for i in self.schedule.music_items()):
+            self._skip_locked(record=False)
+
     def _skip_locked(self, record: bool = True) -> dict[str, Any]:
         now = self.clock.now()
         music = sorted(self.schedule.music_items(), key=lambda i: i.start_at)
@@ -882,12 +905,27 @@ class Station:
                                  item.meta.get("rate_curve"), now - item.start_at,
                                  item.meta.get("playback_rate", 1.0)))
 
-        lead = float(config.station.get("skip.lead_in", 4.0))
-        lead = max(0.0, min(10.0, lead)) if math.isfinite(lead) else 4.0
+        groups = []
+        for voice in sorted((i for i in self.schedule.items if i.kind == "voice"), key=lambda i: i.start_at):
+            if groups and voice.start_at <= groups[-1][1] + 3.0:
+                groups[-1][1] = max(groups[-1][1], voice.end_at)
+            else:
+                groups.append([voice.start_at, voice.end_at])
+        active = next((g for g in groups if g[0] <= now < g[1]), None)
+        if active and item:
+            self._pending_skip = item.id
+            self._deferred_skip = (item.id, active[1] + 0.1)
+            return {"ok": True, "mode": "speaking", "skipped": 0,
+                    "message": "Letting the hosts finish, then moving to the transition."}
+        lead = float(config.station.get("skip.lead_in", 10.0))
+        lead = max(2.0, min(30.0, lead)) if math.isfinite(lead) else 10.0
         upcoming = [i for i in music if i.start_at > now]
         if upcoming:
             self._pending_skip = None
             target = max(now, upcoming[0].start_at - lead)
+            for start, end in groups:
+                if start <= upcoming[0].start_at and end >= target:
+                    target = max(now, min(target, start - 1.0))
             if target > now + 0.1:
                 self.transcript()
                 skipped = getattr(self, "_skipped_speech", set())
@@ -922,19 +960,29 @@ class Station:
         return True
 
     def report(self, kind: str, key: str, position: float = 0.0,
-               duration: float = 0.0) -> None:
-        """Playback feedback from the browser, folded into the taste profile."""
+               duration: float = 0.0, item_id: str = "") -> None:
+        """Playback feedback from either player, counted once per airing."""
         if not key:
             return
         row = db.one("SELECT artist FROM tracks WHERE key=?", (key,))
         artist = row["artist"] if row else ""
         if kind == "started":
-            taste.mark_played(key)
             with self.lock:
                 now = self.clock.now()
                 self._finish_requests(now)
                 current = next((i for i in reversed(self.schedule.music_items())
-                                if i.meta.get("key") == key and i.start_at <= now < i.end_at), None)
+                                if i.meta.get("key") == key and (not item_id or i.id == item_id)
+                                and i.start_at <= now < i.end_at), None)
+                if item_id and current is None:
+                    return  # Stale report after a skip/replaced schedule.
+                token = current.id if current else item_id
+                reported = getattr(self, "_reported_plays", set())
+                if token and token in reported:
+                    return
+                if token:
+                    reported.add(token)
+                self._reported_plays = reported
+                taste.mark_played(key)
                 origin = current.meta.get("selection_origin") if current else {"by": "unknown"}
             db.log_event("played", key, 0.0, selection_origin=origin)
             return

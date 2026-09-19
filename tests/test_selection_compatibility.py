@@ -300,7 +300,7 @@ class SelectionDatabaseTests(unittest.TestCase):
         with patch.object(taste, "pick_next", return_value=record("picked")) as pick:
             instance._next_candidate()
             self.assertEqual(pick.call_args.kwargs["previous"]["key"], "queued")
-            self.assertEqual(pick.call_args.args[0], {"recent", "queued"})
+            self.assertEqual(pick.call_args.args[0], {"queued"})
         self.insert("request")
         db.write("INSERT INTO requests(ts,query,track_key) VALUES (0,'request','request')")
         with patch.object(taste, "pick_next") as pick:

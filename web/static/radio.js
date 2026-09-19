@@ -517,7 +517,7 @@ function updateNowPlaying() {
       reported.add(`start:${music.id}`);
       api("/api/report", {
         method: "POST",
-        body: JSON.stringify({ kind: "started", key }),
+        body: JSON.stringify({ kind: "started", key, item_id: music.id }),
       }).catch(() => {});
     }
   }
@@ -927,6 +927,7 @@ ui.skip.addEventListener("click", async () => {
     // rather than leaving a stale label until the next 15s tick.
     setTimeout(() => { if (running) loadQueue(); }, 6000);
     toast({
+      speaking: "Letting the hosts finish, then moving to the transition.",
       transition: `Into the mix${result.into ? ` — ${result.into}` : ""}`,
       already_mixing: "Already mixing into the next one",
       preparing: "Preparing the next transition; keeping this song playing",

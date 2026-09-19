@@ -31,7 +31,7 @@ async function run(result) {
 }
 
 (async () => {
-  for (const mode of ['preparing', 'already_mixing', 'empty']) {
+  for (const mode of ['preparing', 'speaking', 'already_mixing', 'empty']) {
     const {context, calls} = await run({mode, skipped: 0});
     assert.equal(calls.stops, 0, `${mode} interrupted the playing deck`);
     assert.equal(context.clockOffset, 123);

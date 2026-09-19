@@ -104,11 +104,21 @@ class SmartCuePlanner(unittest.TestCase):
         choice = self.refine(self.track(self.profile()), self.track(self.profile()))
         self.assertLessEqual(choice.plan.overlap, 120 * .03)
 
-    def test_forced_style_is_honored_even_when_vocals_require_shorter_overlap(self):
+    def test_forced_style_preserves_duration_with_vocals(self):
         self.settings["transitions.preset"] = "fade"
         choice = self.refine(self.track(self.profile(vocal=1)), self.track(self.profile(vocal=1)))
         self.assertEqual(choice.plan.preset, "fade")
-        self.assertLess(choice.plan.overlap, 8)
+        self.assertEqual(choice.plan.overlap, 8)
+
+    def test_immediate_vocals_cannot_collapse_every_mix_style(self):
+        for preset in ("auto", *transitions.PRESETS):
+            self.settings["transitions.preset"] = preset
+            a = self.track(self.profile(vocal=1), key="a", intro_sec=0)
+            b = self.track(self.profile(vocal=1), key="b", intro_sec=0)
+            schedule = timeline.Schedule()
+            schedule.add_music("a", a)
+            incoming = schedule.add_music("b", b)
+            self.assertGreaterEqual(incoming.meta["transition"]["overlap"], 3, preset)
 
     def test_unknown_vocals_do_not_invent_a_clash_or_skip_an_opening(self):
         choice = self.refine(self.track(self.profile()), self.track(self.profile(entries=(4,))))

@@ -484,8 +484,10 @@ class Schedule:
             if trusted_grids and phrase_beats > 0:
                 phrase = out_row["beat_period"] * phrase_beats
                 if overlap >= phrase:
-                    overlap = math.floor(overlap / phrase) * phrase
-                    plan.reason += f"; {phrase_beats}-beat phrasing"
+                    phrased = math.floor(overlap / phrase) * phrase
+                    if phrased >= transitions.minimum_overlap(overlap):
+                        overlap = phrased
+                        plan.reason += f"; {phrase_beats}-beat phrasing"
             plan.overlap = overlap
         else:
             overlap = 0.0
@@ -501,7 +503,8 @@ class Schedule:
                 # Never lengthen past the intro/track cap chosen above.
                 if nudge < 0:
                     nudge += out_row["beat_period"]
-                aligned = not why and nudge <= overlap * 0.25
+                aligned = (not why and nudge <= overlap * 0.25
+                           and overlap - nudge >= transitions.minimum_overlap(overlap))
                 if aligned:
                     start += nudge
                 overlap = previous.end_at - start

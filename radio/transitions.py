@@ -36,6 +36,12 @@ STEPS = 20
 
 PRESETS = ("fade", "rise", "blend", "wave", "melt", "slam")
 
+
+def minimum_overlap(requested: float) -> float:
+    """A vocal timestamp is not a request for a near-instant cut."""
+    return min(max(0.0, requested), max(0.5, min(12.0, float(
+        config.station.get("transitions.minimum_blend_seconds", 3.0)))))
+
 VOLUME_MODES = ("smooth_crossfade", "crossfade", "overlap", "fade_in_fade_out",
                 "cut_in_fade_out", "fade_in_cut_out", "center_cut")
 
@@ -448,11 +454,15 @@ def choose(outgoing: Any, incoming: Any, rng: random.Random | None = None
     if intro is None:
         intro = db.field(incoming, "intro_sec")
     if intro is not None and math.isfinite(float(intro)):
-        safe = max(0.15, float(intro))
+        safe = max(minimum_overlap(base), float(intro))
         if overlap > safe:
             overlap = safe
             reason += "; clear before the incoming vocal"
 
+    if overlap < minimum_overlap(base):
+        overlap = minimum_overlap(base)
+        name = "melt"
+        reason += "; use a controlled fade instead of a sub-second drum blend"
     volume, eq, effects = preset_spec(name)
     return configured(Plan(name, volume, eq, effects, max(0.0, overlap), reason))
 

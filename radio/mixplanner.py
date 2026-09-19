@@ -170,37 +170,40 @@ def refine(outgoing: dict, incoming: dict, plan: transitions.Plan, *,
         out_length = wall_at(end)
         for cue, entry_quality in entries:
             in_length = (in_end - cue) / in_rate
-            for scale in ((1.0, 0.75, 0.5, 0.25) if options["overlap_scoring"] else (1.0, 0.5)):
+            minimum = transitions.minimum_overlap(plan.overlap)
+            for scale in ((1.0,) if forced else ((1.0, 0.75, 0.5, 0.25) if options["overlap_scoring"] else (1.0, 0.5))):
                 # The compatibility planner already bounded beat drift and
                 # the intro. Acoustic evidence may shorten that limit, never
                 # expand it into a blend whose drums will drift apart.
                 fraction = max(0.0, _number(cfg.get("crossfade.max_fraction_of_track", 0.25), 0.25))
                 overlap = min(plan.overlap * scale, min(out_length, in_length) * fraction)
+                effective_minimum = min(minimum, min(out_length, in_length) * fraction)
                 if mid_song and out_end - out_offset >= out_full * min_play:
                     majority_at = wall_at(out_offset + out_full * min_play)
                     overlap = min(overlap, max(0.0, out_length - majority_at))
+                    effective_minimum = min(effective_minimum, max(0.0, out_length - majority_at))
                 # Respect a measured/overridden vocal entry after moving a cue.
                 intro = incoming.get("intro_override")
                 if intro is None:
                     intro = incoming.get("intro_sec")
-                if intro is not None and cue <= _number(intro):
-                    overlap = min(overlap, max(0.15, (_number(intro) - cue) / in_rate))
-                elif cue > in_offset:
+                if not forced and intro is not None and cue <= _number(intro):
+                    overlap = min(overlap, max(minimum, (_number(intro) - cue) / in_rate))
+                elif not forced and cue > in_offset:
                     # At a deeper entry the original opening's vocal timestamp
                     # is no longer relevant. Use this cue's measured local gap.
                     vocals = [structure.at(in_profile, cue + i * 0.5).get("vocal")
                               for i in range(int(overlap * in_rate / 0.5) + 1)]
                     first_voice = next((i for i, v in enumerate(vocals) if v is not None and v > 0.2), None)
                     if first_voice is not None:
-                        overlap = min(overlap, max(0.35, first_voice * 0.5 / in_rate))
+                        overlap = min(overlap, max(minimum, first_voice * 0.5 / in_rate))
                     elif any(v is None for v in vocals):
-                        overlap = min(overlap, 2.0)
+                        overlap = min(overlap, max(minimum, 2.0))
                 if mid_song and end < out_end - 0.01:
                     # The majority must be heard BEFORE fading starts, using
                     # full-file source time. Intro and outro cuts share a budget.
                     if source_at(out_length - overlap) - out_offset < out_full * min_play:
                         continue
-                if overlap < 0.15 or out_start + out_length - overlap < earliest_start:
+                if overlap < max(0.15, effective_minimum) or out_start + out_length - overlap < earliest_start:
                     continue
                 if out_start + out_length < protected_until:
                     continue
@@ -219,7 +222,7 @@ def refine(outgoing: dict, incoming: dict, plan: transitions.Plan, *,
                     score += 0.35 * (exit_quality + entry_quality)
                     score -= 0.5 * (out_end - end) / max(1, max_early * out_rate)
                     score -= 0.35 * (cue - in_offset) / max(1, max_skip)
-                    score -= 0.2 * abs(scale - 1.0)
+                    score -= 0.6 * abs(scale - 1.0)
                     if out_energy is not None and in_energy is not None:
                         score -= abs(out_energy - in_energy) * (0.3 if preset == "slam" else 0.8)
                     if options["overlap_scoring"]:

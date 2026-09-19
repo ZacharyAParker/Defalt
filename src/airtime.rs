@@ -332,6 +332,7 @@ pub struct Plan {
     pub load: Vec<(usize, Record)>,
     /// Deck, and where in the record to start it.
     pub start: Vec<(usize, f64)>,
+    pub report_started: Vec<(String, String)>,
     pub stop: Vec<usize>,
     pub tone: [Option<[f32; 4]>; DECKS],
     pub gain: [Option<f32>; DECKS],
@@ -399,6 +400,7 @@ pub struct Airtime {
     /// Which scheduled item each deck is carrying.
     decks: [Option<Assigned>; DECKS],
     started_at: [Option<f64>; DECKS],
+    reported_starts: HashSet<String>,
     /// Voice items placed on the speech bus, and the channel they took.
     voices: HashMap<String, usize>,
     free_voice: Vec<usize>,
@@ -460,6 +462,7 @@ impl Airtime {
             anchor: None,
             decks: [const { None }; DECKS],
             started_at: [None; DECKS],
+            reported_starts: HashSet::new(),
             voices: HashMap::new(),
             free_voice: (0..VOICE_CHANNELS).collect(),
             pending: HashMap::new(),
@@ -698,6 +701,10 @@ impl Airtime {
     ///
     /// Off-thread and without waiting: none of these answer with anything the
     /// console needs, because the next schedule says what actually happened.
+    pub fn report_started(&mut self, item_id: &str, key: &str) {
+        self.post("/api/report", Some(serde_json::json!({"kind": "started", "item_id": item_id, "key": key})));
+    }
+
     fn post(&mut self, path: &str, body: Option<serde_json::Value>) {
         let url = format!("http://127.0.0.1:{}{path}", self.port);
         let sender = self.gripe_out.clone();
@@ -1151,6 +1158,20 @@ impl Airtime {
         }
 
         self.follow_playheads(decks, plan);
+
+        // Report actual deck playback, including an already-playing preload.
+        // Keep network work out of this planner; the app applies the report.
+        for deck in 0..DECKS {
+            let Some(assigned) = &self.decks[deck] else { continue };
+            let Some(item) = self.on_deck(deck) else { continue };
+            if assigned.ready && assigned.started && decks[deck].playing
+                && item.start_at <= now && now < item.ends_at()
+                && !self.reported_starts.contains(&item.id) {
+                let (id, key) = (item.id.clone(), item.key.clone());
+                self.reported_starts.insert(id.clone());
+                plan.report_started.push((id, key));
+            }
+        }
 
         // Tone: the station's automation, in knob positions.
         for deck in 0..DECKS {
@@ -1877,6 +1898,21 @@ mod tests {
         let mut plan = Plan::default();
         airtime.drive([busy(true, true), busy(false, false)], &mut plan);
         assert!(plan.start.is_empty(), "it was started twice");
+    }
+
+    #[test]
+    fn native_playback_reports_each_airing_once_even_after_resync() {
+        let mut airtime = airtime_with(real().items, 554.0);
+        airtime.decks[0] = Some(Assigned { id: "43ac".into(), started: true, ready: true });
+        let mut plan = Plan::default();
+        airtime.drive([busy(true, false), busy(false, false)], &mut plan);
+        assert!(plan.report_started.is_empty(), "a paused deck is not a play");
+        airtime.drive([busy(true, true), busy(false, false)], &mut plan);
+        assert_eq!(plan.report_started.len(), 1);
+        assert_eq!(plan.report_started[0].0, "43ac");
+        let mut next = Plan::default();
+        airtime.drive([busy(true, true), busy(false, false)], &mut next);
+        assert!(next.report_started.is_empty());
     }
 
     #[test]
