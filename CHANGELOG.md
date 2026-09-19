@@ -2,6 +2,7 @@
 
 ## 0.3.0 — September 18, 2026
 
+- Radio's studio now fits the window height, keeping the full scene, current record, and live transcript visible together. Only transcript history scrolls.
 - Windows background helpers no longer open command prompt windows when starting Radio, downloading a song, separating stems, or opening the browser.
 
 ### A room for the radio

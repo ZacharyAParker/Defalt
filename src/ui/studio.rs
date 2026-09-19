@@ -139,9 +139,11 @@ impl Studio {
             }
         }
     }
-    fn scene(&mut self, ui: &mut Ui, levels: [f32; 2]) {
-        let width = ui.available_width();
-        let (scene, _) = ui.allocate_exact_size(vec2(width, width * 2. / 3.), Sense::hover());
+    fn scene(&mut self, ui: &mut Ui, levels: [f32; 2], max_height: f32) {
+        let width = ui.available_width().min(max_height.max(0.) * 1.5);
+        let size = vec2(width, width * 2. / 3.);
+        let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), size.y), Sense::hover());
+        let scene = Rect::from_center_size(row.center(), size);
         if !ui.is_rect_visible(scene) {
             self.last = Instant::now();
             return;
@@ -502,193 +504,198 @@ pub fn draw(app: &mut crate::Defalt, ui: &mut Ui, rect: Rect) {
         egui::Layout::top_down(egui::Align::Min),
         "live-studio",
     );
-    egui::ScrollArea::vertical()
-        .id_salt("studio-scroll")
-        .show(&mut area, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(super::rich("Inside the booth", 18., theme::TEXT));
-                let mut changed = false;
-                ui.menu_button("Studio settings", |ui| {
-                    changed |= ui.checkbox(&mut app.studio.rain, "Rain").changed();
-                    changed |= ui.checkbox(&mut app.studio.lights, "City lights").changed();
-                    changed |= ui.checkbox(&mut app.studio.cat, "Cat antics").changed();
-                    changed |= ui
-                        .checkbox(&mut app.studio.reduced, "Reduced motion")
-                        .changed();
-                    ui.small("The cat keeps breathing between antics.");
-                });
-                if changed {
-                    app.studio.save();
-                }
+    {
+        let ui = &mut area;
+        ui.horizontal_wrapped(|ui| {
+            ui.label(super::rich("Inside the booth", 18., theme::TEXT));
+            let mut changed = false;
+            ui.menu_button("Studio settings", |ui| {
+                changed |= ui.checkbox(&mut app.studio.rain, "Rain").changed();
+                changed |= ui.checkbox(&mut app.studio.lights, "City lights").changed();
+                changed |= ui.checkbox(&mut app.studio.cat, "Cat antics").changed();
+                changed |= ui
+                    .checkbox(&mut app.studio.reduced, "Reduced motion")
+                    .changed();
+                ui.small("The cat keeps breathing between antics.");
             });
-            app.studio.scene(ui, app.host_levels);
-            ui.add_space(8.);
-            let title = current
-                .as_ref()
-                .map(|s| s.title.as_str())
-                .or(status.as_ref().and_then(|s| s.title.as_deref()))
-                .unwrap_or("Your station. Your soundtrack.");
-            let artist = current
-                .as_ref()
-                .map(|s| s.artist.as_str())
-                .or(status.as_ref().and_then(|s| s.artist.as_deref()))
-                .unwrap_or("Start radio to bring the booth on air.");
-            let (position, duration) = current
-                .as_ref()
-                .map(|s| ((app.airtime.station_now - s.start_at).max(0.), s.duration))
-                .unwrap_or_else(|| {
-                    status
-                        .as_ref()
-                        .map(|s| (s.position, s.duration))
-                        .unwrap_or((0., 0.))
-                });
-            let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 96.), Sense::hover());
-            let center = r.min + vec2(46., 46.);
-            let p = ui.painter();
-            p.circle_filled(center, 43., Color32::from_rgb(19, 18, 24));
-            for radius in [24., 28., 32., 36., 40.] {
-                p.circle_stroke(
-                    center,
-                    radius,
-                    Stroke::new(1., Color32::from_rgb(49, 44, 55)),
-                );
-            }
-            if let Some(cover) = &app.studio.cover {
-                let size = cover.size_vec2();
-                let uv_scale = vec2((size.y / size.x).min(1.0), (size.x / size.y).min(1.0)) * 0.5;
-                let angle = if app.airtime.on && current.is_some() && !app.studio.reduced {
-                    app.studio.clock * std::f32::consts::TAU / 5.
-                } else {
-                    0.
-                };
-                let mut mesh = egui::Mesh::with_texture(cover.id());
-                mesh.vertices.push(egui::epaint::Vertex {
-                    pos: center,
-                    uv: pos2(0.5, 0.5),
-                    color: Color32::WHITE,
-                });
-                for i in 0..=64 {
-                    let a = i as f32 * std::f32::consts::TAU / 64.;
-                    mesh.vertices.push(egui::epaint::Vertex {
-                        pos: center + vec2(a.cos(), a.sin()) * 19.,
-                        uv: pos2(
-                            0.5 + (a - angle).cos() * uv_scale.x,
-                            0.5 + (a - angle).sin() * uv_scale.y,
-                        ),
-                        color: Color32::WHITE,
-                    });
-                    if i > 0 {
-                        mesh.indices.extend_from_slice(&[0, i, i + 1]);
-                    }
-                }
-                p.add(egui::Shape::mesh(mesh));
-            } else {
-                p.circle_filled(center, 19., AMBER);
-                p.text(
-                    center,
-                    Align2::CENTER_CENTER,
-                    "DEFALT",
-                    FontId::proportional(7.),
-                    theme::GROUND,
-                );
-            }
-            p.circle_filled(center, 2., theme::TEXT_DIM);
-            let text = Rect::from_min_max(r.min + vec2(104., 3.), r.max);
-            super::clipped_label(
-                ui,
-                Rect::from_min_size(text.min, vec2(text.width(), 25.)),
-                title,
-                19.,
-                theme::TEXT,
-            );
-            super::clipped_label(
-                ui,
-                Rect::from_min_size(text.min + vec2(0., 27.), vec2(text.width(), 20.)),
-                artist,
-                12.,
-                theme::TEXT_DIM,
-            );
-            let info = format!(
-                "{} / {}   {}",
-                super::mmss(position),
-                super::mmss(duration),
-                app.studio.cover_source
-            );
-            super::label(
-                ui,
-                text.min + vec2(0., 53.),
-                Align2::LEFT_TOP,
-                &info,
-                10.,
-                theme::TEXT_DIM,
-            );
-            if duration > 0. {
-                let y = text.min.y + 76.;
-                ui.painter().line_segment(
-                    [pos2(text.left(), y), pos2(text.right(), y)],
-                    Stroke::new(2., theme::EDGE),
-                );
-                ui.painter().line_segment(
-                    [
-                        pos2(text.left(), y),
-                        pos2(
-                            text.left() + text.width() * (position / duration).clamp(0., 1.) as f32,
-                            y,
-                        ),
-                    ],
-                    Stroke::new(2., AMBER),
-                );
-            }
-            if let Some(status) = &status {
-                ui.horizontal(|ui| {
-                    ui.label(super::rich("Transcript", 16., theme::TEXT));
-                    ui.checkbox(&mut app.transcript_follow, "Follow live");
-                    if ui.button("Copy").clicked() {
-                        ui.ctx().copy_text(
-                            status
-                                .transcript
-                                .iter()
-                                .map(|s| format!("{}: {}", s.host, s.text))
-                                .collect::<Vec<_>>()
-                                .join("\n\n"),
-                        );
-                    }
-                });
-                egui::ScrollArea::vertical()
-                    .id_salt("studio-transcript")
-                    .max_height(210.)
-                    .stick_to_bottom(app.transcript_follow)
-                    .show(ui, |ui| {
-                        if status.transcript.is_empty() {
-                            ui.label("Host lines appear here as they air.");
-                        }
-                        for line in &status.transcript {
-                            ui.label(super::rich(
-                                &format!("{} · {}", line.host, super::mmss(line.start_at)),
-                                11.,
-                                AMBER,
-                            ));
-                            ui.label(&line.text);
-                            if let Some(source) = &line.source {
-                                if let Some(url) = &line.source_url {
-                                    ui.hyperlink_to(source, url);
-                                } else {
-                                    ui.small(source);
-                                }
-                            }
-                            ui.add_space(8.);
-                        }
-                    });
-            } else {
-                ui.label(
-                    if matches!(app.station.health, crate::station::Health::Starting) {
-                        "Bringing the station on air…"
-                    } else {
-                        "Use Go on air to start your station."
-                    },
-                );
+            if changed {
+                app.studio.save();
             }
         });
+        // Keep the record and live transcript in view at every window size.
+        // Only transcript history scrolls; the booth always fits in full.
+        let transcript_height = (ui.available_height() * 0.24).clamp(112., 180.);
+        let scene_height =
+            ui.available_height() - 96. - transcript_height - 8. - ui.spacing().item_spacing.y * 3.;
+        app.studio.scene(ui, app.host_levels, scene_height);
+        ui.add_space(8.);
+        let title = current
+            .as_ref()
+            .map(|s| s.title.as_str())
+            .or(status.as_ref().and_then(|s| s.title.as_deref()))
+            .unwrap_or("Your station. Your soundtrack.");
+        let artist = current
+            .as_ref()
+            .map(|s| s.artist.as_str())
+            .or(status.as_ref().and_then(|s| s.artist.as_deref()))
+            .unwrap_or("Start radio to bring the booth on air.");
+        let (position, duration) = current
+            .as_ref()
+            .map(|s| ((app.airtime.station_now - s.start_at).max(0.), s.duration))
+            .unwrap_or_else(|| {
+                status
+                    .as_ref()
+                    .map(|s| (s.position, s.duration))
+                    .unwrap_or((0., 0.))
+            });
+        let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 96.), Sense::hover());
+        let center = r.min + vec2(46., 46.);
+        let p = ui.painter();
+        p.circle_filled(center, 43., Color32::from_rgb(19, 18, 24));
+        for radius in [24., 28., 32., 36., 40.] {
+            p.circle_stroke(
+                center,
+                radius,
+                Stroke::new(1., Color32::from_rgb(49, 44, 55)),
+            );
+        }
+        if let Some(cover) = &app.studio.cover {
+            let size = cover.size_vec2();
+            let uv_scale = vec2((size.y / size.x).min(1.0), (size.x / size.y).min(1.0)) * 0.5;
+            let angle = if app.airtime.on && current.is_some() && !app.studio.reduced {
+                app.studio.clock * std::f32::consts::TAU / 5.
+            } else {
+                0.
+            };
+            let mut mesh = egui::Mesh::with_texture(cover.id());
+            mesh.vertices.push(egui::epaint::Vertex {
+                pos: center,
+                uv: pos2(0.5, 0.5),
+                color: Color32::WHITE,
+            });
+            for i in 0..=64 {
+                let a = i as f32 * std::f32::consts::TAU / 64.;
+                mesh.vertices.push(egui::epaint::Vertex {
+                    pos: center + vec2(a.cos(), a.sin()) * 19.,
+                    uv: pos2(
+                        0.5 + (a - angle).cos() * uv_scale.x,
+                        0.5 + (a - angle).sin() * uv_scale.y,
+                    ),
+                    color: Color32::WHITE,
+                });
+                if i > 0 {
+                    mesh.indices.extend_from_slice(&[0, i, i + 1]);
+                }
+            }
+            p.add(egui::Shape::mesh(mesh));
+        } else {
+            p.circle_filled(center, 19., AMBER);
+            p.text(
+                center,
+                Align2::CENTER_CENTER,
+                "DEFALT",
+                FontId::proportional(7.),
+                theme::GROUND,
+            );
+        }
+        p.circle_filled(center, 2., theme::TEXT_DIM);
+        let text = Rect::from_min_max(r.min + vec2(104., 3.), r.max);
+        super::clipped_label(
+            ui,
+            Rect::from_min_size(text.min, vec2(text.width(), 25.)),
+            title,
+            19.,
+            theme::TEXT,
+        );
+        super::clipped_label(
+            ui,
+            Rect::from_min_size(text.min + vec2(0., 27.), vec2(text.width(), 20.)),
+            artist,
+            12.,
+            theme::TEXT_DIM,
+        );
+        let info = format!(
+            "{} / {}   {}",
+            super::mmss(position),
+            super::mmss(duration),
+            app.studio.cover_source
+        );
+        super::label(
+            ui,
+            text.min + vec2(0., 53.),
+            Align2::LEFT_TOP,
+            &info,
+            10.,
+            theme::TEXT_DIM,
+        );
+        if duration > 0. {
+            let y = text.min.y + 76.;
+            ui.painter().line_segment(
+                [pos2(text.left(), y), pos2(text.right(), y)],
+                Stroke::new(2., theme::EDGE),
+            );
+            ui.painter().line_segment(
+                [
+                    pos2(text.left(), y),
+                    pos2(
+                        text.left() + text.width() * (position / duration).clamp(0., 1.) as f32,
+                        y,
+                    ),
+                ],
+                Stroke::new(2., AMBER),
+            );
+        }
+        if let Some(status) = &status {
+            ui.horizontal(|ui| {
+                ui.label(super::rich("Transcript", 16., theme::TEXT));
+                ui.checkbox(&mut app.transcript_follow, "Follow live");
+                if ui.button("Copy").clicked() {
+                    ui.ctx().copy_text(
+                        status
+                            .transcript
+                            .iter()
+                            .map(|s| format!("{}: {}", s.host, s.text))
+                            .collect::<Vec<_>>()
+                            .join("\n\n"),
+                    );
+                }
+            });
+            egui::ScrollArea::vertical()
+                .id_salt("studio-transcript")
+                .max_height(ui.available_height().max(0.))
+                .auto_shrink([false, false])
+                .stick_to_bottom(app.transcript_follow)
+                .show(ui, |ui| {
+                    if status.transcript.is_empty() {
+                        ui.label("Host lines appear here as they air.");
+                    }
+                    for line in &status.transcript {
+                        ui.label(super::rich(
+                            &format!("{} · {}", line.host, super::mmss(line.start_at)),
+                            11.,
+                            AMBER,
+                        ));
+                        ui.label(&line.text);
+                        if let Some(source) = &line.source {
+                            if let Some(url) = &line.source_url {
+                                ui.hyperlink_to(source, url);
+                            } else {
+                                ui.small(source);
+                            }
+                        }
+                        ui.add_space(8.);
+                    }
+                });
+        } else {
+            ui.label(
+                if matches!(app.station.health, crate::station::Health::Starting) {
+                    "Bringing the station on air…"
+                } else {
+                    "Use Go on air to start your station."
+                },
+            );
+        }
+    }
 }
 
 #[cfg(test)]
