@@ -38,6 +38,28 @@ def source_edition(name: str, artist: str, title: str) -> tuple[bool, bool]:
     return clean, explicit and not clean
 
 
+def metadata_edition(entry: dict, artist: str, title: str) -> tuple[bool, bool]:
+    """Read edition labels attached to this recording, not unrelated promo links."""
+    clean, explicit = source_edition(entry.get("title") or "", artist, title)
+    for field in ("track", "album"):
+        value = entry.get(field) or ""
+        clean = clean or is_clean_label(value)
+        explicit = explicit or _tagged(value, _EXPLICIT)
+    # Description prose can advertise both editions. Only inspect lines that
+    # are themselves edition labels or labelled recording metadata.
+    for line in (entry.get("description") or "").splitlines():
+        value = line.strip()
+        if re.fullmatch(rf"{_CLEAN}{_SUFFIX}", value, re.I):
+            clean = True
+        elif re.fullmatch(rf"{_EXPLICIT}{_SUFFIX}", value, re.I):
+            explicit = True
+        elif re.match(r"^(?:album|track|version|edition)\s*:", value, re.I):
+            value = value.split(":", 1)[1].strip()
+            clean = clean or is_clean_label(value) or bool(re.fullmatch(rf"{_CLEAN}{_SUFFIX}", value, re.I))
+            explicit = explicit or _tagged(value, _EXPLICIT) or bool(re.fullmatch(rf"{_EXPLICIT}{_SUFFIX}", value, re.I))
+    return clean, explicit and not clean
+
+
 def clean_track(track: dict) -> bool:
     return any(is_clean_label(track.get(field) or "") for field in ("title", "album"))
 

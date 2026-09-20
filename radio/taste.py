@@ -327,6 +327,10 @@ def pick_next(exclude_keys: set[str] | None = None,
 
     if not explore:
         scored = compatibility.lookahead(scored, history, selection_settings)
+    from . import discovery, trends
+    scored = trends.influence(scored)
+    scored = discovery.balance(scored)
+    scored = [(weight, discovery.describe(track)) for weight, track in scored]
     scored = vibe.focus(scored, listening_vibe)
     total_weight = sum(w for w, _ in scored)
     roll = random.uniform(0, total_weight)

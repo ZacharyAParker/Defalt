@@ -1,5 +1,12 @@
 # Patch notes
 
+## 0.3.8 — September 20, 2026
+
+- Radio now discovers unfamiliar songs related to your favorites and current music direction. Suggestions are verified against the Spotify catalog in the background, with new artists and familiar artists' deep cuts mixed into the automatic pool.
+- Added an adjustable unfamiliar-music share, defaulting to roughly one in three eligible automatic picks before strong vibe preferences. Library size no longer buries new discoveries. Requests and repeat guards retain priority; discovery does not manufacture listener requests or taste-score boosts.
+- Added free, dated Apple Music country charts with an iTunes fallback, plus a public-page collector for Spotify daily charts via Kworb. Chart influence and country are configurable. Stale entries lose their influence; the actual source, date and rank stay attached to selection evidence. No paid chart API is required. TikTok trends remain pending an accessible source.
+- Improved explicit-edition selection before accepting unlabelled sources. Clean-version checks now include recording and album metadata and apply to cached recordings even when other source preferences are off. Legacy ambiguous cache entries get a bounded recheck; failed probes preserve working audio with a retry cooldown. Exact YouTube links and explicit requests for clean editions retain their requested source.
+
 ## 0.3.7 — September 19, 2026
 
 - Long ad briefs get one bounded shortening pass. The writer selects a setup and the strongest requested jokes, with room reserved for the unsponsored close. Failed custom ads report the failure instead of playing an unrelated pitch.
@@ -135,4 +142,4 @@ Artwork is fetched and cached in the background. Studio animation does not contr
 Earlier development builds used version 0.1.0. The 0.2.0 notes collect the current release changes; they are not a claim that every feature was first written on the release date.
 
 ---
-Defalt v0.3.7 · © 2026 Zachary Parker
+Defalt v0.3.8 · © 2026 Zachary Parker

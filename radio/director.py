@@ -1,12 +1,14 @@
 """The director: decides what airs next and puts it on the clock.
 
-Runs two background threads.
+Runs background workers for preparation, discovery, and cache maintenance.
 
   feeder   -- keeps a small queue of fully downloaded, analysed tracks ready,
               so the playout path never waits on a network round trip.
   builder  -- extends the schedule ahead of the needle: picks segments off the
               clock, writes them, renders the voices, and back-times each
               break so the last word lands where it should.
+  discovery -- refreshes public charts and verifies unfamiliar song suggestions.
+  janitor   -- maintains the local audio cache.
 
 The station clock only advances while something is actually listening. Close
 the tab and the station holds its place instead of burning bandwidth.
@@ -22,7 +24,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from . import config, db, library, taste, timeline, tts, wishes, vibe
+from . import config, db, discovery, library, taste, timeline, trends, tts, wishes, vibe
 from .segments import writers
 from .segments.base import Line
 
@@ -121,7 +123,7 @@ class Station:
 
     # -- lifecycle -------------------------------------------------------
     def start(self) -> None:
-        for target in (self._feeder_loop, self._builder_loop, self._janitor_loop):
+        for target in (self._feeder_loop, self._builder_loop, self._janitor_loop, self._discovery_loop):
             thread = threading.Thread(target=target, daemon=True,
                                       name=target.__name__)
             thread.start()
@@ -272,6 +274,17 @@ class Station:
         return self.rng.choices(kinds, weights=[w for _, w in pool], k=1)[0]
 
     # -- feeder ----------------------------------------------------------
+    def _discovery_loop(self):
+        while not self._stop.is_set():
+            if self._listening():
+                try:
+                    self.trend_status = trends.refresh()
+                    self.discovery_status = discovery.refresh(cancelled=lambda: self._stop.is_set() or not self._listening())
+                except Exception as error:
+                    self.discovery_status = {'state': 'unavailable', 'added': 0}
+                    _log('discovery unavailable', error)
+            self._stop.wait(30)
+
     def _next_candidate(self) -> tuple[dict[str, Any] | None, bool]:
         """Next track to prepare, and whether it came from a request."""
         pending = db.one(
@@ -830,6 +843,8 @@ class Station:
             "now": round(now, 4),
             "items": items,
             "status": self.status_note,
+            "discovery": getattr(self, 'discovery_status', {'state': 'waiting', 'added': 0}),
+            "trends": getattr(self, 'trend_status', {'state': 'waiting'}),
             "running": self.clock.running,
             "queued": len(self._lineup),
             "epoch": self._epoch,

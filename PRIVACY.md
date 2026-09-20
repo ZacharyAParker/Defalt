@@ -1,6 +1,6 @@
 # Privacy policy
 
-Effective September 19, 2026. Applies to Defalt 0.3.7 as distributed in this repository.
+Effective September 20, 2026. Applies to Defalt 0.3.8 as distributed in this repository.
 
 ## The short version
 
@@ -29,6 +29,10 @@ Director chat messages and relevant station context are sent to the configured w
 
 Explicit requests to commission an ad send the requested premise and tone to the host writer. Unrelated private conversation is excluded from that brief. News-based ad requests fetch material from the selected configured news category. The resulting speech enters the normal ad and transcript flow.
 
+Automatic music discovery sends selected favorite track and artist labels, a bounded catalog list, and the current music direction to the writing provider. Suggested artist/title pairs are checked through Spotify search. Disable discovery in Mix settings to stop new background discovery requests.
+
+Enabled public-chart discovery fetches the selected country's Apple Music or iTunes chart and Kworb's public Spotify chart table. Apple and Kworb receive the country/page request and ordinary network information, not your listening profile. The collector does not execute page scripts or use login cookies. Dated chart entries are cached locally and can be included in discovery prompts. Disable the public-chart toggle to stop new chart requests and chart weighting.
+
 ## Retention and control
 
 Audio cache settings control cached audio retention; they do not erase listening history, article text, requests, logs, transcripts, or files saved elsewhere. Clearing or dismissing a request changes its queue state and is not a promise of permanent deletion. Unavailable sources can be retried after 24 hours; that waiting period does not automatically delete the stored identifier.
@@ -48,4 +52,4 @@ The server binds to loopback by default and has no public-facing authentication.
 Material changes to these practices will be reflected in this document with a new effective date. The version bundled with a native executable describes that build; the repository may describe a newer release. Contact the maintainer through the Defalt repository on GitHub. Do not include credentials, private listening records, or other sensitive data in public issues.
 
 ---
-Defalt v0.3.7 · © 2026 Zachary Parker
+Defalt v0.3.8 · © 2026 Zachary Parker

@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
 
-from radio import director, library, timeline, versions
+from radio import config, director, library, timeline, versions
 from radio.segments import base, personal
 
 
@@ -73,6 +73,13 @@ class PlayOriginTests(unittest.TestCase):
 
 
 class OriginalSourceTests(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        patcher = patch.object(config, "CACHE_DIR", Path(folder.name))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_cached_alternate_is_rechecked_without_deleting_old_audio(self):
         with tempfile.TemporaryDirectory() as folder:
             old = Path(folder) / "old.m4a"

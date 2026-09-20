@@ -321,8 +321,14 @@ selection:
     exploration: 0.35    # deliberate wildcards, keeps it from going stale
     recency_seed: 0.4    # bias toward the Spotify seed's recent tracks
 
-  # Fraction of tracks that are deliberate discoveries outside your profile.
-  exploration_rate: 0.15
+  # Background catalog discovery based on favorites; independent of mix compatibility.
+  discovery_enabled: true
+  # Share of eligible automatic picks reserved for unheard discoveries, before vibe focus.
+  exploration_rate: 0.35
+  # Dated Apple Music/iTunes feeds and Spotify daily charts via Kworb's public pages.
+  trends_enabled: true
+  trend_strength: 0.3
+  trends_country: us
 
   # Reject a resolved candidate if its duration differs from the expected
   # length by more than this fraction. Catches loops, nightcore, wrong hits.

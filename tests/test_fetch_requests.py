@@ -18,7 +18,8 @@ class RequestFeederTests(unittest.TestCase):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         local = threading.local()
-        for p in (patch.object(db, "_DB_PATH", Path(folder.name) / "station.db"),
+        for p in (patch.object(config, "CACHE_DIR", Path(folder.name)),
+                  patch.object(db, "_DB_PATH", Path(folder.name) / "station.db"),
                   patch.object(db, "_LOCAL", local),
                   patch.object(config.station, "get", side_effect=lambda k, d=None: d)):
             p.start()

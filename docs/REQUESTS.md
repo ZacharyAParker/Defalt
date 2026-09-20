@@ -31,6 +31,56 @@ it reports the smaller batch. Missing matches do not become a mood change.
 "More like Laufey" can still steer the sound. Artist song requests leave the
 current music direction and long-term taste scores unchanged.
 
+## Automatic music discovery
+
+Radio searches beyond the library while you listen. It uses a varied set of
+favorites and your current music direction to suggest adjacent artists and
+unfamiliar songs, then checks the artist and title against Spotify's catalog.
+Your existing Spotify credentials cover these checks. An unavailable provider
+leaves the existing rotation playing.
+
+Under **Mix settings > Song choice and variety**, **Discover unfamiliar music
+related to your taste** controls background discovery. **Unfamiliar music share**
+defaults to 0.35: roughly one in three eligible automatic picks, before strong
+vibe preferences. This share is independent of library size. It is a probability,
+not a fixed schedule; requests, repeat guards, and available matches take priority.
+
+Discovery keeps a small reserve, checking at most six suggestions per batch and
+waiting at least ten minutes between attempts. It favors new artists, admits at
+most two familiar artists per batch, and never inserts an unverified model title.
+The normal audio resolver still checks the recording before it reaches a deck.
+Discoveries are automatic choices, not listener requests, and adding one does not
+boost taste scores. After its first play it joins the regular rotation. A new
+discovery only becomes a recommendation anchor after an explicit thumbs-up.
+
+## Current public charts
+
+**Include current public music charts** adds Apple Music's public country chart,
+with an iTunes sales-chart fallback, and Spotify daily charts collected from
+Kworb's public tables. The
+default country is the US. **Chart influence on song choices** is a soft boost
+inside the existing taste, discovery, vibe and repeat rules. Current chart songs
+can also appear among the director's discovery suggestions when they fit.
+
+Apple feeds refresh at most every two hours; Kworb is checked every six hours.
+Failures wait fifteen minutes before a retry, independently for each source.
+Apple entries expire after 48 hours; Spotify daily reporting dates expire after
+72 hours to allow for publication delay. The collector checks Kworb's crawler
+instructions and stops if access is disallowed or the page format changes.
+The queue's selection evidence retains the source, country, date and rank.
+Spotify evidence is labelled **Spotify via Kworb**. A recording gets one chart
+boost even if it appears in multiple sources. No source is labelled as TikTok.
+Turn the chart toggle off to stop fetching and applying chart evidence.
+
+TikTok's public trend pages currently redirect without exposing a usable song
+list. TikTok trends remain pending an accessible source. The implemented
+collectors need no paid chart API, login cookies, or browser session. Spotify
+search credentials are still used separately to verify discovery recordings.
+
+Sources: [Apple's feed builder](https://rss.marketingtools.apple.com/),
+[Kworb's Spotify charts](https://kworb.net/spotify/),
+[TikTok Creative Center](https://ads.tiktok.com/creative/creativeCenter/trends).
+
 ## How it decides
 
 ### News articles
