@@ -37,7 +37,9 @@ Ask for an acoustic or live edition explicitly, or paste its exact YouTube link
 to play that version. **Mix settings** includes the original-recording preference.
 Queue labels show who picked each play, and the hosts get that same information.
 
-Current release: **0.3.3**. Read the [patch notes](CHANGELOG.md),
+Use **Director chat** in Radio for private directions such as "keep this energy, but less rap" or "less talking for twenty minutes." Follow-ups use the current station context. Select **Save music direction** to keep a direction across restarts, or **Send this to hosts** to put that message on air. Changes begin with unprepared automatic picks; prepared mixes finish first.
+
+Current release: **0.3.4**. Read the [patch notes](CHANGELOG.md),
 [privacy policy](PRIVACY.md), [terms of use](TERMS.md), and
 [copyright information](COPYRIGHT.md). The same pages open from the app footer
 without leaving Console or Radio or stopping playback.
@@ -196,4 +198,4 @@ command above skips them. Node is only needed for the browser tests
 third-party audio code and its licenses are listed in [vendor/README.md](vendor/README.md)
 
 ---
-Defalt v0.3.3 · © 2026 Zachary Parker
+Defalt v0.3.4 · © 2026 Zachary Parker

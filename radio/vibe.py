@@ -4,6 +4,7 @@ Interpretation runs only when the listener changes the brief. Selection uses
 bounded local weights; no network work happens in the feeder's scoring loop.
 """
 import json
+import copy
 import math
 import re
 import threading
@@ -13,6 +14,31 @@ from . import config, db, llm
 from .intent import clean, MAX_CHARS
 
 _LOCK = threading.RLock()
+_SESSION_SELECTION = None
+
+
+def session_selection():
+    with _LOCK:
+        return copy.deepcopy(_SESSION_SELECTION)
+
+
+def set_session_selection(value):
+    global _SESSION_SELECTION
+    with _LOCK:
+        _SESSION_SELECTION = copy.deepcopy(value)
+
+
+def selection_direction():
+    temporary = session_selection()
+    return temporary if temporary is not None else copy.deepcopy(config.station.get('director_preferences.selection', {}) or {})
+
+
+def for_selection():
+    return selection_direction() or current()
+
+
+def selection_revision():
+    return json.dumps(for_selection(), sort_keys=True)
 _SYSTEM = """Interpret a listener's ongoing music mood or activity, using the
 catalogue supplied as data. Return JSON with genres and avoid_genres (up to 8 genre names each),
 pace (slow, medium, fast, or any), and fits (an object mapping supplied track
@@ -69,7 +95,12 @@ def set_current(description, *, enrich=True, on_change=None):
     profile = {"id": uuid.uuid4().hex, "description": description,
                **fallback(description), "interpretation": "refining" if enrich else "basic"}
     with _LOCK:
-        config.station.set_many({"listening_vibe": profile})
+        # The listener's latest explicit direction wins across both controls.
+        changes = {"listening_vibe": profile}
+        if config.station.get("director_preferences.selection"):
+            changes["director_preferences.selection"] = {}
+        config.station.set_many(changes)
+        set_session_selection(None)
     if enrich:
         threading.Thread(target=_enrich, args=(profile, on_change), daemon=True,
                          name="vibe-interpretation").start()
@@ -116,7 +147,11 @@ def _enrich(profile, on_change=None):
 
 def clear():
     with _LOCK:
-        config.station.set_many({"listening_vibe": {}})
+        changes = {"listening_vibe": {}}
+        if config.station.get("director_preferences.selection"):
+            changes["director_preferences.selection"] = {}
+        config.station.set_many(changes)
+        set_session_selection(None)
 
 
 def fit(track, profile):
@@ -127,6 +162,13 @@ def fit(track, profile):
     if isinstance(known, (int, float)):
         evidence.append((float(known), 2))
     from .compatibility import genre_fit
+    reference = profile.get('reference') or {}
+    if reference:
+        related = genre_fit(track, reference)
+        if related is not None:
+            evidence.append((related, 1))
+        if db.norm(db.primary_artist(track.get('artist') or '')) == db.norm(db.primary_artist(reference.get('artist') or '')):
+            evidence.append((.85, .8))
     genres = profile.get("genres") or []
     if genres and track.get("genre"):
         scores = [genre_fit(track, {"genre": g}) for g in genres]

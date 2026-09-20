@@ -39,7 +39,7 @@
       const rate = analyser?.context.sampleRate || 48000;
       const high = Math.min(16000, rate * .45);
       const baseline = h - 8, available = Math.max(0, h - 12), step = w / count;
-      const bar = Math.max(1, Math.min(10, step * .55));
+      const bar = Math.max(1, step * .72);
       for (let i = 0; i < count; i++) {
         let value = 0;
         if (analyser) {

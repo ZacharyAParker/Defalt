@@ -1,6 +1,6 @@
 # Privacy policy
 
-Effective September 18, 2026. Applies to Defalt 0.3.3 as distributed in this repository.
+Effective September 19, 2026. Applies to Defalt 0.3.4 as distributed in this repository.
 
 ## The short version
 
@@ -24,6 +24,8 @@ The browser player uses local storage for playback preferences such as volume an
 
 Each destination can also receive network information, including your IP address, and ordinary request headers. Providers apply their own policies, retention practices, and terms. Defalt cannot promise that a provider will never retain data or use it for training. Local audio analysis does not itself upload your music files to a language model.
 
+Director chat messages and relevant station context are sent to the configured writing provider. "Private" means excluded from host dialogue, not hidden from that provider. Chat history is held in backend memory; saved music directions remain in local settings. Explicitly shared messages enter the normal on-air request and transcript flow. Ordinary private chat does not update long-term taste scores.
+
 ## Retention and control
 
 Audio cache settings control cached audio retention; they do not erase listening history, article text, requests, logs, transcripts, or files saved elsewhere. Clearing or dismissing a request changes its queue state and is not a promise of permanent deletion. Unavailable sources can be retried after 24 hours; that waiting period does not automatically delete the stored identifier.
@@ -43,4 +45,4 @@ The server binds to loopback by default and has no public-facing authentication.
 Material changes to these practices will be reflected in this document with a new effective date. The version bundled with a native executable describes that build; the repository may describe a newer release. Contact the maintainer through the Defalt repository on GitHub. Do not include credentials, private listening records, or other sensitive data in public issues.
 
 ---
-Defalt v0.3.3 · © 2026 Zachary Parker
+Defalt v0.3.4 · © 2026 Zachary Parker

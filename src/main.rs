@@ -1107,6 +1107,22 @@ impl Defalt {
                 }
             }
             if std::env::var_os("DEFALT_SHOT_RADIO").is_some() { self.view = View::Radio; }
+            if std::env::var_os("DEFALT_SHOT_SPECTRUM").is_some() {
+                self.view = View::Radio;
+                self.studio.visualizer = true;
+                self.studio.spectrum.pose();
+            }
+            if std::env::var_os("DEFALT_SHOT_CHAT").is_some() {
+                self.view = View::Radio;
+                self.airtime.chat.open = true;
+                self.airtime.chat.preview = true;
+                self.airtime.chat.state = serde_json::json!({"messages":[
+                    {"role":"user","text":"Keep this energy, but less rap."},
+                    {"role":"director","text":"For this session: mellow soul and funk. This starts with unprepared automatic picks; current songs, prepared transitions and your requests stay in place."},
+                    {"role":"user","text":"Less talking for twenty minutes."},
+                    {"role":"director","text":"Fewer automatic host breaks for 20 minutes. Already prepared speech and explicitly requested segments still play."}],
+                    "direction":{"description":"Mellow soul and funk"},"quiet_minutes":20,"busy":false});
+            }
             if let Ok(page) = std::env::var("DEFALT_SHOT_INFO") {
                 self.info_page = ui::about::Page::from_name(&page);
             }
@@ -1330,9 +1346,16 @@ fn project_root() -> PathBuf {
 }
 
 fn main() -> eframe::Result<()> {
+    let shot = std::env::var_os("DEFALT_SHOT").is_some();
+    let size = std::env::var("DEFALT_SHOT_SIZE").ok().and_then(|size| {
+        let (w, h) = size.split_once('x')?;
+        Some([w.parse::<f32>().ok()?, h.parse::<f32>().ok()?])
+    }).filter(|size| shot && size.iter().all(|v| v.is_finite() && *v >= 720. && *v <= 4096.))
+        .unwrap_or(if std::env::var_os("DEFALT_SHOT_COMPACT").is_some() { [1180., 720.] } else { [1440., 900.] });
     let viewport = egui::ViewportBuilder::default()
         .with_title("Defalt")
-        .with_inner_size(if std::env::var_os("DEFALT_SHOT_COMPACT").is_some() { [1180.0, 720.0] } else { [1440.0, 900.0] })
+        .with_inner_size(size)
+        .with_maximized(!shot || std::env::var_os("DEFALT_SHOT_MAXIMIZED").is_some())
         .with_min_inner_size([1180.0, 720.0])
         .with_decorations(false)
         .with_icon(Arc::new(window_icon().unwrap_or_default()));

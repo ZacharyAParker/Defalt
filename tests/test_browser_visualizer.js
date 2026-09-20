@@ -34,4 +34,10 @@ window.RadioVisualizer.draw(canvas,analyser,4050);
 assert.equal(reads,2,'reduced motion is limited to 10 Hz');
 for(let t=5000;t<15000;t+=200) window.RadioVisualizer.draw(canvas,null,t);
 assert.ok(bars.every(b=>b[3]===2),'stopped playback settles to silence');
+for (const width of [1324,1964]) {
+  canvas.getBoundingClientRect=()=>({width,height:120});
+  window.RadioVisualizer.draw(canvas,analyser,width+20000);
+  assert.ok(bars.every(b=>b[0]>=0 && b[0]+b[2]<=width),'wide display stays within canvas');
+  assert.ok(bars[0][2]>width/48*.7,'bars retain their share of the width on large displays');
+}
 console.log('browser visualizer: audio, silence, toggle, persistence, visibility and reduced motion passed');

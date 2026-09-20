@@ -16,6 +16,7 @@ pub mod toolbar;
 pub mod waveform;
 pub mod widgets;
 pub mod visualizer;
+pub mod director_chat;
 
 use egui::{vec2, Align, Color32, FontId, Layout, Rect, Response, RichText, Sense, Stroke, Ui};
 

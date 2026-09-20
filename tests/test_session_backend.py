@@ -149,6 +149,32 @@ PRIVATE_NOT_FOR_MODEL
         with patch.object(backend,'run_process',side_effect=bad):
             self.assertIsNone(self.call())
 
+    def test_plain_prose_gets_one_fresh_format_retry_with_shared_deadline(self):
+        remaining=[]
+        def transport(*args):
+            remaining.append(args[3])
+            result=self.transport(*args)
+            if len(self.calls)==1:
+                Path(args[0][args[0].index('-o')+1]).write_text(json.dumps({'response':'Sure, doing that now.','memory_refs':['music']}))
+            return result
+        with patch.object(backend,'run_process',side_effect=transport):
+            self.assertEqual(json.loads(self.call()),LINES)
+        self.assertEqual(len(self.calls),2)
+        self.assertNotIn('resume',self.calls[1][0])
+        self.assertIn('format_reminder',self.calls[1][1])
+        self.assertLessEqual(remaining[1],remaining[0])
+        self.assertEqual(backend.status()['last_result']['format_retries'],1)
+
+    def test_format_retry_is_bounded_and_still_rejects_prose(self):
+        def transport(*args):
+            result=self.transport(*args)
+            Path(args[0][args[0].index('-o')+1]).write_text(json.dumps({'response':'Still prose.','memory_refs':['music']}))
+            return result
+        with patch.object(backend,'run_process',side_effect=transport):
+            self.assertIsNone(self.call())
+        self.assertEqual(len(self.calls),2)
+        self.assertEqual(backend._LANES['dialogue']['state'],{})
+
     def test_busy_lane_falls_back_without_waiting(self):
         lock=threading.Lock()
         lock.acquire()

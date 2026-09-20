@@ -37,7 +37,7 @@ pub fn draw(app: &mut Defalt, ui: &mut Ui) {
         [rail.right_top(), rail.right_bottom()],
         egui::Stroke::new(1.0, theme::EDGE),
     );
-    let spectrum_height = if app.studio.visualizer { 76.0_f32.min(main.height() * 0.14) } else { 0. };
+    let spectrum_height = if app.studio.visualizer { (main.height() * 0.105).clamp(76., 148.) } else { 0. };
     let content = Rect::from_min_max(main.min, main.max - vec2(0., spectrum_height));
     if app.studio.enabled { super::studio::draw(app, ui, content); }
     else { on_air(app, ui, content); }
@@ -53,6 +53,7 @@ pub fn draw(app: &mut Defalt, ui: &mut Ui) {
         queue_panel(app, ui, queue);
     }
     mix_settings(app, ui.ctx());
+    app.airtime.chat.draw(ui.ctx(), app.station.running());
 }
 
 fn mix_settings(app: &mut Defalt, ctx: &egui::Context) {
@@ -595,6 +596,10 @@ fn controls_content(app: &mut Defalt, mut column: &mut Ui) {
     // next break, "do the news", or "play less niko b" -- the station works
     // out which, so this does not have to and must not pretend otherwise.
     column.add_space(10.0);
+    if super::chip(&mut column, "Director chat", vec2(width, 25.0), false, true).clicked() {
+        app.airtime.chat.open = true;
+    }
+    column.add_space(6.0);
     let previous_mode = (app.airtime.request_is_vibe, app.airtime.request_is_article);
     column.horizontal_wrapped(|ui| {
         if ui.selectable_label(!app.airtime.request_is_vibe && !app.airtime.request_is_article, "Request").clicked() {

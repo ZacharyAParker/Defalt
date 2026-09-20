@@ -13,6 +13,7 @@
 <link rel="stylesheet" href="/static/about.css">
 <link rel="stylesheet" href="/static/studio.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23100e0c'/><circle cx='16' cy='16' r='6' fill='%23ffb020'/></svg>">
+<link rel="stylesheet" href="/static/director-chat.css">
 </head>
 <body>
 
@@ -157,6 +158,7 @@
 </div>
     <aside class="talkback" aria-labelledby="tb-heading">
       <div class="ad-controls" role="group" aria-label="Ad break">
+        <button class="btn" id="director-chat-open" type="button">Director chat</button>
         <strong>Ad break</strong>
         <button class="btn" id="ad-next" type="button" disabled>Next host break</button>
         <button class="btn" id="ad-now" type="button" disabled>Play now</button>
@@ -284,6 +286,21 @@
     <a href="https://github.com/ZacharyAParker/Defalt" target="_blank" rel="noopener noreferrer">Repository</a>
   </footer>
 </dialog>
+<dialog class="director-chat" id="director-chat" aria-labelledby="director-chat-heading">
+  <header><h2 id="director-chat-heading">Director chat</h2><button class="btn" id="director-chat-close" type="button">Close</button></header>
+  <p class="director-chat-hint">Private unless you choose to send a message to the hosts.</p>
+  <p id="director-chat-direction">Normal rotation · no private direction</p>
+  <div class="director-chat-log" id="director-chat-log" role="log" aria-live="polite"></div>
+  <p id="director-chat-status" role="status"></p>
+  <form id="director-chat-form">
+    <label for="director-chat-input">What should we play next?</label>
+    <textarea id="director-chat-input" maxlength="2000" rows="3" placeholder="Keep this energy, but less rap…"></textarea>
+    <div class="director-chat-options"><label><input type="checkbox" id="director-chat-save"> Save music direction</label><label><input type="checkbox" id="director-chat-share"> Send this to hosts</label></div>
+    <div class="director-chat-actions"><button class="btn btn--primary" id="director-chat-send" type="submit">Send</button><button class="btn" id="director-chat-undo" type="button">Undo last change</button><small>Ctrl+Enter to send</small></div>
+  </form>
+  <p class="director-chat-hint">Prepared mixes finish first. Changes start with unprepared picks.</p>
+</dialog>
+<script src="/static/director-chat.js" defer></script>
 <script src="/static/about.js" defer></script>
 <script src="/static/visualizer.js" defer></script>
 <script src="/static/radio.js" defer></script>

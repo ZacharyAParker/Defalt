@@ -243,7 +243,7 @@ def pick_next(exclude_keys: set[str] | None = None,
 
     cfg = config.station
     selection_settings = compatibility.snapshot()
-    listening_vibe = vibe.current()
+    listening_vibe = vibe.for_selection()
     weights = cfg.get("selection.weights", {}) or {}
     separation = int(cfg.get("selection.artist_separation", 6) or 0)
     title_hours = float(cfg.get("selection.title_separation_hours", 5) or 0)
@@ -310,9 +310,10 @@ def pick_next(exclude_keys: set[str] | None = None,
         vibe_weight = vibe.fit(track, listening_vibe)
         total *= vibe_weight
         if listening_vibe:
+            label = 'private music direction' if listening_vibe.get('private') else listening_vibe['description']
             continuity = {**continuity,
-                          "vibe": listening_vibe["description"], "vibe_weight": round(vibe_weight, 3),
-                          "reason": continuity["reason"] + "; vibe: " + listening_vibe["description"]}
+                          "vibe": label, "vibe_weight": round(vibe_weight, 3),
+                          "reason": continuity["reason"] + "; vibe: " + label}
         if relaxed:
             # A small library must still play. Keep rotation pressure while
             # relaxing only separation, never explicit exclusions/blocks.

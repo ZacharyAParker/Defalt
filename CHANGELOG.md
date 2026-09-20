@@ -1,5 +1,14 @@
 # Patch notes
 
+## 0.3.4 — September 19, 2026
+
+- Added Director chat to Radio in the app and browser. Steer upcoming automatic picks with conversational follow-ups, ask about the current song choice, request a recording, or reduce automatic host breaks for a while.
+- Chat directions apply to the current session unless **Save music direction** is selected. Messages stay off air unless **Send this to hosts** is selected. Undo restores the previous music direction or talk setting; already prepared songs, transitions, speech, and explicit requests retain their places.
+- Added an explicit director playbook for supported controls, current playback context, follow-ups, and honest action receipts. Changing Set vibe supersedes private music direction. Retrying a chat submission cannot queue the same message twice.
+- If the session writer returns prose where structured output is required, it gets one fresh format retry within the original deadline before provider fallback.
+- Defalt now launches maximized. Spectrum bars and panel height scale with the Radio view, with layouts checked at 1080p and 1440p. The complete studio and footer remain visible.
+- Removed the headline-only news fallback and its "whole story" exchange. Thin feed summaries can fetch article context with a deadline; stories without enough detail stay off air. When generation fails, a short attributed read uses complete source sentences. News requests use the same context checks.
+
 ## 0.3.3 — September 18, 2026
 
 - Added an optional Codex writing backend with Luna medium for host dialogue and low reasoning for short request and metadata tasks.
@@ -103,4 +112,4 @@ Artwork is fetched and cached in the background. Studio animation does not contr
 Earlier development builds used version 0.1.0. The 0.2.0 notes collect the current release changes; they are not a claim that every feature was first written on the release date.
 
 ---
-Defalt v0.3.3 · © 2026 Zachary Parker
+Defalt v0.3.4 · © 2026 Zachary Parker

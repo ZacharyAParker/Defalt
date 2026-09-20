@@ -1,6 +1,8 @@
 """Early planning and skipping exercise the real schedule without network/audio."""
 import random
 import threading
+import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -54,6 +56,24 @@ class PreparationTests(unittest.TestCase):
         self.assertFalse(s._needs_extension(s.clock.now()))
         self.settings["transitions.prepare_tracks_ahead"] = 2
         self.assertTrue(s._needs_extension(s.clock.now()))
+
+    def test_private_quiet_period_suppresses_new_automatic_speech_only(self):
+        s=self.station
+        s.director_chat=SimpleNamespace(quiet_until=time.time()+1200)
+        s._songs_since_break=10
+        s.schedule.add_voice('prepared',25,5)
+        with patch.object(director.wishes,'next_segment',return_value=None), patch.object(director.wishes,'next_topic',return_value=None), patch.object(director.writers,'compose') as compose:
+            self.add('b')
+        compose.assert_not_called()
+        self.assertTrue(any(i.kind=='voice' and i.start_at==25 for i in s.schedule.items))
+
+    def test_private_quiet_period_allows_explicit_segment_requests(self):
+        s=self.station
+        s.director_chat=SimpleNamespace(quiet_until=time.time()+1200)
+        s._songs_since_break=10
+        with patch.object(director.wishes,'next_segment',return_value={'id':1}), patch.object(s,'_choose_segment',return_value='banter'), patch.object(director.writers,'compose',return_value=[]) as compose, patch.object(director.db,'mark_aired'):
+            self.add('b')
+        compose.assert_called_once()
 
     def test_skip_lands_before_original_mix_without_replanning(self):
         s = self.station

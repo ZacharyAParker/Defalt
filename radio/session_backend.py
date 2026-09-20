@@ -194,42 +194,59 @@ def complete(system, user, *, purpose, memory, memory_fingerprint, timeout,
                              'approved_memory': memory}, ensure_ascii=False)
         if len(prompt) > 100_000:
             raise SessionUnavailable('Session input exceeds limit')
-        stdout = run_process(command(exe, work, output, thread_id, model, effort, persistent),
-                             prompt, work, timeout)
-        events = [json.loads(line) for line in stdout.splitlines() if line.strip()]
-        found_thread = None
-        completed = False
-        for event in events:
-            kind = event.get('type')
-            if kind not in {'thread.started', 'turn.started', 'turn.completed',
-                            'item.started', 'item.updated', 'item.completed'}:
-                raise SessionUnavailable('Session failed or returned an unexpected event')
-            if kind == 'thread.started':
-                found_thread = str(uuid.UUID(event['thread_id']))
-            if kind == 'turn.completed':
-                completed = True
-            if event.get('item', {}).get('type') not in {None, 'agent_message', 'reasoning'}:
-                raise SessionUnavailable('Session attempted tool activity')
-        if not completed or not found_thread or (thread_id and found_thread != thread_id):
-            raise SessionUnavailable('Incomplete or mismatched session')
-        payload = json.loads(output.read_text(encoding='utf-8'))
-        if not isinstance(payload, dict) or set(payload) != {'response', 'memory_refs'}:
-            raise SessionUnavailable('Invalid session output')
-        text, refs = payload['response'], payload['memory_refs']
-        if not isinstance(text, str) or not text.strip() or len(text) > 32_000:
-            raise SessionUnavailable('Empty or oversized session output')
-        if not isinstance(refs, list) or any(not isinstance(r, str) for r in refs):
-            raise SessionUnavailable('Invalid memory references')
-        if not set(refs) <= {n['id'] for n in memory}:
-            raise SessionUnavailable('Unknown memory reference')
-        parsed = json.loads(text) if json_mode else text
-        if validator is not None and not validator(parsed):
-            raise SessionUnavailable('Response failed validation')
+        for format_attempt in range(2):
+            remaining = timeout - (time.monotonic() - started)
+            if remaining <= 0:
+                raise SessionUnavailable('Session deadline exceeded')
+            output.unlink(missing_ok=True)
+            stdout = run_process(command(exe, work, output, thread_id, model, effort, persistent),
+                                 prompt, work, remaining)
+            events = [json.loads(line) for line in stdout.splitlines() if line.strip()]
+            found_thread = None
+            completed = False
+            for event in events:
+                kind = event.get('type')
+                if kind not in {'thread.started', 'turn.started', 'turn.completed',
+                                'item.started', 'item.updated', 'item.completed'}:
+                    raise SessionUnavailable('Session failed or returned an unexpected event')
+                if kind == 'thread.started':
+                    found_thread = str(uuid.UUID(event['thread_id']))
+                if kind == 'turn.completed':
+                    completed = True
+                if event.get('item', {}).get('type') not in {None, 'agent_message', 'reasoning'}:
+                    raise SessionUnavailable('Session attempted tool activity')
+            if not completed or not found_thread or (thread_id and found_thread != thread_id):
+                raise SessionUnavailable('Incomplete or mismatched session')
+            payload = json.loads(output.read_text(encoding='utf-8'))
+            if not isinstance(payload, dict) or set(payload) != {'response', 'memory_refs'}:
+                raise SessionUnavailable('Invalid session output')
+            text, refs = payload['response'], payload['memory_refs']
+            if not isinstance(text, str) or not text.strip() or len(text) > 32_000:
+                raise SessionUnavailable('Empty or oversized session output')
+            if not isinstance(refs, list) or any(not isinstance(r, str) for r in refs):
+                raise SessionUnavailable('Invalid memory references')
+            if not set(refs) <= {n['id'] for n in memory}:
+                raise SessionUnavailable('Unknown memory reference')
+            try:
+                parsed = json.loads(text) if json_mode else text
+            except json.JSONDecodeError:
+                if format_attempt:
+                    raise SessionUnavailable('Response is not valid JSON') from None
+                # One fresh attempt shares the original deadline. Do not resume an
+                # invalid answer or weaken any event, memory, or action validation.
+                thread_id, resume = None, False
+                prompt = json.dumps({'task_instructions': system,
+                    'format_reminder': 'Your response STRING must contain the requested JSON object or array. A conversational acknowledgement is not an action. Return the complete requested JSON, with no prose or markdown.',
+                    'request': user, 'approved_memory': memory}, ensure_ascii=False)
+                continue
+            if validator is not None and not validator(parsed):
+                raise SessionUnavailable('Response failed validation')
+            break
         lane['state'] = ({'thread_id': found_thread, 'fingerprint': fingerprint,
                           'turns': state.get('turns', 0) + 1 if resume else 1,
                           'updated': time.time()} if persistent else {})
         record('codex', elapsed=round(time.monotonic() - started, 2),
-               resumed=bool(resume), memory_refs=refs, memory_warning=memory_warning)
+               resumed=bool(resume), format_retries=format_attempt, memory_refs=refs, memory_warning=memory_warning)
         return text
     except Exception as exc:
         lane['state'] = {}

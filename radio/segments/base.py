@@ -194,7 +194,7 @@ def valid_dialogue(payload: Any) -> bool:
 
 def write(brief: str, *, fallback: list[Line], max_tokens: int = 600,
           temperature: float = 0.95) -> list[Line]:
-    """Write one break. Never raises, never returns empty."""
+    """Write one break, or use the supplied fallback (possibly empty)."""
     duration = re.search(r'\b(?:about|under)\s+(\d+(?:\.\d+)?|eight|ten|fifteen)\s+seconds', brief, re.I)
     words = 180
     if duration:

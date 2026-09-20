@@ -123,6 +123,21 @@ def skip():
     return jsonify(director.station().skip())
 
 
+@app.get('/api/director/chat')
+def director_chat_state():
+    from .director_chat import for_station
+    return jsonify(for_station(director.station()).state())
+
+
+@app.post('/api/director/chat')
+def director_chat_message():
+    from .director_chat import for_station
+    try:
+        return jsonify(for_station(director.station()).submit(request.get_json(silent=True))), 202
+    except ValueError as error:
+        return jsonify(error=str(error)), 400
+
+
 @app.post("/api/ads")
 def request_ad():
     from . import ads

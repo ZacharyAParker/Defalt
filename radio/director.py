@@ -343,7 +343,7 @@ class Station:
         if automatic >= self._lineup_target() and not db.one(
                 "SELECT id FROM requests WHERE status='pending' LIMIT 1"):
             return False
-        vibe_revision = vibe.revision()
+        vibe_revision = vibe.selection_revision()
         track, was_request = self._next_candidate()
         if not track:
             self.status_note = "no playable tracks in the library"
@@ -364,7 +364,7 @@ class Station:
         if track.get("selection"):
             prepared["selection"] = track["selection"]
         with self.lock:
-            if not was_request and vibe_revision != vibe.revision():
+            if not was_request and vibe_revision != vibe.selection_revision():
                 return True  # A newer brief superseded this automatic pick.
             if not was_request:
                 reserved = [e["track"] for e in self._lineup]
@@ -587,6 +587,9 @@ class Station:
             was_request = entry.get("source") == "request"
             do_break = (self._songs_since_break >= self._break_after
                         or not self._signed_on)
+            chat = getattr(self, 'director_chat', None)
+            if chat and chat.quiet_until > time.time() and self._signed_on and not (wishes.next_segment() or wishes.next_topic()):
+                do_break = False
             lines: list[Line] = []
             kind = ""
             if do_break:
@@ -617,6 +620,8 @@ class Station:
                     context["topic_stories"] = rss.search(subject, limit=3)
                 if active_wish and kind == "article":
                     context["article"] = json.loads(active_wish['payload'])
+                if active_wish and kind == 'listener_message':
+                    context['listener_message'] = json.loads(active_wish['payload']).get('message', '')
                 lines = writers.compose(kind, context)
 
             voices = self._render(lines)

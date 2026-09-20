@@ -8,18 +8,27 @@ pub struct State {
     levels: [f32; BANDS],
     peaks: [f32; BANDS],
     last: Instant,
+    preview: bool,
 }
 impl Default for State {
-    fn default() -> Self { Self { levels: [0.; BANDS], peaks: [0.; BANDS], last: Instant::now() } }
+    fn default() -> Self { Self { levels: [0.; BANDS], peaks: [0.; BANDS], last: Instant::now(), preview: false } }
+}
+impl State {
+    pub fn pose(&mut self) {
+        self.preview = true;
+        self.levels = std::array::from_fn(|i| (0.32 + (i as f32 * 0.35).sin().abs() * 0.58) * (1. - i as f32 / BANDS as f32 * 0.5));
+        self.peaks = self.levels.map(|v| (v + 0.08).min(1.));
+    }
 }
 
 pub fn draw(app: &mut crate::Defalt, ui: &mut Ui, rect: Rect) {
     let now = Instant::now();
     let dt = now.duration_since(app.studio.spectrum.last).as_secs_f32().min(0.2);
-    let active = app.airtime.on && app.engine.is_some();
+    let preview = app.studio.spectrum.preview;
+    let active = preview || (app.airtime.on && app.engine.is_some());
     let calm = app.studio.reduced;
     let interval = if calm { 100 } else { 33 };
-    if dt >= interval as f32 / 1000. {
+    if !preview && dt >= interval as f32 / 1000. {
         let target = if active {
             let engine = app.engine.as_ref().unwrap();
             analyze(&engine.telemetry.visualizer.snapshot(), engine.sample_rate)
@@ -37,7 +46,7 @@ pub fn draw(app: &mut crate::Defalt, ui: &mut Ui, rect: Rect) {
     let graph = rect.shrink2(vec2(18., 12.));
     let baseline = graph.bottom() - 8.;
     let step = graph.width() / BANDS as f32;
-    let width = (step * 0.55).clamp(2., 10.);
+    let width = (step * 0.72).max(1.);
     for i in 0..BANDS {
         let value = app.studio.spectrum.levels[i];
         let x = graph.left() + (i as f32 + 0.5) * step;

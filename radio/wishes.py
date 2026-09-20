@@ -19,7 +19,7 @@ from typing import Any
 from . import config, db, intent as intent_mod, llm, taste, youtube, spotify
 
 SEGMENT_KINDS = {"news", "patch_notes", "game_ad", "station_id",
-                 "time_check", "banter"}
+                 "time_check", "banter", "listener_message"}
 
 
 def _cfg(key: str, default: Any) -> Any:

@@ -383,6 +383,7 @@ enum Fetched {
 }
 
 pub struct Airtime {
+    pub chat: crate::ui::director_chat::Chat,
     root: PathBuf,
     port: u16,
     sample_rate: u32,
@@ -448,6 +449,7 @@ impl Airtime {
         let (queue_out, queue_in) = channel();
         let (gripe_out, gripes) = channel();
         Airtime {
+            chat: crate::ui::director_chat::Chat::new(port),
             root: root.to_path_buf(),
             port,
             sample_rate,
