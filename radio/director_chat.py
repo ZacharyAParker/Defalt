@@ -7,7 +7,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import ads, config, db, intent, llm, taste, vibe, wishes
+from . import ad_copy, ads, artist_requests, config, db, intent, llm, taste, vibe, wishes
 
 SYSTEM = (Path(__file__).parent / 'prompts/director-chat.md').read_text(encoding='utf-8')
 MAX_MESSAGE_CHARS = 12000
@@ -90,6 +90,7 @@ class Chat:
                     'unprepared_queue': [{k:e.get('track',{}).get(k) for k in ('key','title','artist')}
                                          for e in getattr(s,'_lineup',[])[:8]],
                     'direction': vibe.selection_direction(), 'public_vibe':vibe.public(),
+                    'ad_budget': dict(zip(('target_seconds','total_words'),ad_copy.duration_budget())),
                     'news_categories': [k for k,v in (config.news.get('categories',{}) or {}).items()
                                         if isinstance(v,dict) and v.get('enabled') and v.get('feeds')],
                     'quiet_minutes':max(0,round((self.quiet_until-time.time())/60,1))}
@@ -118,7 +119,7 @@ class Chat:
                     remaining-=len(text)
                 history=list(reversed(recent))
                 lowered = message.lower().strip(' .!,').removeprefix('please ').removesuffix(' please').strip(' ,')
-                action = None
+                action = artist_requests.detect(message)
                 if lowered in {'undo','undo that','undo last change'}:
                     action = {'type':'undo'}
                 elif lowered in {'go back to normal','back to normal','return to normal',
@@ -150,6 +151,9 @@ class Chat:
 
     def apply(self, action, snapshot, save=False, explanation=''):
         kind = action.get('type')
+        if kind == 'artist_request':
+            protected = [track.get('key') for track in snapshot.get('playing', []) + snapshot.get('prepared_next', [])]
+            return artist_requests.queue(action.get('artist'), action.get('count', 3), protected)
         if kind == 'ad':
             brief=action.get('brief')
             if not isinstance(brief,str) or not 1 <= len(brief.strip()) <= 1200:
@@ -159,7 +163,9 @@ class Chat:
             if result.get('state') == 'failed':
                 return result['message']
             when='the next host break' if result['timing']=='next_break' else 'the next safe opening after any current speech'
+            seconds, _ = ad_copy.duration_budget()
             return (f"Ad brief accepted for {when}: {result.get('brief') or 'the existing ad request'}. "
+                    f'The writer will select the strongest beats for about {seconds:g} seconds rather than fit every joke. '
                     'Writing and voicing must finish before it can play. Check Ad break for preparation status; prepared speech keeps its place.')
         if kind == 'none':
             if not isinstance(explanation,str) or not explanation.strip():

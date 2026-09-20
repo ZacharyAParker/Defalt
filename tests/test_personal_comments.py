@@ -11,6 +11,9 @@ from radio.segments import base, personal, writers
 
 class PersonalComments(unittest.TestCase):
     def setUp(self):
+        lookup = patch("radio.song_context.prepare", return_value=None)
+        lookup.start()
+        self.addCleanup(lookup.stop)
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         local = threading.local()
@@ -65,7 +68,7 @@ class PersonalComments(unittest.TestCase):
         data = personal.evidence({"next": track, "was_request": True})
         first = personal.fallback(data, "mav", "rue", [], True)
         second = personal.fallback(data, "mav", "rue", [first[0].text], True)
-        self.assertNotEqual(first[0].text, second[0].text)
+        self.assertEqual(len(second), 1)
         self.assertIn(track["title"], second[-1].text)
         self.assertIn(track["artist"], second[-1].text)
         self.assertEqual(second[-1].host, "mav")
@@ -78,8 +81,7 @@ class PersonalComments(unittest.TestCase):
             personal.comment({"previous": outgoing, "next": incoming, "was_request": True,
                               "recent_host_lines": ["Retired punchline"], "speech_budget": 9}, "mav", "rue")
         brief = write.call_args.args[0]
-        for text in ("Repeat Offender", "Fresh Trouble", '"recorded_plays": 6',
-                     '"recorded_plays": 0', "Retired punchline", "Go hard", "9 seconds",
+        for text in ("Repeat Offender", "Fresh Trouble",  "Retired punchline", "Go hard", "9 seconds",
                      "Requests are not plays", "No fake music trivia"):
             self.assertIn(text, brief)
 
@@ -87,9 +89,31 @@ class PersonalComments(unittest.TestCase):
         track = self.track(plays=5)
         with patch.object(base.llm, "complete_json", return_value=None):
             lines = writers.track_intro({"next": track})
-        self.assertEqual({line.host for line in lines}, {"mav", "rue"})
+        self.assertEqual(len(lines), 1)
         self.assertIn(track["title"], lines[-1].text)
-        self.assertTrue(any(word in lines[0].text for word in ("again", "Another round")))
+        self.assertNotIn("again", lines[0].text)
+
+    def test_stats_are_withheld_until_cooldown_then_withheld_again(self):
+        track = self.track(plays=8)
+        for index in range(18):
+            data, angle = personal.editorial(personal.evidence({"next": track}))
+            self.assertEqual(angle == "listening", index in (8, 17))
+            self.assertEqual("recorded_plays" in data["incoming"], angle == "listening")
+
+    def test_recycled_model_punchline_falls_back_to_simple_intro(self):
+        track = self.track()
+        with patch.object(personal, "write", return_value=[base.Line("rue", "Our queue has chosen its next hill to die on.")]):
+            lines = personal.comment({"next": track, "recent_host_lines": ["Our queue has chosen its next hill to die on."]}, "mav", "rue")
+        self.assertEqual(lines, [base.Line("mav", "Repeat Offender, by The Alibis.")])
+
+    def test_history_cooldown_rejects_stats_recalled_from_prior_dialogue(self):
+        track = self.track(title='Only So Much Oil in the Ground')
+        with patch.object(personal, 'write', return_value=[base.Line('rue',
+                'We picked Only So Much Oil in the Ground twice. Fiscal.')]):
+            lines = personal.comment({'next': track}, 'mav', 'rue')
+        self.assertEqual(lines, [base.Line('mav', 'Only So Much Oil in the Ground, by The Alibis.')])
+        self.assertFalse(personal.uses_history([base.Line('mav', 'We picked See You Again.')],
+            {'incoming': {'title':'See You Again', 'artist':'Example'}}))
 
     def test_song_comment_frequency_and_disable_controls_route_writers(self):
         context = {"next": self.track()}

@@ -78,6 +78,7 @@ class AdBreaks:
                     return
                 self.voices = voices
                 self.request.update(state="ready", message="Ad ready for the next host break.",
+                                    copy_source=context.get('_ad_copy_source','generated'),
                                     product=(context.get("_ad") or {}).get("name", "House ad"))
                 if context.get("_ad"):
                     writers.steam.mark_ad_used(context["_ad"])
@@ -137,8 +138,9 @@ class AdBreaks:
         # Seal derives ducks from speech on both decks, including future appends.
         s.schedule.seal()
         s._recent_host_lines = (getattr(s, "_recent_host_lines", []) + [v.text for v in self.voices])[-32:]
+        source_note = ' (backup script; fresh writing was unavailable)' if request.get('copy_source') == 'backup' else ''
         request.update(state="scheduled", start_at=start, end_at=start + length, items=ids,
-                       message=f"Ad queued: {request.get('product', 'House ad')}")
+                       message=f"Ad queued: {request.get('product', 'House ad')}{source_note}")
         self.voices = []
 
 

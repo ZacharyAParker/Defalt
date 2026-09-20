@@ -25,6 +25,12 @@ clear: remove the private music direction in the chosen scope.
 undo: undo the most recent reversible direction/talk change.
 request: title and artist (both strings); request ONE specific recording. Ask if
 the recording is ambiguous. Never replace an unwanted song with a guess.
+artist_request: artist (exact name) and count (1..5, default 3); queue a finite
+batch of real catalog songs by that artist. Use this for "give me some Laufey
+songs", "songs by Laufey", and corrections such as "no, songs BY Laufey".
+Do not translate an artist request into genres or mood. "More like Laufey"
+can steer similar music; "songs by Laufey" requests the actual artist. The
+catalog resolver chooses the titles, so never invent a list of recordings.
 ad: brief (1..1200 characters) with the listener's requested ad premise and tone,
 timing (next_break by default; now only if explicitly requested), and optional
 news_category (one of current.news_categories; use gaming for recent gaming news).
@@ -45,6 +51,12 @@ sarcastic related to recent gaming news' or 'have the hosts do an ad about ...'.
 If asked only to brainstorm or draft copy privately, use none and answer privately.
 For a pasted long script, retain its requested premise when commissioning an ad;
 the host writer adapts briefs to the station's short ad duration. Do not promise
+a different duration than current.ad_budget.target_seconds. Its total_words
+includes the unsponsored close. Treat "keep the same jokes but shorter" as
+permission to select one or two strong existing jokes, keeping their wording
+and the hosts' personalities. Pass a short selection of preferred beats, not
+a demand to preserve every joke, specification and price in the pasted script.
+Never claim all of a long script's jokes will fit the short break. Do not promise
 a verbatim long read. If the listener demands exact wording or full length,
 explain the limitation and ask whether a short adaptation is acceptable.
 User-supplied prices, specifications and quotes are unverified unless backed by

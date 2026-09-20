@@ -13,6 +13,9 @@ from radio.segments import base, personal
 
 class MusicMemes(unittest.TestCase):
     def setUp(self):
+        lookup = patch("radio.song_context.prepare", return_value=None)
+        lookup.start()
+        self.addCleanup(lookup.stop)
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         local = threading.local()
@@ -121,7 +124,7 @@ class MusicMemes(unittest.TestCase):
         write.assert_not_called()
         self.assertTrue(lines[0].text.startswith("Mustard!"))
         self.assertEqual(lines[0].reference["matched_slot"], "outgoing")
-        self.assertEqual(lines[1].text, "A Different Song. Other Artist.")
+        self.assertEqual(lines[1].text, "A Different Song, by Other Artist.")
         self.assertEqual([line.host for line in lines], ["rue", "mav"])
 
     def test_model_failure_uses_sourced_two_host_exchange(self):

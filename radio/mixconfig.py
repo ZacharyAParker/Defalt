@@ -37,6 +37,8 @@ FIELDS = [
     ("transitions.max_entry_skip_fraction", "Maximum opening skipped", 0.25, [0.0, 0.49]),
     ("transitions.minimum_play_fraction", "Full song heard before mixing out", 0.65, [0.51, 1.0]),
     ("hosts.personal_comments", "Personal song commentary", True, None),
+    ("hosts.song_context", "Look up sourced song background", True, None),
+    ("hosts.listening_stats_gap", "Breaks between listening-history jokes", 8, [3, 30]),
     ("hosts.song_comment_chance", "Banter focused on your songs", 0.85, [0.0, 1.0]),
     ("hosts.roast_level", "Roast intensity", "sharp", ["gentle", "sharp", "savage"]),
     ("hosts.meme_references", "Verified song and artist memes", True, None),

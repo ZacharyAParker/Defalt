@@ -63,6 +63,10 @@ def main():
         stream.reconfigure(encoding="utf-8", errors="replace")
     payload = json.load(sys.stdin)
     operation = sys.argv[1]
+    if operation == "song_context":
+        from .song_context import fetch
+        print(json.dumps(fetch(payload), ensure_ascii=False), flush=True)
+        return
     if operation == "ad_news":
         import contextlib
         from .segments import news_context

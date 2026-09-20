@@ -13,6 +13,9 @@ from tests.station_defaults import StationDefaults
 
 class ListeningVibeTests(StationDefaults):
     def setUp(self):
+        lookup = patch("radio.song_context.prepare", return_value=None)
+        lookup.start()
+        self.addCleanup(lookup.stop)
         super().setUp()
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)

@@ -92,6 +92,60 @@ class DirectorChatTests(unittest.TestCase):
         self.assertEqual(len(db.query('SELECT * FROM requests')),1)
         self.assertFalse(db.query('SELECT * FROM affinity'))
 
+    def test_artist_request_count_words(self):
+        for value, count in [('one',1),('two',2),('three',3),('four',4),('five',5),('2',2)]:
+            action = director_chat.artist_requests.detect(f'queue {value} songs by Laufey')
+            self.assertEqual(action, {'type':'artist_request','artist':'Laufey','count':count})
+
+    def artist_catalog(self):
+        for title in ['From The Start', 'Promise', 'Falling Behind', 'Valentine']:
+            taste.add_track(title, 'Laufey')
+
+    def test_artist_requests_and_correction_queue_real_songs_without_mood_change(self):
+        self.artist_catalog()
+        self.chat.apply(self.steer(), self.chat.snapshot())
+        direction = vibe.session_selection()
+        before = copy.deepcopy(self.station.schedule.items)
+        with patch('radio.artist_requests.spotify.available', return_value=False), \
+                patch.object(director_chat.llm, 'complete_json', side_effect=AssertionError('No model needed')):
+            self.chat._reply('laufey-one', 'give me some laufey songs', False, False)
+            self.assertEqual(len(db.query('SELECT * FROM requests')), 3)
+            self.chat._reply('laufey-two', 'no give me some songs by laufey', False, False)
+        self.assertEqual(len(db.query('SELECT * FROM requests')), 4)
+        self.assertIn('Requested 1 of 3', self.chat.messages[-1]['text'])
+        self.assertEqual(vibe.session_selection(), direction)
+        self.assertEqual(self.station.schedule.items, before)
+        self.assertFalse(db.query('SELECT * FROM affinity'))
+
+    def test_artist_search_rejects_wrong_artist_and_preserves_capacity(self):
+        for index in range(11):
+            key = taste.add_track(str(index), 'Someone')
+            db.write("INSERT INTO requests(ts,query,status,track_key) VALUES(0,'request','pending',?)", (key,))
+        results = [{'artist':'Laufey Tribute Band','title':'Cover'},
+                   {'artist':'Laufey','title':'Promise'}, {'artist':'Laufey','title':'Valentine'}]
+        with patch('radio.artist_requests.spotify.available', return_value=True), \
+                patch('radio.artist_requests.spotify.search', return_value=results):
+            reply = self.chat.apply({'type':'artist_request','artist':'Laufey','count':3}, self.chat.snapshot())
+        self.assertIn('Requested 1 of 3', reply)
+        self.assertEqual(len(db.query('SELECT * FROM requests')),12)
+        self.assertFalse(db.one("SELECT 1 FROM tracks WHERE title='Cover'"))
+
+    def test_unknown_artist_request_does_not_become_steer(self):
+        with patch('radio.artist_requests.spotify.available', return_value=False):
+            reply = self.chat.apply({'type':'artist_request','artist':'Unavailable Artist'}, self.chat.snapshot())
+        self.assertIn('No new', reply)
+        self.assertIsNone(vibe.session_selection())
+        self.assertFalse(db.query('SELECT * FROM requests'))
+
+    def test_artist_batch_preserves_current_recording_and_prefers_original(self):
+        taste.add_track('Another Song (Acoustic)', 'A Band')
+        taste.add_track('Another Song', 'A Band')
+        with patch('radio.artist_requests.spotify.available', return_value=False):
+            reply = self.chat.apply({'type':'artist_request','artist':'A Band','count':1}, self.chat.snapshot())
+        rows = db.query('SELECT t.title FROM requests r JOIN tracks t ON t.key=r.track_key')
+        self.assertEqual([row['title'] for row in rows], ['Another Song'])
+        self.assertIn('Requested 1 of 1', reply)
+
     def test_message_ids_are_idempotent_and_busy_rejects_extra_work(self):
         data={'id':'test-message-1','message':'More soul'}
         with patch.object(director_chat.threading.Thread,'start') as start:

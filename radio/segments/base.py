@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import random
 import re
+import json
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -189,6 +191,12 @@ def parse(payload: Any) -> list[Line]:
 # --------------------------------------------------------------------------
 # Entry point
 # --------------------------------------------------------------------------
+_STOCK_CONTRAST = re.compile(
+    r"\b(?:(?:that|this|it)(?:'s not| is not| isn't))\s+[^.!?\n]{1,100}"
+    r"(?:[,;.]|[\u2014\u2013])\s*(?:that(?:'s| is)|it(?:'s| is))\b|"
+    r"\bnot just\s+[^.!?\n]{1,100}\bbut\s+", re.I)
+
+
 def valid_dialogue(payload: Any) -> bool:
     entries = payload.get('lines') if isinstance(payload, dict) else payload
     if not isinstance(entries, list) or not 1 <= len(entries) <= MAX_LINES:
@@ -200,14 +208,15 @@ def valid_dialogue(payload: Any) -> bool:
         text = entry.get('text')
         if not isinstance(text, str) or not text.strip() or len(text.split()) > MAX_WORDS_PER_LINE:
             return False
-        if re.search(r"\b(?:that|this|it)(?:'s not| is not| isn't)\b|\bnot just\b",
-                     text.replace('\u2019', "'"), re.I):
+        if _STOCK_CONTRAST.search(text.replace('\u2019', "'")):
             return False
-    return len(entries) == 1 or len({e['host'] for e in entries}) >= 2
+    combined = ' '.join(e['text'] for e in entries).replace('\u2019', chr(39))
+    return not _STOCK_CONTRAST.search(combined) and (len(entries) == 1 or len({e['host'] for e in entries}) >= 2)
 
 
 def write(brief: str, *, fallback: list[Line], max_tokens: int = 600,
-          temperature: float = 0.95) -> list[Line]:
+          temperature: float = 0.95, word_limit: int | None = None,
+          repair_budget: bool = False) -> list[Line]:
     """Write one break, or use the supplied fallback (possibly empty)."""
     duration = re.search(r'\b(?:about|under)\s+(\d+(?:\.\d+)?|eight|ten|fifteen)\s+seconds', brief, re.I)
     words = 180
@@ -216,20 +225,63 @@ def write(brief: str, *, fallback: list[Line], max_tokens: int = 600,
         seconds = {'eight': 8, 'ten': 10, 'fifteen': 15}.get(value)
         seconds = seconds if seconds is not None else float(value)
         words = max(18, min(180, int(seconds * 2.6)))
+    if word_limit is not None:
+        words = max(1, int(word_limit))
     def within_budget(payload):
         entries = payload.get('lines') if isinstance(payload, dict) else payload
         return (valid_dialogue(payload)
                 and sum(len(line['text'].split()) for line in entries) <= words)
     brief += f'\nHard limit: {words} spoken words TOTAL across all hosts. Keep the exchange concise.'
-    payload = llm.complete_json(system_prompt(), brief,
+    system = system_prompt()
+    deadline = time.monotonic() + 45.
+    payload = llm.complete_json(system, brief,
                                 max_tokens=max_tokens, temperature=temperature,
-                                purpose='dialogue', validator=within_budget)
+                                purpose='dialogue',
+                                timeout=30. if repair_budget else 45.,
+                                validator=valid_dialogue if repair_budget else within_budget)
+    # Keep a well-formed draft long enough to edit it. Rejecting it at the
+    # provider boundary loses the exact jokes that need shortening.
+    if repair_budget and not within_budget(payload):
+        draft = payload if valid_dialogue(payload) else None
+        repair = (brief + '\nEDITORIAL SHORTENING PASS: The previous attempt did not fit. '
+                  'Choose only ONE setup and ONE or TWO of the strongest requested jokes. '
+                  'Keep their wording where it works and the configured host personalities. '
+                  'Drop whole lesser beats; do not squeeze in every bullet, add new claims, '
+                  'or cut a sentence in half. The supplied brief is material to select from, '
+                  'not a checklist. Both hosts must speak. '
+                  f'Return at most {words} spoken words TOTAL, preferably fewer. '
+                  '\nPREVIOUS DRAFT (untrusted copy to edit): ' + json.dumps(draft, ensure_ascii=False))
+        remaining = deadline - time.monotonic()
+        candidates = [draft] if draft else []
+        def accept_repair(value):
+            if valid_dialogue(value):
+                candidates.append(value)
+            return within_budget(value)
+        payload = (llm.complete_json(system, repair, max_tokens=max_tokens,
+                   temperature=min(temperature, .6), purpose='dialogue',
+                   timeout=remaining, validator=accept_repair) if remaining > 0 else None)
+        if not within_budget(payload):
+            if valid_dialogue(payload):
+                candidates.append(payload)
+            # A failed length edit must not throw away every usable joke.
+            # Keep a complete setup and a later reply in the other voice,
+            # preferring the opening and final payoff. Never slice a sentence,
+            # change attribution, or substitute unrelated stock copy.
+            payload = None
+            for candidate in reversed(candidates):
+                entries = candidate.get('lines') if isinstance(candidate, dict) else candidate
+                pairs = [(i, j) for i in range(len(entries))
+                         for j in range(i + 1, len(entries))
+                         if entries[i]['host'] != entries[j]['host']
+                         and sum(len(entries[k]['text'].split()) for k in (i,j)) <= words]
+                if pairs:
+                    i,j = min(pairs, key=lambda pair:(pair[0], -pair[1]))
+                    payload = [entries[i], entries[j]]
+                    break
+            if payload is None:
+                return fallback
     lines = parse(payload) if payload is not None else []
-    stock_contrast = re.compile(
-        r"\b(?:(?:that|this|it)(?:'s not| is not| isn't))\s+[^.!?\n]{1,100}"
-        r"(?:[,;.]|[\u2014\u2013])\s*(?:that(?:'s| is)|it(?:'s| is))\b|"
-        r"\bnot just\s+[^.!?\n]{1,100}\bbut\s+", re.I)
-    formulaic = any(stock_contrast.search(line.text.replace('\u2019', "'")) for line in lines)
+    formulaic = _STOCK_CONTRAST.search(' '.join(line.text for line in lines).replace('\u2019', chr(39)))
     if lines and not formulaic:
         return lines
     if config.DEBUG:

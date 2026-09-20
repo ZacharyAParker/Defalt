@@ -11,6 +11,9 @@ from radio.segments import base, personal, writers
 
 class SkipPreferences(unittest.TestCase):
     def setUp(self):
+        lookup = patch("radio.song_context.prepare", return_value=None)
+        lookup.start()
+        self.addCleanup(lookup.stop)
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         local = threading.local()

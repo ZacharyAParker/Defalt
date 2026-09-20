@@ -21,6 +21,8 @@ identity:
 # ---------------------------------------------------------------------------
 hosts:
   personal_comments: true
+  song_context: true
+  listening_stats_gap: 8
   song_comment_chance: 0.85
   roast_level: sharp
   meme_references: true

@@ -1,14 +1,28 @@
 """Rotate ad premises and reject repeated copy across manual and automatic breaks."""
 import difflib
 import json
+import math
 import random
 import re
 import threading
 import time
 
-from . import db
+from . import config, db
 
 _LOCK = threading.RLock()
+
+
+def duration_budget():
+    """One speech target shared by director briefs and the ad writer."""
+    try:
+        seconds = float(config.games.get('ads.target_seconds', 22) or 22)
+    except (TypeError, ValueError):
+        seconds = 22.
+    if not math.isfinite(seconds) or seconds <= 0:
+        seconds = 22.
+    return seconds, max(25, min(100, int(seconds * 2.6)))
+
+
 ANGLES = [
     'A short sarcastic mock sales pitch built around one specific detail and a dry payoff.',
     'A suspiciously specific customer-service complaint.',
@@ -84,7 +98,10 @@ def normalized(lines):
 
 def repeated(lines, history):
     text = normalized(lines)
+    payoff = normalized(lines[1:3])
     return any(difflib.SequenceMatcher(None, text, normalized(old['lines'])).ratio() >= .82
+               or (len(payoff.split()) >= 6 and
+                   difflib.SequenceMatcher(None, payoff, normalized(old['lines'][1:3])).ratio() >= .82)
                for old in history[:18])
 
 
@@ -103,7 +120,8 @@ def fallback(subject, history):
     # Least recently used premise; stable rotation also works without an LLM.
     def distance(lines):
         return next((i for i, old in enumerate(history)
-                     if normalized(lines) == normalized(old['lines'])), len(history) + 1)
+                     if normalized(lines) == normalized(old['lines'])
+                     or normalized(lines[1:3]) == normalized(old['lines'][1:3])), len(history) + 1)
     chosen = max(options, key=distance)
     closes = CLOSES if subject.get('fictional') else REAL_CLOSES
     last_close = history[0]['lines'][-1] if history and history[0]['lines'] else None
@@ -120,8 +138,10 @@ def finish(subject, proposal, lines, anchor, wildcard, *, strict=False):
                 raise ValueError('The requested ad repeated an earlier read. Nothing was scheduled; please retry.')
             lines = [Line(wildcard if i % 2 == 0 else anchor, text)
                      for i, text in enumerate(fallback(subject, history))]
+            proposal['copy_source'] = 'backup'
         db.write('INSERT INTO events(ts,kind,meta) VALUES(?,?,?)',
                  (time.time(), 'ad_prepared', json.dumps({
                      'product': subject['name'], 'style': proposal['style'],
-                     'angle': proposal['angle'], 'lines': [line.text for line in lines]})))
+                     'angle': proposal['angle'], 'copy_source':proposal.get('copy_source','generated'),
+                     'lines': [line.text for line in lines]})))
         return lines

@@ -18,6 +18,19 @@ i hate this                                 thumbs down what's on now
 https://youtube.com/watch?v=...             that exact video
 ```
 
+## Artist requests in Director chat
+
+Say "give me some Laufey songs" or "queue three songs by Laufey" to request a
+small batch by the actual artist. The default is three songs; one to five are
+supported. Director chat uses matching local catalog entries and Spotify
+search when configured, preferring original recordings over labelled variants.
+It excludes current/prepared songs and existing requests, respects the request
+queue limit, and names the songs it added. If too few matches are available,
+it reports the smaller batch. Missing matches do not become a mood change.
+
+"More like Laufey" can still steer the sound. Artist song requests leave the
+current music direction and long-term taste scores unchanged.
+
 ## How it decides
 
 ### News articles

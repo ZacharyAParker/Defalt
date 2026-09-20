@@ -1,5 +1,14 @@
 # Patch notes
 
+## 0.3.7 — September 19, 2026
+
+- Long ad briefs get one bounded shortening pass. The writer selects a setup and the strongest requested jokes, with room reserved for the unsponsored close. Failed custom ads report the failure instead of playing an unrelated pitch.
+- Fixed repeated backup ads across different products. Backup sketches rotate across the station, repeated payoffs are checked, and preparation status identifies backup copy.
+- Song commentary rotates its focus instead of favoring listening statistics every time. History jokes have an eight-break gap by default. Repeated lines fall back to a clean introduction.
+- Optional song-background lookup supplies matched Wikipedia introductions for song facts. Reviewed memes remain available; unsupported trivia and claims that an old meme is currently trending are excluded from the writing brief. Both lookup and the history-joke gap are configurable in Mix settings.
+- Director requests such as "give me some Laufey songs" now queue three catalog recordings by that artist, with one to five available on request. Artist batches preserve the music direction, avoid already requested recordings, and report exactly which songs were added.
+- Stock "that's not X, that's Y" jokes remain rejected, including exchanges split between hosts. Plain unsponsored disclosures are allowed.
+
 ## 0.3.6 — September 19, 2026
 
 - The Radio booth now uses the approved Mav and Rue artwork in the app and browser, with separate host and headphone layers, restored microphones, and fixed foreground mugs.
@@ -126,4 +135,4 @@ Artwork is fetched and cached in the background. Studio animation does not contr
 Earlier development builds used version 0.1.0. The 0.2.0 notes collect the current release changes; they are not a claim that every feature was first written on the release date.
 
 ---
-Defalt v0.3.6 · © 2026 Zachary Parker
+Defalt v0.3.7 · © 2026 Zachary Parker
