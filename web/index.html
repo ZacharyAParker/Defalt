@@ -288,13 +288,14 @@
 </dialog>
 <dialog class="director-chat" id="director-chat" aria-labelledby="director-chat-heading">
   <header><h2 id="director-chat-heading">Director chat</h2><button class="btn" id="director-chat-close" type="button">Close</button></header>
-  <p class="director-chat-hint">Private unless you choose to send a message to the hosts.</p>
+  <p class="director-chat-hint">Private unless you request an ad or send a message to the hosts.</p>
   <p id="director-chat-direction">Normal rotation · no private direction</p>
   <div class="director-chat-log" id="director-chat-log" role="log" aria-live="polite"></div>
   <p id="director-chat-status" role="status"></p>
   <form id="director-chat-form">
-    <label for="director-chat-input">What should we play next?</label>
-    <textarea id="director-chat-input" maxlength="2000" rows="3" placeholder="Keep this energy, but less rap…"></textarea>
+    <label for="director-chat-input">Music direction, a question, or an ad brief</label>
+    <textarea id="director-chat-input" rows="3" aria-describedby="director-chat-count" placeholder="Keep this energy, but less rap…"></textarea>
+    <small id="director-chat-count">0 / 12,000 characters</small>
     <div class="director-chat-options"><label><input type="checkbox" id="director-chat-save"> Save music direction</label><label><input type="checkbox" id="director-chat-share"> Send this to hosts</label></div>
     <div class="director-chat-actions"><button class="btn btn--primary" id="director-chat-send" type="submit">Send</button><button class="btn" id="director-chat-undo" type="button">Undo last change</button><small>Ctrl+Enter to send</small></div>
   </form>

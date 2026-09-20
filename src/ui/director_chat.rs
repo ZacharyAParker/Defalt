@@ -3,6 +3,7 @@ use egui::{Color32, RichText};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use super::theme;
+const MAX_MESSAGE_CHARS: usize = 12_000;
 
 pub struct Chat {
     pub preview: bool,
@@ -51,7 +52,7 @@ impl Chat {
 
     fn send(&mut self) {
         let message=self.draft.trim();
-        if message.is_empty() || self.inflight || self.state["busy"].as_bool()==Some(true) {return;}
+        if message.is_empty() || message.chars().count()>MAX_MESSAGE_CHARS || self.inflight || self.state["busy"].as_bool()==Some(true) {return;}
         let mut body=serde_json::json!({"message":message,"save":self.save,"share":self.share});
         if let Some(previous)=&self.retry {
             if previous["message"]==body["message"] && previous["save"]==body["save"] && previous["share"]==body["share"] { body["id"]=previous["id"].clone(); }
@@ -75,26 +76,30 @@ impl Chat {
         if !self.open {return;}
         if running && !self.preview && !self.inflight && self.last_poll.elapsed()>Duration::from_secs(2) {self.request(None);}
         let mut open=self.open;
-        egui::Window::new("Director chat").open(&mut open).default_width(540.).default_height(510.)
+        egui::Window::new("Director chat").open(&mut open).default_width(540.).default_height(620.)
             .default_pos(egui::pos2(260.,80.))
             .frame(egui::Frame::window(&ctx.style_of(egui::Theme::Dark)).fill(theme::PANEL))
-            .min_width(330.).max_height((ctx.content_rect().height()-100.).max(300.))
+            .min_width(330.).min_height(380.).max_height((ctx.content_rect().height()-100.).max(380.))
             .show(ctx,|ui| {
                 ui.label(RichText::new("Steer the station, keep the music going.").size(17.).color(theme::TEXT));
-                ui.label(RichText::new("Private unless you choose to send a message to the hosts.").color(theme::TEXT_DIM));
+                ui.label(RichText::new("Private unless you request an ad or send a message to the hosts.").color(theme::TEXT_DIM));
                 if let Some(direction)=self.state["direction"]["description"].as_str() {
                     ui.add_space(6.);ui.label(RichText::new(format!("Music direction: {direction}")).color(theme::CYAN));
                 }
                 if let Some(minutes)=self.state["quiet_minutes"].as_f64().filter(|v|*v>0.) {ui.label(format!("Fewer host breaks: {minutes:.0} min left"));}
                 ui.separator();
+                let editor_height=(ctx.content_rect().height()*0.12).clamp(60.,120.);
+                // Reserve the composer and action rows before sizing the history.
+                // TextEdit's desired_rows is a minimum, never a maximum.
+                let history_height=(ui.available_height()-editor_height-190.).clamp(45.,280.);
                 egui::ScrollArea::vertical().id_salt("private-director-conversation").stick_to_bottom(true)
-                    .max_height((ctx.content_rect().height()*0.37).clamp(150.,350.)).min_scrolled_height(150.)
+                    .max_height(history_height).min_scrolled_height(45.)
                     .show(ui,|ui| {
                         let messages=self.state["messages"].as_array();
                         if messages.is_none_or(|m|m.is_empty()) {
                             ui.label(RichText::new("Tell me what you're in the mood for.").size(18.));
                             ui.add_space(8.);
-                            for example in ["Keep this energy, but less rap.","That last pick was perfect. More like that.","Less talking for twenty minutes.","Why did you choose this song?"] {
+                            for example in ["Keep this energy, but less rap.","Go back to normal suggestions.","Less talking for twenty minutes.","Give the hosts a sarcastic gaming-news ad."] {
                                 if ui.button(example).clicked() {self.draft=example.into();}
                             }
                         }
@@ -111,13 +116,21 @@ impl Chat {
                 if let Some(error)=&self.error {ui.colored_label(Color32::from_rgb(245,180,130),error);}
                 if !running {ui.label("Start Radio to chat with the director.");}
                 ui.separator();
-                let entry=ui.add(egui::TextEdit::multiline(&mut self.draft).desired_rows(3).desired_width(f32::INFINITY)
-                    .char_limit(2000).hint_text("What should we play next?"));
+                let entry=egui::ScrollArea::vertical().id_salt("private-director-draft")
+                    .max_height(editor_height)
+                    .min_scrolled_height(60.).auto_shrink([false,true])
+                    .show(ui,|ui| ui.add(egui::TextEdit::multiline(&mut self.draft)
+                        .desired_rows(3).desired_width(f32::INFINITY)
+                        .hint_text("Music direction, a question, or an ad brief..."))).inner;
+                let count=self.draft.chars().count();
+                ui.label(RichText::new(format!("{count} / {MAX_MESSAGE_CHARS} characters")).small()
+                    .color(if count>MAX_MESSAGE_CHARS {Color32::from_rgb(245,180,130)}else{theme::TEXT_DIM}));
+                if self.share && count>240 {ui.colored_label(Color32::from_rgb(245,180,130),"Direct on-air messages allow 240 characters. Uncheck Send this to hosts to discuss a longer draft or commission an ad.");}
                 ui.horizontal_wrapped(|ui| {
                     ui.checkbox(&mut self.save,"Save music direction").on_hover_text("Keep a music direction across restarts. Ordinary messages apply to this session only.");
                     ui.checkbox(&mut self.share,"Send this to hosts").on_hover_text("Share this message on air instead of changing station controls. Maximum 240 characters.");
                 });
-                let allowed=running && !busy && !self.inflight && !self.draft.trim().is_empty() && (!self.share || self.draft.chars().count()<=240);
+                let allowed=running && !busy && !self.inflight && !self.draft.trim().is_empty() && count<=MAX_MESSAGE_CHARS && (!self.share || count<=240);
                 let enter=entry.has_focus() && ui.input(|i|i.modifiers.ctrl && i.key_pressed(egui::Key::Enter));
                 ui.horizontal(|ui| {
                     if ui.add_enabled(allowed,egui::Button::new(if self.share {"Send to hosts"} else {"Send"})).clicked() || (allowed && enter) {self.send();}

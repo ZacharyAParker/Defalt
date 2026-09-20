@@ -104,13 +104,13 @@ def clean(text: str) -> str:
     return _WS.sub(" ", text).strip()
 
 
-def screen(text: str) -> str:
+def screen(text: str, *, max_chars: int = MAX_CHARS) -> str:
     """Return an error string if this must not be accepted, else ''."""
     if not text:
         return "say what you want to hear"
-    if len(text) > MAX_CHARS:
+    if len(text) > max_chars:
         return (f"that is {len(text)} characters. Keep a request under "
-                f"{MAX_CHARS} -- it has to fit in a sentence someone says.")
+                f"{max_chars} -- it has to fit in a sentence someone says.")
     if _INJECTION.search(text):
         return ("that reads as an instruction to the writer rather than a "
                 "request. Ask for a song, an artist, a genre or a topic.")

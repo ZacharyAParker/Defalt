@@ -51,6 +51,15 @@ class NewsContextTests(unittest.TestCase):
             self.assertEqual(news_context.prepare([self.story]),[self.story])
         fetch.assert_not_called()
 
+    def test_ad_sources_exclude_stale_undated_and_future_reports(self):
+        now=1_000_000
+        stories=[{**self.story,'published':stamp} for stamp in [0,now+60,now-200_000,now-300,now-60]]
+        with patch.object(writers.rss,'stories',return_value=('Gaming',stories)), \
+             patch.object(news_context.time,'time',return_value=now), \
+             patch.object(news_context.config.news,'get',return_value=30):
+            result=news_context.for_ad('gaming')
+        self.assertEqual([s['published'] for s in result],[now-60,now-300])
+
     def test_fallback_never_cuts_a_sentence_or_exceeds_budget(self):
         lines=news_context.fallback(self.story,'mav',28)
         self.assertTrue(lines[0].text.endswith('.'))

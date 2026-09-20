@@ -10,6 +10,7 @@ from . import db
 
 _LOCK = threading.RLock()
 ANGLES = [
+    'A short sarcastic mock sales pitch built around one specific detail and a dry payoff.',
     'A suspiciously specific customer-service complaint.',
     'An influencer tries to hide how little they understand the product.',
     'A job interview for someone spectacularly unqualified.',
@@ -110,11 +111,13 @@ def fallback(subject, history):
     return list(chosen) + [close]
 
 
-def finish(subject, proposal, lines, anchor, wildcard):
+def finish(subject, proposal, lines, anchor, wildcard, *, strict=False):
     from .segments.base import Line
     with _LOCK:
         history = recent()
         if repeated([line.text for line in lines], history):
+            if strict:
+                raise ValueError('The requested ad repeated an earlier read. Nothing was scheduled; please retry.')
             lines = [Line(wildcard if i % 2 == 0 else anchor, text)
                      for i, text in enumerate(fallback(subject, history))]
         db.write('INSERT INTO events(ts,kind,meta) VALUES(?,?,?)',

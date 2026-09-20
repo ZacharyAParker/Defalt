@@ -1,5 +1,12 @@
 # Patch notes
 
+## 0.3.5 — September 19, 2026
+
+- Ad briefs support fictional pitches about real products, games, DLC, patches, streaming and esports. Sarcastic sales pitches are one optional style; host personalities and short segment budgets take priority. Article and news reactions can use the same bite when appropriate, with factual claims tied to source material.
+- Director chat can commission ads with a requested premise and humor direction. Ads prepare for the next host break, or the next safe opening when requested immediately. Recent-news requests use source material and report failures instead of substituting an unrelated stock ad.
+- Long director drafts scroll inside the composer, keeping Send accessible. The native app, browser, and backend accept up to 12,000 characters; oversized drafts remain intact with a visible limit notice.
+- Saying "go back to normal" resumes usual taste-based suggestions, bypassing music direction and Set vibe for the session. Only unprepared automatic picks refresh. Saved directions, explicit requests, prepared mixes, and talk settings remain intact. Save music direction makes the reset permanent; Undo restores the previous direction.
+
 ## 0.3.4 — September 19, 2026
 
 - Added Director chat to Radio in the app and browser. Steer upcoming automatic picks with conversational follow-ups, ask about the current song choice, request a recording, or reduce automatic host breaks for a while.
@@ -112,4 +119,4 @@ Artwork is fetched and cached in the background. Studio animation does not contr
 Earlier development builds used version 0.1.0. The 0.2.0 notes collect the current release changes; they are not a claim that every feature was first written on the release date.
 
 ---
-Defalt v0.3.4 · © 2026 Zachary Parker
+Defalt v0.3.5 · © 2026 Zachary Parker

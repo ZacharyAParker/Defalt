@@ -34,7 +34,18 @@ def selection_direction():
 
 
 def for_selection():
-    return selection_direction() or current()
+    direction=selection_direction()
+    return {} if direction.get('mode') == 'normal' else direction or current()
+
+
+def normal_rotation(*, save=False):
+    """Bypass both direction controls; retain saved preferences unless requested."""
+    with _LOCK:
+        if save:
+            config.station.set_many({'listening_vibe':{}, 'director_preferences.selection':{}})
+            set_session_selection(None)
+        else:
+            set_session_selection({'mode':'normal','description':'Normal rotation (this session)','private':True})
 
 
 def selection_revision():
@@ -59,6 +70,8 @@ def revision():
 
 
 def public():
+    if (session_selection() or {}).get('mode') == 'normal':
+        return {}
     return {k: v for k, v in current().items() if k != "fits"}
 
 

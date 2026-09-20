@@ -1116,6 +1116,9 @@ impl Defalt {
                 self.view = View::Radio;
                 self.airtime.chat.open = true;
                 self.airtime.chat.preview = true;
+                if let Some(path)=std::env::var_os("DEFALT_SHOT_CHAT_DRAFT") {
+                    self.airtime.chat.draft=std::fs::read_to_string(path).unwrap_or_default();
+                }
                 self.airtime.chat.state = serde_json::json!({"messages":[
                     {"role":"user","text":"Keep this energy, but less rap."},
                     {"role":"director","text":"For this session: mellow soul and funk. This starts with unprepared automatic picks; current songs, prepared transitions and your requests stay in place."},

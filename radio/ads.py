@@ -4,7 +4,7 @@ from __future__ import annotations
 import threading
 import uuid
 
-from . import config, db, timeline
+from . import config, db, intent, timeline
 from .segments import writers
 
 
@@ -23,9 +23,20 @@ class AdBreaks:
             result["busy"] = result.get("state") in {"preparing", "ready", "scheduled", "playing"}
             return result
 
-    def queue(self, timing):
+    def queue(self, timing, *, brief='', news_category=''):
         if timing not in ("next_break", "now"):
             raise ValueError("Choose next_break or now.")
+        if not isinstance(brief,str) or len(brief) > 1200:
+            raise ValueError('Ad briefs must be at most 1,200 characters.')
+        brief=intent.clean(brief)
+        if brief and (error := intent.screen(brief,max_chars=1200)):
+            raise ValueError(error)
+        if not isinstance(news_category,str):
+            raise ValueError('Choose a news category for the ad.')
+        if news_category:
+            category=(config.news.get('categories',{}) or {}).get(news_category)
+            if not brief or not isinstance(category,dict) or not category.get('enabled') or not category.get('feeds'):
+                raise ValueError('That news category is unavailable. Enable its feeds or request an ad without news.')
         s = self.station
         with s.lock:
             if not config.games.get("ads.enabled", True):
@@ -33,10 +44,13 @@ class AdBreaks:
             if not s.clock.running:
                 raise ValueError("Start radio playback before requesting an ad.")
             if self.public()["busy"]:
+                if brief and (brief != self.request.get('brief') or news_category != self.request.get('news_category') or timing != self.request.get('timing')):
+                    raise ValueError('An ad is already preparing or queued. Your new brief was not added; let that ad finish first.')
                 return self.public()
             token = uuid.uuid4().hex
             self.request = {"id": token, "timing": timing, "state": "preparing",
-                            "message": "Writing and voicing an ad..."}
+                            "message": "Writing and voicing an ad...", "brief":brief,
+                            "news_category":news_category}
             self.voices = []
             thread = threading.Thread(target=self._prepare, args=(token,), daemon=True,
                                       name="ad-preparation")
@@ -47,8 +61,12 @@ class AdBreaks:
         s = self.station
         try:
             with s.lock:
+                if not self.request or self.request['id'] != token:
+                    return
                 context = writers.build_context("game_ad", previous=s._last_track,
                                                 recent_host_lines=list(getattr(s, "_recent_host_lines", []))[-16:])
+                context['ad_brief']=self.request.get('brief','')
+                context['ad_news_category']=self.request.get('news_category','')
             lines = writers.game_ad(context)
             if not lines:
                 raise ValueError("No ad material is available. Enable house ads or add a game to the watchlist.")

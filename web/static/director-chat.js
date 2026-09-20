@@ -6,8 +6,13 @@
   const log=byId('director-chat-log'), status=byId('director-chat-status'), send=byId('director-chat-send');
   const save=byId('director-chat-save'), share=byId('director-chat-share'), undo=byId('director-chat-undo');
   let busy=false, fetching=false, posting=false, retry=null, lastMessages='', timer=null, generation=0;
+  const maxChars=12000;
   function controls() {
-    send.disabled=busy || posting || !draft.value.trim() || (share.checked && draft.value.length>240);
+    const count=Array.from(draft.value).length;
+    send.disabled=busy || posting || !draft.value.trim() || count>maxChars || (share.checked && count>240);
+    const counter=byId('director-chat-count');
+    counter.textContent=`${count.toLocaleString()} / 12,000 characters`+(share.checked&&count>240?' · Direct on-air messages allow 240. Uncheck Send this to hosts for a longer draft or ad brief.':'');
+    counter.classList.toggle('over-limit',count>maxChars||(share.checked&&count>240));
     send.textContent=share.checked?'Send to hosts':'Send';
     undo.disabled=busy || posting;
   }
@@ -33,7 +38,7 @@
       lastMessages=messages;log.replaceChildren();
       if(!state.messages?.length) {
         const welcome=document.createElement('p');welcome.className='director-chat-welcome';welcome.textContent="Tell me what you're in the mood for.";log.append(welcome);
-        for(const example of ['Keep this energy, but less rap.','That last pick was perfect. More like that.','Less talking for twenty minutes.','Why did you choose this song?']) {
+        for(const example of ['Keep this energy, but less rap.','Go back to normal suggestions.','Less talking for twenty minutes.','Give the hosts a sarcastic gaming-news ad.']) {
           const button=document.createElement('button');button.type='button';button.className='director-chat-example';button.textContent=example;
           button.addEventListener('click',()=>{draft.value=example;draft.focus();controls();});log.append(button);
         }
@@ -66,7 +71,8 @@
   draft.addEventListener('keydown',event=>{if(event.ctrlKey && event.key==='Enter'){event.preventDefault();form.requestSubmit();}});
   form.addEventListener('submit',async event=>{
     event.preventDefault();if(busy || posting || !draft.value.trim()) return;
-    if(share.checked && draft.value.length>240) {status.textContent='Keep on-air messages under 240 characters.';return;}
+    if(Array.from(draft.value).length>maxChars){status.textContent='Keep director messages under 12,000 characters. Your full draft is kept.';return;}
+    if(share.checked && Array.from(draft.value).length>240) {status.textContent='Keep on-air messages under 240 characters.';return;}
     const body={message:draft.value.trim(),save:save.checked,share:share.checked};
     if(retry && ['message','save','share'].every(key=>retry[key]===body[key])) body.id=retry.id;
     else body.id=crypto.randomUUID();

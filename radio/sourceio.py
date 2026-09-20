@@ -63,6 +63,13 @@ def main():
         stream.reconfigure(encoding="utf-8", errors="replace")
     payload = json.load(sys.stdin)
     operation = sys.argv[1]
+    if operation == "ad_news":
+        import contextlib
+        from .segments import news_context
+        with contextlib.redirect_stdout(sys.stderr):
+            stories=news_context.for_ad(payload['category'])
+        print(json.dumps(stories,ensure_ascii=False),flush=True)
+        return
     if operation == "article":
         from .articles import fetch
         print(json.dumps(fetch(payload['url']), ensure_ascii=False), flush=True)

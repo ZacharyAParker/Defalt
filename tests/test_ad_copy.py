@@ -36,6 +36,14 @@ class AdCopyTests(unittest.TestCase):
         self.assertNotEqual([l.text for l in first], [l.text for l in second])
         self.assertEqual(len(ad_copy.recent()), 2)
 
+    def test_custom_ad_repetition_fails_without_substituting_an_unrelated_stock_read(self):
+        subject={'name':'The Coping Kit','fictional':True}
+        lines=self.generate(subject,['A requested premise.','A specific punchline.','A second joke.','Unsponsored.'])
+        proposal=ad_copy.plan(subject,['deadpan'])
+        with self.assertRaisesRegex(ValueError,'Nothing was scheduled'):
+            ad_copy.finish(subject,proposal,lines,'mav','rue',strict=True)
+        self.assertEqual(len(ad_copy.recent()),1)
+
     def test_history_loaded_from_database_controls_next_premise(self):
         subject = {'name':'Grass Touch Simulator', 'fictional':True}
         old = {'product':subject['name'], 'style':'deadpan', 'angle':ad_copy.ANGLES[0],

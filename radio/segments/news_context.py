@@ -3,10 +3,21 @@ import html
 import re
 import time
 
-from .. import sourceio
+from .. import config, sourceio
 from .base import Line
 
 _CACHE = {}
+
+
+def for_ad(category):
+    """News comedy needs a dated recent report, not an undated or future headline."""
+    from ..sources import rss
+    _, stories=rss.stories(category,limit=4)
+    max_age=float(config.news.get('defaults.max_age_hours',30) or 30)*3600
+    now=time.time()
+    stories=[s for s in stories if s.get('published') and 0 <= now-float(s['published']) <= max_age]
+    stories.sort(key=lambda s:s['published'],reverse=True)
+    return prepare(stories)
 
 
 def clean(text):

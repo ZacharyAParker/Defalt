@@ -95,6 +95,31 @@ class AdScheduling(unittest.TestCase):
         self.assertEqual(self.ads.public()['state'],'failed')
         self.assertFalse(self.ads.public()['busy'])
 
+    def test_custom_brief_is_passed_to_writer_and_conflicting_request_is_not_dropped(self):
+        news={'gaming':{'enabled':True,'feeds':['https://example.test/rss']}}
+        with patch.object(config.news,'get',return_value=news),patch.object(ads.threading.Thread,'start'):
+            first=self.ads.queue('next_break',brief='Sarcastic gaming-news ad',news_category='gaming')
+            self.assertEqual(first['brief'],'Sarcastic gaming-news ad')
+            with self.assertRaisesRegex(ValueError,'not added'):
+                self.ads.queue('next_break',brief='A different ad')
+        self.s._render=Mock(return_value=[])
+        with patch.object(writers,'game_ad',return_value=[]) as writer:
+            self.ads._prepare(first['id'])
+        self.assertEqual(writer.call_args.args[0]['ad_brief'],first['brief'])
+        self.assertEqual(writer.call_args.args[0]['ad_news_category'],'gaming')
+
+    def test_invalid_custom_ad_never_starts_a_worker(self):
+        with patch.object(ads.threading.Thread,'start') as start,patch.object(config.news,'get',return_value={}):
+            for kwargs in [{'brief':[]},{'brief':'x'*1201},{'brief':'News','news_category':[]},{'brief':'News','news_category':'unknown'}]:
+                with self.assertRaises(ValueError):self.ads.queue('next_break',**kwargs)
+            start.assert_not_called()
+
+    def test_ad_brief_can_exceed_short_on_air_message_limit(self):
+        brief='A sarcastic fictional product demo with a dry payoff. '*12
+        with patch.object(ads.threading.Thread,'start'):
+            result=self.ads.queue('next_break',brief=brief)
+        self.assertEqual(result['brief'],brief.strip())
+
     def test_air_log_is_written_once_when_ad_reaches_playout(self):
         self.ready('now'); self.ads.tick()
         ads.db.mark_aired.assert_not_called()
@@ -159,3 +184,27 @@ class AdMaterial(unittest.TestCase):
         with patch.object(steam,'wishlist',return_value=[]), patch.object(steam,'tracked_titles',return_value=[]), \
              patch.object(config.games,'get',side_effect=lambda k,d=None:settings.get(k,d)):
             self.assertEqual(steam.ad_subject()['name'],'Local Game')
+
+    def test_requested_news_ad_uses_supplied_sources_and_preserves_the_brief(self):
+        story={'title':'A new handheld announced','summary':'SOURCE FACTS ONLY','source':'Example Games','published':123}
+        context={'ad_brief':'Sarcastic gaming news with a dry payoff','ad_news_category':'gaming'}
+        lines=[Line('rue','Our imaginary coping kit includes a tiny wallet.'),Line('mav','Unsponsored. Nobody paid for this.')]
+        with patch.object(writers.sourceio,'_run',return_value=[story]) as source, \
+             patch.object(steam,'ad_subject') as automatic, \
+             patch.object(writers,'write',return_value=lines) as writer, \
+             patch.object(writers.ad_copy,'finish',side_effect=lambda *a,**k:a[2]):
+            self.assertEqual(writers.game_ad(context),lines)
+        automatic.assert_not_called()
+        source.assert_called_once_with('ad_news',{'category':'gaming'},30)
+        self.assertIn(context['ad_brief'],writer.call_args.args[0])
+        self.assertIn('SOURCE FACTS ONLY',writer.call_args.args[0])
+        self.assertEqual(writer.call_args.kwargs['fallback'],[])
+
+    def test_missing_news_and_failed_custom_copy_never_become_unrelated_stock_ads(self):
+        context={'ad_brief':'Sarcastic gaming news','ad_news_category':'gaming'}
+        for result in [[],None]:
+            with patch.object(writers.sourceio,'_run',return_value=result),patch.object(writers,'write') as writer:
+                with self.assertRaisesRegex(ValueError,'Nothing was scheduled'):writers.game_ad(context)
+                writer.assert_not_called()
+        with patch.object(writers,'write',return_value=[]):
+            with self.assertRaisesRegex(ValueError,'Nothing was scheduled'):writers.game_ad({'ad_brief':'A very specific joke'})

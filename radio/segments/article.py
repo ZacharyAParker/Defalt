@@ -4,7 +4,7 @@ import re
 import time
 
 from .. import config, llm
-from .base import Line, parse, system_prompt
+from .base import Line, parse, system_prompt, OPTIONAL_COMEDY_REFERENCE
 
 
 def write(context):
@@ -40,7 +40,7 @@ Still attribute disputed or consequential claims within your lines. Avoid
 phrases like 'that's real', 'confirmed fact', or 'Google says' without source
 qualification. Never imply that you checked another source yourself.
 """
-    payload = llm.complete_json(system_prompt() + rules,
+    payload = llm.complete_json(system_prompt() + '\n' + OPTIONAL_COMEDY_REFERENCE + rules,
         json.dumps({'today': time.strftime('%Y-%m-%d'), 'article': article}, ensure_ascii=False),
         max_tokens=800, temperature=.1, timeout=20, purpose='article')
     entries = payload.get('lines', []) if isinstance(payload, dict) else []

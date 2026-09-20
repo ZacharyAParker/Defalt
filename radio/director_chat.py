@@ -7,9 +7,10 @@ import threading
 import time
 from pathlib import Path
 
-from . import config, db, intent, llm, taste, vibe, wishes
+from . import ads, config, db, intent, llm, taste, vibe, wishes
 
 SYSTEM = (Path(__file__).parent / 'prompts/director-chat.md').read_text(encoding='utf-8')
+MAX_MESSAGE_CHARS = 12000
 
 
 def profile(value):
@@ -51,8 +52,8 @@ class Chat:
             raise ValueError('Send a message object.')
         message = data.get('message')
         ident = data.get('id')
-        if not isinstance(message,str) or not 1 <= len(message.strip()) <= 2000:
-            raise ValueError('Write a message of 1 to 2,000 characters.')
+        if not isinstance(message,str) or not 1 <= len(message.strip()) <= MAX_MESSAGE_CHARS:
+            raise ValueError('Write a message of 1 to 12,000 characters.')
         if not isinstance(ident,str) or not re.fullmatch(r'[A-Za-z0-9_-]{8,80}',ident):
             raise ValueError('A message ID is required.')
         for key in ('save','share'):
@@ -89,6 +90,8 @@ class Chat:
                     'unprepared_queue': [{k:e.get('track',{}).get(k) for k in ('key','title','artist')}
                                          for e in getattr(s,'_lineup',[])[:8]],
                     'direction': vibe.selection_direction(), 'public_vibe':vibe.public(),
+                    'news_categories': [k for k,v in (config.news.get('categories',{}) or {}).items()
+                                        if isinstance(v,dict) and v.get('enabled') and v.get('feeds')],
                     'quiet_minutes':max(0,round((self.quiet_until-time.time())/60,1))}
 
     def _reply(self, ident, message, save, share):
@@ -104,17 +107,32 @@ class Chat:
                 snapshot = self.snapshot()
                 with self.lock:
                     history = copy.deepcopy(self.messages[-24:])
-                lowered = message.lower().strip(' .!')
+                # Keep the complete newest draft, with bounded older context.
+                remaining=24000
+                recent=[]
+                for item in reversed(history):
+                    text=item.get('text','')
+                    if len(text)>remaining:
+                        break
+                    recent.append(item)
+                    remaining-=len(text)
+                history=list(reversed(recent))
+                lowered = message.lower().strip(' .!,').removeprefix('please ').removesuffix(' please').strip(' ,')
                 action = None
                 if lowered in {'undo','undo that','undo last change'}:
                     action = {'type':'undo'}
-                elif lowered in {'clear direction','clear vibe','back to normal music'}:
+                elif lowered in {'go back to normal','back to normal','return to normal',
+                                 'back to normal music','go back to normal music','return to normal music',
+                                 'go back to normal suggestions','return to normal suggestions',
+                                 'normal rotation','normal suggestions','queue normal suggestions','reset music direction'}:
+                    action = {'type':'normal'}
+                elif lowered in {'clear direction','clear vibe'}:
                     action = {'type':'clear'}
                 elif lowered in {'resume talking','normal talk','resume normal talk'}:
                     action = {'type':'normal_talk'}
                 if action is None:
                     plan = llm.complete_json(SYSTEM,json.dumps({'conversation':history,'current':snapshot,
-                        'scope':'saved' if save else 'session'},ensure_ascii=False),purpose='director_chat',
+                        'message':message, 'scope':'saved' if save else 'session'},ensure_ascii=False),purpose='director_chat',
                         timeout=30,max_tokens=900,temperature=.35)
                     if not isinstance(plan,dict) or not isinstance(plan.get('action'),dict):
                         raise ValueError('The director could not interpret that just now. Nothing changed; try again.')
@@ -132,6 +150,17 @@ class Chat:
 
     def apply(self, action, snapshot, save=False, explanation=''):
         kind = action.get('type')
+        if kind == 'ad':
+            brief=action.get('brief')
+            if not isinstance(brief,str) or not 1 <= len(brief.strip()) <= 1200:
+                raise ValueError('Describe the ad you want in 1 to 1,200 characters.')
+            result=ads.for_station(self.station).queue(action.get('timing','next_break'),
+                brief=brief, news_category=action.get('news_category',''))
+            if result.get('state') == 'failed':
+                return result['message']
+            when='the next host break' if result['timing']=='next_break' else 'the next safe opening after any current speech'
+            return (f"Ad brief accepted for {when}: {result.get('brief') or 'the existing ad request'}. "
+                    'Writing and voicing must finish before it can play. Check Ad break for preparation status; prepared speech keeps its place.')
         if kind == 'none':
             if not isinstance(explanation,str) or not explanation.strip():
                 raise ValueError('Could you describe the change you want? Nothing changed.')
@@ -151,13 +180,15 @@ class Chat:
             db.write("INSERT INTO requests(ts,query,status,track_key) VALUES(?,?,'pending',?)",
                      (time.time(),f'{artist} - {title}',key))
             return f'Requested {title} by {artist}. It will prepare after the songs already planned. Your long-term taste scores are unchanged.'
-        if kind not in {'steer','quiet','normal_talk','clear','undo'}:
+        if kind not in {'steer','quiet','normal_talk','clear','normal','undo'}:
             raise ValueError('That control is not available here. Nothing changed.')
         if kind == 'undo':
             if not self.undo_stack:
                 return 'There is no direction or talk change to undo. Song requests can be removed in the queue.'
             old=self.undo_stack[-1]
-            if old['saved_changed']:
+            if old.get('vibe_changed'):
+                config.station.set_many({'listening_vibe':old['vibe'],'director_preferences.selection':old['saved']})
+            elif old['saved_changed']:
                 config.station.set('director_preferences.selection',old['saved'])
             vibe.set_session_selection(old['session'])
             self.quiet_until=old['quiet']
@@ -181,8 +212,16 @@ class Chat:
         if kind == 'quiet' and (type(minutes) not in (int,float) or not 1 <= minutes <= 120):
             raise ValueError('Choose between one and 120 minutes of fewer host breaks.')
         old={'session':vibe.session_selection(),'saved':copy.deepcopy(config.station.get('director_preferences.selection',{})),
-             'quiet':self.quiet_until,'saved_changed':save and kind in {'steer','clear'}}
-        if kind in {'steer','clear'}:
+             'quiet':self.quiet_until,'saved_changed':save and kind in {'steer','clear','normal'},
+             'vibe_changed':save and kind=='normal','vibe':copy.deepcopy(config.station.get('listening_vibe',{}))}
+        if kind=='normal':
+            vibe.normal_rotation(save=save)
+            self.station.refresh_vibe()
+            reply=(f"{'Saved normal rotation' if save else 'Back to normal suggestions for this session'}. "
+                   'Music direction and Set vibe no longer influence new picks. I refreshed the unprepared automatic queue; '
+                   'the current song, prepared mixes, and your requests keep their places. '
+                   'Your taste history and talk settings are unchanged.')
+        elif kind in {'steer','clear'}:
             direction=new_profile if kind=='steer' else {}
             if save:
                 config.station.set('director_preferences.selection',direction)

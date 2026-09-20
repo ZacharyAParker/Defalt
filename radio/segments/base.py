@@ -19,6 +19,20 @@ from .. import config, llm
 MAX_WORDS_PER_LINE = 45
 MAX_LINES = 8
 
+# One available sketch approach, subordinate to the configured host personas.
+OPTIONAL_COMEDY_REFERENCE = """Optional creative reference, never a required format:
+A short sarcastic mock sales pitch can build from one concrete detail, through
+an oddly specific everyday comparison, to a dry payoff. Bite comes from the
+subject's pricing, marketing, hype or absurdity, not a pile of internet slang.
+Use this approach only if it fits; choose another structure or a sincere reaction
+when better. The configured host personalities, their own comic instincts and
+the segment's time limit take priority. Do not assign fixed setup/punchline roles
+or turn both hosts into the same roast voice. Vary openings and endings; never
+reuse sample jokes or treat example prices, specs or events as source facts.
+For news and articles, explain the story first. A brief pointed reaction is
+optional; serious stories need care, not a forced sales pitch or punchline.
+"""
+
 
 @dataclass
 class Line:
