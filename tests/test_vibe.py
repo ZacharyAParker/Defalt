@@ -96,6 +96,18 @@ class ListeningVibeTests(StationDefaults):
             self.assertEqual(vibe.current().get("description"), replacement)
             callback.assert_not_called()
 
+    def test_enrichment_callback_does_not_hold_selection_lock(self):
+        vibe.set_current('calm', enrich=False)
+        observed=[]
+        def callback():
+            worker=threading.Thread(target=lambda:observed.append(vibe.selection_revision()))
+            worker.start()
+            worker.join(timeout=1)
+            self.assertFalse(worker.is_alive(),'station callback must allow a concurrent selection snapshot')
+        with patch.object(vibe.llm,'complete_json',return_value=None):
+            vibe._enrich(copy.deepcopy(vibe.current()),callback)
+        self.assertEqual(len(observed),1)
+
     def test_submission_returns_without_waiting_for_model(self):
         with patch.object(vibe.threading.Thread, "start") as start, \
                 patch.object(vibe.llm, "complete_json", side_effect=AssertionError("blocked request")):

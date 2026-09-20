@@ -141,8 +141,10 @@ def _enrich(profile, on_change=None):
             return  # A newer set/clear wins over a slow response.
         profile["id"] = uuid.uuid4().hex
         config.station.set_many({"listening_vibe": profile})
-        if on_change:
-            on_change()
+    # Callbacks acquire the station lock. Selection snapshots may already
+    # hold that lock while reading this brief, so release ours first.
+    if on_change:
+        on_change()
 
 
 def clear():
