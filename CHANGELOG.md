@@ -1,5 +1,12 @@
 # Patch notes
 
+## 0.3.6 — September 19, 2026
+
+- The Radio booth now uses the approved Mav and Rue artwork in the app and browser, with separate host and headphone layers, restored microphones, and fixed foreground mugs.
+- Speaking mouths follow each host's audio independently, including overlapping speech. Subtle breathing, blinks, rain, city lights, and occasional cat routines bring the booth to life. The cat keeps its sleeping Zs; Reduced motion keeps the scene still while preserving speaking indicators.
+- The new booth fits the existing layout at 1080p and 1440p. Artwork and animation remain separate from audio playback.
+- The desktop shortcut uses the supplied gold record icon. Future installs retain that icon.
+
 ## 0.3.5 — September 19, 2026
 
 - Ad briefs support fictional pitches about real products, games, DLC, patches, streaming and esports. Sarcastic sales pitches are one optional style; host personalities and short segment budgets take priority. Article and news reactions can use the same bite when appropriate, with factual claims tied to source material.
@@ -119,4 +126,4 @@ Artwork is fetched and cached in the background. Studio animation does not contr
 Earlier development builds used version 0.1.0. The 0.2.0 notes collect the current release changes; they are not a claim that every feature was first written on the release date.
 
 ---
-Defalt v0.3.5 · © 2026 Zachary Parker
+Defalt v0.3.6 · © 2026 Zachary Parker

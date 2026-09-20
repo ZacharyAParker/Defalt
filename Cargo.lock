@@ -486,7 +486,7 @@ checksum = "0c87e182de0887fd5361989c677c4e8f5000cd9491d6d563161a8f3a5519fc7f"
 
 [[package]]
 name = "defalt"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "cc",
  "cpal",
@@ -1205,6 +1205,8 @@ dependencies = [
  "num-traits",
  "png",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]

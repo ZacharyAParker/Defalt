@@ -53,7 +53,8 @@ $was = $shortcut.TargetPath
 
 $shortcut.TargetPath = $exe
 $shortcut.WorkingDirectory = $root
-$shortcut.IconLocation = "$exe,0"
+$shortcutIcon = Join-Path $root 'icons\shortcut.ico'
+$shortcut.IconLocation = if (Test-Path -LiteralPath $shortcutIcon) { "$shortcutIcon,0" } else { "$exe,0" }
 $shortcut.Description = 'Defalt'
 $shortcut.Save()
 

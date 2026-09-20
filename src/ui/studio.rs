@@ -8,22 +8,34 @@ use std::{
 };
 
 const AMBER: Color32 = Color32::from_rgb(239, 189, 113);
-const CAT: [f32; 4] = [52., 437., 168., 118.];
-const MOUTHS: [[f32; 4]; 2] = [[464., 421., 70., 42.], [1005., 462., 67., 44.]];
-const EYES: [[f32; 4]; 2] = [[433., 352., 151., 48.], [978., 397., 149., 55.]];
-const POSES: [&[u8]; 3] = [
-    include_bytes!("../../web/static/studio/cat-awake.png"),
-    include_bytes!("../../web/static/studio/cat-yawn.png"),
-    include_bytes!("../../web/static/studio/cat-groom.png"),
+const W: f32 = 1728.;
+const H: f32 = 1152.;
+const CAT: [f32; 4] = [49., 251., 264., 137.];
+const HOSTS: [[f32; 4]; 2] = [[101., 183., 781., 861.], [910., 213., 681., 824.]];
+const PHONES: [[f32; 4]; 2] = [[383., 185., 328., 296.], [1077., 216., 304., 305.]];
+const ANCHORS: [f32; 2] = [1005., 1010.];
+const MOUTHS: [[f32; 4]; 2] = [[585., 463., 89., 51.], [1252., 477., 84., 55.]];
+const EYES: [[[f32; 4]; 2]; 2] = [
+    [[550., 374., 64., 40.], [634., 372., 48., 41.]],
+    [[1224., 391., 71., 47.], [1323., 405., 54., 48.]],
 ];
-
+const CAT_CROPS: [[f32; 4]; 4] = [
+    [1., 3., 264., 137.],
+    [58., 33., 1635., 848.],
+    [19., 10., 1678., 888.],
+    [40., 14., 1641., 878.],
+];
 struct Art {
     base: TextureHandle,
-    mouths: Vec<TextureHandle>,
-    eyes: Vec<TextureHandle>,
-    cats: Vec<TextureHandle>,
-    body: TextureHandle,
+    hosts: [TextureHandle; 2],
+    phones: [TextureHandle; 2],
+    mouths: TextureHandle,
+    eyes: TextureHandle,
+    cats: [TextureHandle; 4],
+    mugs: [TextureHandle; 2],
+    microphones: TextureHandle,
 }
+
 type Cover = (String, Option<(egui::ColorImage, String)>);
 pub struct Studio {
     pub enabled: bool,
@@ -35,6 +47,7 @@ pub struct Studio {
     pub(super) reduced: bool,
     preferences: PathBuf,
     art: Option<Art>,
+    preview: bool,
     clock: f32,
     last: Instant,
     holds: [f32; 2],
@@ -66,6 +79,7 @@ impl Studio {
             reduced: settings["reduced"].as_bool().unwrap_or(false),
             preferences,
             art: None,
+            preview: false,
             clock: 0.,
             last: Instant::now(),
             holds: [0.; 2],
@@ -78,6 +92,21 @@ impl Studio {
             cover_source: String::new(),
             cover_in,
             cover_out,
+        }
+    }
+    pub(crate) fn pose(&mut self, name: &str) {
+        self.preview = true;
+        self.reduced = name == "reduced";
+        self.clock = if name == "blink" { 0.05 } else { 1. };
+        self.holds = match name {
+            "mav" => [60., 0.],
+            "rue" => [0., 60.],
+            "both" => [60., 60.],
+            _ => [0., 0.],
+        };
+        if name == "yawn" {
+            self.routine = 1;
+            self.cat_start = 0.;
         }
     }
     pub fn save(&self) {
@@ -159,7 +188,7 @@ impl Studio {
         self.last = Instant::now();
         // Returning from another page or a minimized window does not fast-forward the cat.
         let dt = if elapsed < 0.25 { elapsed } else { 0. };
-        if !self.reduced {
+        if !self.reduced && !self.preview {
             self.clock += dt;
         }
         for (i, level) in levels.iter().enumerate() {
@@ -186,136 +215,126 @@ impl Studio {
         let pose = if self.routine == usize::MAX { 0 } else { pose };
         let a = self.art.as_ref().unwrap();
         let p = ui.painter().with_clip_rect(scene.intersect(ui.clip_rect()));
-        p.image(
-            a.base.id(),
-            scene,
-            Rect::from_min_max(pos2(0., 0.), pos2(1., 1.)),
-            Color32::WHITE,
-        );
-        let s = scene.width() / 1536.;
+        layer(&p, scene, &a.base, [0., 0., W, H], full_uv());
+        let s = scene.width() / W;
         let at = |x: f32, y: f32| scene.min + vec2(x * s, y * s);
+        // Weather is painted before the host layers, so silhouettes occlude it.
         if !self.reduced {
             if self.lights {
                 for (i, (x, y)) in [
-                    (678., 279.),
-                    (731., 298.),
-                    (713., 360.),
-                    (819., 330.),
-                    (924., 323.),
-                    (899., 235.),
-                    (1051., 258.),
-                    (1114., 265.),
-                    (756., 394.),
-                    (821., 391.),
+                    (771., 389.),
+                    (818., 474.),
+                    (905., 383.),
+                    (987., 430.),
+                    (1000., 514.),
+                    (748., 436.),
                 ]
                 .iter()
                 .enumerate()
                 {
-                    let alpha =
-                        (18. + 42. * (t / (5. + i as f32 * 0.43) + i as f32).sin().abs()) as u8;
+                    let alpha = (15.
+                        + 26. * (0.5 + 0.5 * (t / (5. + i as f32 * 0.4) + i as f32).sin()))
+                        as u8;
                     p.rect_filled(
-                        Rect::from_center_size(at(*x, *y), vec2(8. * s, 12. * s)),
+                        Rect::from_min_size(at(*x, *y), vec2(9., 14.) * s),
                         0.,
-                        Color32::from_rgba_unmultiplied(255, 198, 113, alpha),
+                        Color32::from_rgba_unmultiplied(255, 194, 109, alpha),
                     );
-                }
-                for x in [712., 755., 817., 866.] {
-                    for j in 0..5 {
-                        let y = 432. + j as f32 * 12.;
-                        if glass(x, y) {
-                            p.line_segment(
-                                [at(x - 5. + (t + j as f32).sin() * 2., y), at(x + 5., y)],
-                                Stroke::new(
-                                    s.max(0.5),
-                                    Color32::from_rgba_unmultiplied(
-                                        231,
-                                        170,
-                                        105,
-                                        (15. + 25. * (t * 0.6 + j as f32).sin().abs()) as u8,
-                                    ),
-                                ),
-                            );
-                        }
-                    }
                 }
             }
             if self.rain {
-                for i in 0..75 {
+                for i in 0..64 {
                     let i = i as f32;
-                    let x = 465. + (i * 73.13) % 665.;
-                    let y = 125. + (i * 53.7 + t * (45. + i % 5. * 12.)) % 390.;
-                    let len = if i > 65. { 8. } else { 12. + i % 12. };
-                    if glass(x, y) && glass(x - 2., y + len) {
+                    let x = 468. + (i * 79.73) % 660.;
+                    let y = (i * 49.17 + t * (42. + i % 6. * 7.)) % 650. - 25.;
+                    let end = pos2(x - 2., y + 11. + i % 9.);
+                    if glass(x, y) && glass(end.x, end.y) {
                         p.line_segment(
-                            [at(x, y), at(x - 2., y + len)],
+                            [at(x, y), at(end.x, end.y)],
                             Stroke::new(
-                                (1.2 * s).max(0.45),
-                                Color32::from_rgba_unmultiplied(165, 187, 226, 58),
+                                (1.1 * s).max(0.45),
+                                Color32::from_rgba_unmultiplied(173, 192, 220, 48),
                             ),
                         );
                     }
                 }
             }
         }
-        if pose > 0 {
-            patch(&p, scene, &a.cats[pose - 1], CAT, vec2(0., 0.));
-        }
-        if !self.reduced {
-            patch(
-                &p,
-                scene,
-                &a.body,
-                [58., 492., 65., 40.],
-                vec2(0., -0.7 * (1. - (t * std::f32::consts::TAU / 4.8).cos())),
-            );
-            if pose == 0 {
-                for phase in [0., 2.] {
-                    let k = (t + phase) % 4. / 4.;
-                    p.text(
-                        at(140. + k * 6., 463. - k * 30.),
-                        Align2::CENTER_CENTER,
-                        "z",
-                        FontId::monospace((17. * s).max(7.)),
-                        Color32::from_rgba_unmultiplied(
-                            194,
-                            180,
-                            188,
-                            (130. * (std::f32::consts::PI * k).sin()) as u8,
-                        ),
-                    );
+        let breath = if self.reduced {
+            0.
+        } else {
+            0.7 * (1. - (t * std::f32::consts::TAU / 4.8).cos())
+        };
+        let cat_texture = &a.cats[pose];
+        let c = CAT_CROPS[pose];
+        let sz = cat_texture.size_vec2();
+        let uv = Rect::from_min_max(
+            pos2(c[0] / sz.x, c[1] / sz.y),
+            pos2((c[0] + c[2]) / sz.x, (c[1] + c[3]) / sz.y),
+        );
+        layer(
+            &p,
+            scene,
+            cat_texture,
+            [CAT[0], CAT[1] - breath, CAT[2], CAT[3] + breath],
+            uv,
+        );
+        if pose == 0 {
+            for phase in [0., 2.] {
+                let k = if self.reduced {
+                    0.4
+                } else {
+                    (t + phase) % 4. / 4.
+                };
+                p.text(
+                    at(155. + k * 9., 261. - k * 32.),
+                    Align2::LEFT_BOTTOM,
+                    "z",
+                    FontId::monospace((18. * s).max(7.)),
+                    Color32::from_rgba_unmultiplied(
+                        204,
+                        191,
+                        200,
+                        (153. * (std::f32::consts::PI * k).sin()) as u8,
+                    ),
+                );
+                if self.reduced {
+                    break;
                 }
             }
         }
         for i in 0..2 {
+            let stretch = if self.reduced {
+                1.
+            } else {
+                1. + 0.0016
+                    * (1. - (t * std::f32::consts::TAU / (5.4 + i as f32 * 0.6) + i as f32).cos())
+            };
+            let posed = |r| breathing_rect(r, ANCHORS[i], stretch);
+            layer(&p, scene, &a.hosts[i], posed(HOSTS[i]), full_uv());
+            layer(&p, scene, &a.phones[i], posed(PHONES[i]), full_uv());
             let speaking = if self.reduced {
                 levels[i] > 0.018
             } else {
                 t < self.holds[i]
             };
             if speaking {
-                patch(&p, scene, &a.mouths[i], MOUTHS[i], vec2(0., 0.));
+                face_patch(&p, scene, &a.mouths, MOUTHS[i], posed(MOUTHS[i]));
             }
             if !self.reduced
                 && (t + if i == 0 { 0. } else { 1.7 }) % if i == 0 { 5.1 } else { 6.7 } < 0.14
             {
-                patch(&p, scene, &a.eyes[i], EYES[i], vec2(0., 0.));
+                for eye in EYES[i] {
+                    face_patch(&p, scene, &a.eyes, eye, posed(eye));
+                }
             }
-            let r = Rect::from_min_size(
-                at(if i == 0 { 280. } else { 1040. }, 944.),
-                vec2(180. * s, 43. * s),
-            );
-            p.rect_filled(r, 2., Color32::from_black_alpha(190));
-            p.text(
-                r.center(),
-                Align2::CENTER_CENTER,
-                if i == 0 { "MAV" } else { "RUE" },
-                FontId::proportional((18. * s).max(9.)),
-                if speaking { AMBER } else { theme::TEXT_DIM },
-            );
         }
+        layer(&p, scene, &a.mugs[0], [416., 892., 164., 175.], full_uv());
+        layer(&p, scene, &a.mugs[1], [1095., 921., 184., 175.], full_uv());
+        layer(&p, scene, &a.microphones, [0., 0., W, H], full_uv());
         if ui
             .interact(
-                Rect::from_min_size(at(52., 437.), vec2(168. * s, 118. * s)),
+                Rect::from_min_size(at(CAT[0], CAT[1]), vec2(CAT[2], CAT[3]) * s),
                 ui.id().with("cat"),
                 Sense::click(),
             )
@@ -334,75 +353,92 @@ impl Studio {
     }
 }
 
-fn patch(
-    p: &egui::Painter,
-    scene: Rect,
-    texture: &TextureHandle,
-    crop: [f32; 4],
-    offset: egui::Vec2,
-) {
-    let s = scene.width() / 1536.;
-    let r = Rect::from_min_size(
-        scene.min + vec2(crop[0] + offset.x, crop[1] + offset.y) * s,
-        vec2(crop[2], crop[3]) * s,
-    );
+fn full_uv() -> Rect {
+    Rect::from_min_max(pos2(0., 0.), pos2(1., 1.))
+}
+fn breathing_rect(mut r: [f32; 4], anchor: f32, scale: f32) -> [f32; 4] {
+    r[1] = anchor + (r[1] - anchor) * scale;
+    r[3] *= scale;
+    r
+}
+fn layer(p: &egui::Painter, scene: Rect, texture: &TextureHandle, r: [f32; 4], uv: Rect) {
+    let s = scene.width() / W;
     p.image(
         texture.id(),
-        r,
-        Rect::from_min_max(pos2(0., 0.), pos2(1., 1.)),
+        Rect::from_min_size(scene.min + vec2(r[0], r[1]) * s, vec2(r[2], r[3]) * s),
+        uv,
         Color32::WHITE,
     );
 }
+fn face_patch(
+    p: &egui::Painter,
+    scene: Rect,
+    texture: &TextureHandle,
+    source: [f32; 4],
+    dest: [f32; 4],
+) {
+    // An elliptical mesh samples only the mouth/eyelids; no rectangular skin seams.
+    let mut mesh = egui::Mesh::with_texture(texture.id());
+    let s = scene.width() / W;
+    for i in 0..=49 {
+        let v = if i == 0 {
+            vec2(0.5, 0.5)
+        } else {
+            let a = (i - 1) as f32 * std::f32::consts::TAU / 48.;
+            vec2(0.5 + 0.5 * a.cos(), 0.5 + 0.5 * a.sin())
+        };
+        mesh.vertices.push(egui::epaint::Vertex {
+            pos: scene.min + vec2(dest[0] + v.x * dest[2], dest[1] + v.y * dest[3]) * s,
+            uv: pos2(
+                (source[0] + v.x * source[2]) / W,
+                (source[1] + v.y * source[3]) / H,
+            ),
+            color: Color32::WHITE,
+        });
+        if i > 1 {
+            mesh.indices.extend_from_slice(&[0, i - 1, i]);
+        }
+    }
+    p.add(egui::Shape::mesh(mesh));
+}
 impl Art {
     fn load(ctx: &egui::Context) -> Self {
-        let idle =
-            image::load_from_memory(include_bytes!("../../web/static/studio/studio-idle.png"))
-                .expect("embedded studio");
-        let speaking = image::load_from_memory(include_bytes!(
-            "../../web/static/studio/studio-speaking.png"
-        ))
-        .expect("embedded mouths");
-        let blinking =
-            image::load_from_memory(include_bytes!("../../web/static/studio/studio-blink.png"))
-                .expect("embedded eyes");
-        fn texture(ctx: &egui::Context, name: &str, image: image::DynamicImage) -> TextureHandle {
-            let data = image.to_rgba8();
+        fn texture(ctx: &egui::Context, name: &str, bytes: &[u8]) -> TextureHandle {
+            let data = image::load_from_memory(bytes)
+                .expect("embedded studio layer")
+                .to_rgba8();
             ctx.load_texture(
                 name,
                 egui::ColorImage::from_rgba_unmultiplied(
                     [data.width() as usize, data.height() as usize],
                     data.as_raw(),
                 ),
-                egui::TextureOptions::NEAREST,
+                egui::TextureOptions::LINEAR,
             )
         }
-        fn cropped(image: &image::DynamicImage, c: [f32; 4]) -> image::DynamicImage {
-            image.crop_imm(c[0] as u32, c[1] as u32, c[2] as u32, c[3] as u32)
+        macro_rules! art {
+            ($name:literal) => {
+                texture(
+                    ctx,
+                    $name,
+                    include_bytes!(concat!("../../web/static/studio-v2/", $name)),
+                )
+            };
         }
         Self {
-            mouths: MOUTHS
-                .iter()
-                .enumerate()
-                .map(|(i, c)| texture(ctx, &format!("mouth-{i}"), cropped(&speaking, *c)))
-                .collect(),
-            eyes: EYES
-                .iter()
-                .enumerate()
-                .map(|(i, c)| texture(ctx, &format!("eyes-{i}"), cropped(&blinking, *c)))
-                .collect(),
-            cats: POSES
-                .iter()
-                .enumerate()
-                .map(|(i, b)| {
-                    texture(
-                        ctx,
-                        &format!("cat-{i}"),
-                        cropped(&image::load_from_memory(b).expect("embedded cat"), CAT),
-                    )
-                })
-                .collect(),
-            body: texture(ctx, "cat-body", cropped(&idle, [58., 492., 65., 40.])),
-            base: texture(ctx, "studio", idle),
+            base: art!("background.png"),
+            hosts: [art!("man.png"), art!("woman.png")],
+            phones: [art!("headphones-mav.png"), art!("headphones-rue.png")],
+            mouths: art!("speaking.jpg"),
+            eyes: art!("blink.png"),
+            cats: [
+                art!("sleeping-cat.png"),
+                art!("cat-awake.png"),
+                art!("cat-yawn.png"),
+                art!("cat-groom.png"),
+            ],
+            mugs: [art!("black-mug.png"), art!("white-mug.png")],
+            microphones: art!("microphones.png"),
         }
     }
 }
@@ -441,53 +477,7 @@ fn cat_pose(routine: usize, t: f32) -> (usize, f32) {
     )
 }
 fn glass(x: f32, y: f32) -> bool {
-    if !(465. ..1130.).contains(&x)
-        || !(125. ..507.).contains(&y)
-        || (551. ..575.).contains(&x)
-        || (990. ..1009.).contains(&x)
-    {
-        return false;
-    }
-    let boundary = [
-        (465., 188.),
-        (474., 188.),
-        (535., 207.),
-        (590., 231.),
-        (640., 275.),
-        (671., 330.),
-        (675., 390.),
-        (666., 448.),
-        (709., 460.),
-        (762., 481.),
-        (790., 507.),
-        (826., 507.),
-        (843., 480.),
-        (864., 442.),
-        (888., 408.),
-        (912., 364.),
-        (940., 326.),
-        (978., 294.),
-        (1030., 277.),
-        (1070., 262.),
-        (1130., 260.),
-    ];
-    // Point-in-polygon keeps drops behind the irregular silhouettes of the hosts.
-    let mut polygon = [(0.0, 0.0); 23];
-    polygon[0] = (465., 125.);
-    polygon[1] = (1130., 125.);
-    for (i, point) in boundary.iter().rev().enumerate() {
-        polygon[i + 2] = *point;
-    }
-    let mut inside = false;
-    let mut j = polygon.len() - 1;
-    for i in 0..polygon.len() {
-        let (a, b) = (polygon[i], polygon[j]);
-        if (a.1 > y) != (b.1 > y) && x < (b.0 - a.0) * (y - a.1) / (b.1 - a.1) + a.0 {
-            inside = !inside;
-        }
-        j = i;
-    }
-    inside
+    (466. ..1131.).contains(&x) && (0. ..618.).contains(&y) && !(709. ..726.).contains(&x)
 }
 
 pub fn draw(app: &mut crate::Defalt, ui: &mut Ui, rect: Rect) {
@@ -706,11 +696,23 @@ pub fn draw(app: &mut crate::Defalt, ui: &mut Ui, rect: Rect) {
 mod tests {
     use super::*;
     #[test]
-    fn rain_stays_off_hosts_and_window_frames() {
+    fn layered_art_decodes_with_matching_face_canvases() {
+        let art = Art::load(&egui::Context::default());
+        assert_eq!(art.mouths.size(), [1728, 1152]);
+        assert_eq!(art.eyes.size(), [1536, 1024]);
+        assert_eq!(art.microphones.size(), [1536, 1024]);
+        for (i, cat) in art.cats.iter().enumerate() {
+            let crop = CAT_CROPS[i];
+            assert!(crop[0] + crop[2] <= cat.size()[0] as f32);
+            assert!(crop[1] + crop[3] <= cat.size()[1] as f32);
+        }
+    }
+    #[test]
+    fn rain_stays_inside_window_panes() {
         assert!(glass(800., 160.));
-        assert!(!glass(520., 350.));
-        assert!(!glass(1050., 400.));
-        assert!(!glass(560., 150.));
+        assert!(!glass(450., 350.));
+        assert!(!glass(800., 650.));
+        assert!(!glass(718., 150.));
     }
     #[test]
     fn every_cat_routine_returns_to_sleep() {

@@ -2,7 +2,6 @@
 (() => {
   'use strict';
   const $ = id => document.getElementById(id);
-  const ns = 'http://www.w3.org/2000/svg';
   const cat = $('cat-life');
   let visible = true, clock = 0, sequenceStart = 0, sequence = null;
   const napLength = () => 90 + Math.random()*90;
@@ -18,46 +17,10 @@
     stretch: {label: 'Wake up. Yawn. Wash. Back to work, apparently.', frames: [[0,'awake'],[1,'yawn'],[2.5,'awake'],[3.3,'groom'],[4.4,'awake'],[5.6,'sleep']], duration: 6},
     reaction: {label: 'Both hosts at once? The cat would like a word.', frames: [[0,'awake'],[2.4,'sleep']], duration: 3},
   };
-  const ready = new Set();
-  document.querySelectorAll('.cat-frame').forEach(img => {
-    const loaded = () => { if (img.naturalWidth) ready.add(img); };
-    if (img.complete) loaded(); else img.addEventListener('load', loaded, {once:true});
-    img.addEventListener('error', () => { $('cat-note').textContent = 'Cat frames unavailable. The cat is sleeping this one out.'; });
-  });
-
-  function rect(parent, x, y, width, height, className, duration, delay) {
-    const shape = document.createElementNS(ns, 'rect');
-    for (const [key, value] of Object.entries({x,y,width,height,class:className})) shape.setAttribute(key, value);
-    shape.style.animationDuration = `${duration}s`;
-    shape.style.animationDelay = `${delay}s`;
-    parent.append(shape);
-  }
-  // Fixed seed makes the composition reproducible without synchronized drops.
-  let seed = 719;
-  function random() { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; }
-  for (let i = 0; i < 66; i++) {
-    rect($('window-rain'), 460 + random()*680, 80 + random()*440,
-         i % 4 ? 1.5 : 2, 8 + random()*19, 'rain-streak', 1.7 + random()*1.8, -random()*5);
-  }
-  for (let i = 0; i < 9; i++) {
-    rect($('window-rain'), 485 + random()*620, 140 + random()*190,
-         2, 5 + random()*11, 'glass-drop', 7 + random()*7, -random()*15);
-  }
-  [[675,274,7,11],[726,293,9,12],[706,352,13,16],[814,320,11,19],
-   [917,315,13,17],[895,229,10,12],[1047,252,7,12],[1110,260,7,10],
-   [752,388,9,12],[818,386,8,11],[754,359,6,10],[658,392,5,12],
-   [679,318,5,10],[863,395,6,9],[780,386,4,7]].forEach(([x,y,w,h], i) => {
-    rect($('city-lights'), x,y,w,h,'city-lamp', 4.5 + random()*8, -i*1.7);
-  });
-  for (const x of [712,755,817,866]) {
-    for (let i = 0; i < 5; i++) rect($('city-lights'), x-6+(i%2)*3,432+i*12,13-i,2,
-      'water-light', 4 + random()*4, -random()*8);
-  }
-
   const motionAllowed = () => !$('reduced').checked && $('cat-enabled').checked;
   function rest() { sequence = null; cat.dataset.pose = 'sleep'; }
   function begin(name) {
-    if (!motionAllowed() || ready.size < 3) return;
+    if (!motionAllowed() || !window.StudioScene?.ready) return;
     sequence = routines[name]; sequenceStart = clock; lastRoutine = name;
     nextReaction = clock + 120;
     cat.dataset.pose = sequence.frames[0][1];

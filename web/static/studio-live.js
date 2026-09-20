@@ -10,22 +10,21 @@
   }
   function sync(){document.body.classList.toggle('reduced',$('reduced').checked);}
   preference.addEventListener('change',()=>{$('reduced').checked=preference.matches;sync();});sync();
-  let last=0,time=0,key='',generation=0;
+  let last=0,key='',generation=0;
   const holds={mav:0,rue:0};
   window.LiveStudio={update(levels,music){
     const now=performance.now();if(now-last<32)return;
-    const dt=last ? Math.min(.1,(now-last)/1000):0;last=now;
-    if(!$('reduced').checked)time+=dt;
+    const elapsed=last ? (now-last)/1000:0;last=now;
+    const dt=elapsed<.25 ? elapsed:0;
     for(const [index,host] of ['mav','rue'].entries()){
       if(levels[host]>.018)holds[host]=now+75;
       const speaking=now<holds[host];
-      document.querySelector(`.${host}-mouth`).classList.toggle('open',speaking);
-      document.querySelector(`.${host}-eyes`).classList.toggle('blink',!$('reduced').checked&&(time+index*1.7)%(index?6.7:5.1)<.14);
       $(`${host}-tag`).classList.toggle('speaking',speaking);
     }
     const both=now<holds.mav&&now<holds.rue;
     $('studio-status').textContent=both?'Both mics open':now<holds.mav?'Mav has the mic':now<holds.rue?'Rue has the mic':music?'On air':'Between records';
     window.StudioAmbience?.tick(dt,both);
+    window.StudioScene?.update(dt,{mav:now<holds.mav,rue:now<holds.rue});
     $('studio-vinyl').classList.toggle('playing',!!music);
     const next=music?.meta?.key||'';
     if(next!==key){

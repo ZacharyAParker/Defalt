@@ -72,23 +72,9 @@
   <main class="deck">
 <div class="booth-column">
         <section class="studio live-booth" aria-label="Mav and Rue in their radio studio">
-          <img class="scene" src="/static/studio/studio-idle.png" alt="Mav and Rue at a wooden broadcast desk, overlooking a rainy town at night." width="1536" height="1024">
-          <svg class="window-life" id="window-life" viewBox="0 0 1536 1024" aria-hidden="true">
-            <defs><clipPath id="window-glass"><path d="M465 125H551V207L474 188H465Z M575 125H990V277L978 294L940 326L912 364L888 408L864 442L843 480L826 507H790L762 481L709 460L666 448L675 390L671 330L640 275L590 231L575 223Z M1009 125H1130V260L1070 262L1030 277H1009Z"/></clipPath></defs>
-            <g clip-path="url(#window-glass)"><g id="city-lights"></g><g id="window-rain"></g></g>
-          </svg>
-          <div class="cat-life" id="cat-life" aria-hidden="true">
-            <img class="scene cat-frame cat-awake" src="/static/studio/cat-awake.png" alt="" width="1536" height="1024">
-            <img class="scene cat-frame cat-yawn" src="/static/studio/cat-yawn.png" alt="" width="1536" height="1024">
-            <img class="scene cat-frame cat-groom" src="/static/studio/cat-groom.png" alt="" width="1536" height="1024">
-            <img class="scene cat-breath" src="/static/studio/studio-idle.png" alt="" width="1536" height="1024">
-            <span class="cat-dream">z</span><span class="cat-dream second">z</span>
-          </div>
+          <canvas class="scene" id="studio-scene" width="1728" height="1152" role="img" aria-label="Mav and Rue at the broadcast desk, with a sleeping cat and a rainy city outside."></canvas>
+          <div id="cat-life" data-pose="sleep" hidden></div>
           <button class="cat-hotspot" id="cat-pet" aria-label="Say hello to the studio cat" title="Say hello to the studio cat"></button>
-          <img class="scene mouth mav-mouth" src="/static/studio/studio-speaking.png" alt="" aria-hidden="true" width="1536" height="1024">
-          <img class="scene mouth rue-mouth" src="/static/studio/studio-speaking.png" alt="" aria-hidden="true" width="1536" height="1024">
-          <img class="scene eyes mav-eyes" src="/static/studio/studio-blink.png" alt="" aria-hidden="true" width="1536" height="1024">
-          <img class="scene eyes rue-eyes" src="/static/studio/studio-blink.png" alt="" aria-hidden="true" width="1536" height="1024">
           <div class="studio-status"><span class="signal-dot"></span><span id="studio-status">Between records</span></div>
           <div class="host-tags"><span id="mav-tag"><i></i>MAV <small>the anchor</small></span><span id="rue-tag"><i></i>RUE <small>the wildcard</small></span></div>
         </section>
@@ -305,6 +291,7 @@
 <script src="/static/about.js" defer></script>
 <script src="/static/visualizer.js" defer></script>
 <script src="/static/radio.js" defer></script>
+<script src="/static/studio-scene.js"></script>
 <script src="/static/studio-live.js"></script>
 <script src="/static/studio-ambience.js"></script>
 </body>

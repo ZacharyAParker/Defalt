@@ -1107,6 +1107,10 @@ impl Defalt {
                 }
             }
             if std::env::var_os("DEFALT_SHOT_RADIO").is_some() { self.view = View::Radio; }
+            if let Ok(pose) = std::env::var("DEFALT_SHOT_STUDIO") {
+                self.view = View::Radio;
+                self.studio.pose(&pose);
+            }
             if std::env::var_os("DEFALT_SHOT_SPECTRUM").is_some() {
                 self.view = View::Radio;
                 self.studio.visualizer = true;
