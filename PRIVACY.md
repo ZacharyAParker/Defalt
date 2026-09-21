@@ -1,6 +1,6 @@
 # Privacy policy
 
-Effective September 20, 2026. Applies to Defalt 0.3.8 as distributed in this repository.
+Effective September 20, 2026. Applies to Defalt 0.3.9 as distributed in this repository.
 
 ## The short version
 
@@ -52,4 +52,4 @@ The server binds to loopback by default and has no public-facing authentication.
 Material changes to these practices will be reflected in this document with a new effective date. The version bundled with a native executable describes that build; the repository may describe a newer release. Contact the maintainer through the Defalt repository on GitHub. Do not include credentials, private listening records, or other sensitive data in public issues.
 
 ---
-Defalt v0.3.8 · © 2026 Zachary Parker
+Defalt v0.3.9 · © 2026 Zachary Parker

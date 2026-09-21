@@ -1,5 +1,10 @@
 # Patch notes
 
+## 0.3.9 — September 20, 2026
+
+- Mav, Rue, Director briefs, and fictional ads now use the updated humor preferences: short shared bits, specific requested roasts, and occasional deliberately bad wordplay. Each host keeps their own personality. Private anecdotes stay private, factual claims still need source material, and stock contrast punchlines remain excluded.
+- Fixed saved settings masking the rest of a configuration group. For example, saving the personal-comment toggle no longer drops the station-wide humor guidance from the writer's brief. Explicit overrides still win, while unchanged settings continue to use the current defaults.
+
 ## 0.3.8 — September 20, 2026
 
 - Radio now discovers unfamiliar songs related to your favorites and current music direction. Suggestions are verified against the Spotify catalog in the background, with new artists and familiar artists' deep cuts mixed into the automatic pool.
@@ -142,4 +147,4 @@ Artwork is fetched and cached in the background. Studio animation does not contr
 Earlier development builds used version 0.1.0. The 0.2.0 notes collect the current release changes; they are not a claim that every feature was first written on the release date.
 
 ---
-Defalt v0.3.8 · © 2026 Zachary Parker
+Defalt v0.3.9 · © 2026 Zachary Parker

@@ -43,7 +43,7 @@ Say **"go back to normal"** to resume usual taste-based suggestions for this ses
 
 You can also ask the director to commission a fake ad, such as "give the hosts a sarcastic ad about recent gaming news." That explicit request sends only its ad brief to the writer; ordinary conversation stays private. The ad prepares for the next host break unless you ask for it now. News-based ads need sufficiently detailed recent source material. Preparation failures appear under Ad break and do not substitute an unrelated stock read. Longer scripts can be discussed or adapted into the station's short ad format; chat accepts up to 12,000 characters, with a scrolling draft box and visible Send controls.
 
-Current release: **0.3.8**. Read the [patch notes](CHANGELOG.md),
+Current release: **0.3.9**. Read the [patch notes](CHANGELOG.md),
 [privacy policy](PRIVACY.md), [terms of use](TERMS.md), and
 [copyright information](COPYRIGHT.md). The same pages open from the app footer
 without leaving Console or Radio or stopping playback.
@@ -202,4 +202,4 @@ command above skips them. Node is only needed for the browser tests
 third-party audio code and its licenses are listed in [vendor/README.md](vendor/README.md)
 
 ---
-Defalt v0.3.8 · © 2026 Zachary Parker
+Defalt v0.3.9 · © 2026 Zachary Parker

@@ -104,6 +104,12 @@ class OverridableConfig:
         sentinel = object()
         value = self.override.get(dotted, sentinel)
         if value is not sentinel:
+            # A saved child setting must not hide its unchanged siblings when
+            # a caller reads the whole group (for example hosts.humour).
+            if isinstance(value, dict):
+                base = self.base.get(dotted, sentinel)
+                if isinstance(base, dict):
+                    return _deep_merge(base, value)
             return value
         return self.base.get(dotted, default)
 
