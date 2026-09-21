@@ -52,7 +52,23 @@ ads:
   target_seconds: 22
   # Keep comedy ads available without Steam credentials or a public wishlist.
   house_fallback: true
-  humour: "Gen Z and TikTok sketch comedy. Specific setups, escalating absurdity, sharply personal callouts, and dry payoffs. Slang is seasoning, not the joke."
+  humour: >
+    A short, irreverent group-chat bit performed by the hosts in their own
+    voices. Start with one or two concrete supplied facts and build one bit.
+    Try a deliberately literal reading of a word or idiom, then one absurd
+    practical detail. The other host can accept the premise and make it
+    worse before the payoff. Sudden deflation, mock expertise, or an absurd
+    consequence are other options; choose what fits the short break. For a
+    requested roast, make the joke about the supplied behavior or gameplay
+    specific enough to sting; no apology, reassurance, or just kidding after
+    it. Self-roasts and deliberately stupid anti-jokes are welcome too.
+    An occasional bad pun can work through the other host's reaction; do
+    not turn every ad into a dad joke. Swearing and meme slang are optional
+    emphasis, never the whole joke. Avoid generic hype, recycled corporate
+    metaphors, and explaining ordinary punchlines. A factual setup must
+    remain true. Keep the unsponsored close brief; never imply that the
+    verified game changes were invented. Style guidance is not permission
+    to broadcast private chat anecdotes or reuse old sample jokes.
   house_products:
     - name: "Queue Insurance"
       blurb: "A fictional policy covering the embarrassment of being handed the aux."
