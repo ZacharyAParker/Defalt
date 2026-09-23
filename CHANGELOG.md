@@ -1,5 +1,19 @@
 # Patch notes
 
+## 0.4.0 — September 23, 2026
+
+- Transitions got creative. Eleven new techniques join the six blends: echo out, loop rolls (4 → 2 → 1 → ½ beat), brake, spinback, echo freeze, reverb wash, stem swap, a cappella intro, filter ride, silence punch and drop swap. A selector chooses from the energy change, tempo gap, key fit, genre and time of day, avoids repeating the last three, and never stacks two vocals or puts effects under host speech. **Creativity** in Mix settings runs from smooth radio to show-off DJ; each technique can be switched off or pinned. Up next shows the technique, and the hosts occasionally mention a flashy one.
+- Mixes land on 8-bar phrases. Downbeats, song sections, key detection and a new energy measure replace loudness guesses; pairs that clash can be pitched a little into a compatible key when key lock is off.
+- The director understands eras. "Queue songs from 2010-2015", "play some 90s R&B" and "early 2000s pop punk" queue real catalog recordings; "keep it 80s" steers automatic picks. Missing years, albums and genres are filled in from Spotify in the background.
+- The native engine plays every transition itself, sample-accurate even while minimized. New: loops and auto-loops, quantize, phase sync, a master limiter with a meter, reverb and a send/return echo whose tail rings out, and an FX rack. The EQ is now a true three-band isolator, and play, pause, cue and seek no longer click.
+- Remote listening. With a Cloudflare Tunnel and Access configured, the console's own mix streams to `/listen`, and the radio page installs to a phone's home screen with lock-screen controls. The tunnel runs only while the radio is on, and every remote request must carry a valid Access token. See [Remote listening](docs/REMOTE.md).
+- **Report a bug** (F8, or the footer) saves a report with the station context, a screenshot and the logs around that moment to `reports/`.
+- The hosts know the day and time, keep a memory of running bits across restarts, trim long drafts instead of discarding them, and render voice lines in parallel with a consistent fallback voice. Optional Open-Meteo weather is off until you set a location.
+- Reliability: audio recovers from device changes and high sample rates, one failed request no longer takes the radio off air, background processes stop with the console, the station restarts itself if it crashes, and queued songs are no longer cleaned out of the cache before they play.
+- Other websites can no longer control the local server. The console and browser follow live updates over one event stream instead of constant polling, and both idle properly.
+- The browser player keeps less audio in memory, corrects clock drift, uses fonts bundled with the app, and loads the studio art in about 0.4 MB instead of 10 MB.
+- Run `python -m radio.cli reanalyse` once to give existing songs the new key, energy, phrase and similarity data.
+
 ## 0.3.9 — September 20, 2026
 
 - Mav, Rue, Director briefs, and fictional ads now use the updated humor preferences: short shared bits, specific requested roasts, and occasional deliberately bad wordplay. Each host keeps their own personality. Private anecdotes stay private, factual claims still need source material, and stock contrast punchlines remain excluded.
@@ -147,4 +161,4 @@ Artwork is fetched and cached in the background. Studio animation does not contr
 Earlier development builds used version 0.1.0. The 0.2.0 notes collect the current release changes; they are not a claim that every feature was first written on the release date.
 
 ---
-Defalt v0.3.9 · © 2026 Zachary Parker
+Defalt v0.4.0 · © 2026 Zachary Parker

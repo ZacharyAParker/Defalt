@@ -1,0 +1,224 @@
+{
+  "background": {
+    "file": "background.webp",
+    "size": [
+      1536,
+      1024
+    ],
+    "bytes": 117054,
+    "from": "background.png"
+  },
+  "microphones": {
+    "file": "microphones.webp",
+    "size": [
+      1536,
+      1024
+    ],
+    "bytes": 54234,
+    "from": "microphones.png"
+  },
+  "mav": {
+    "file": "mav.webp",
+    "size": [
+      781,
+      861
+    ],
+    "bytes": 46264,
+    "from": "man.png"
+  },
+  "rue": {
+    "file": "rue.webp",
+    "size": [
+      681,
+      824
+    ],
+    "bytes": 57494,
+    "from": "woman.png"
+  },
+  "mav-phones": {
+    "file": "mav-phones.webp",
+    "size": [
+      328,
+      296
+    ],
+    "bytes": 4542,
+    "from": "headphones-mav.png"
+  },
+  "rue-phones": {
+    "file": "rue-phones.webp",
+    "size": [
+      304,
+      305
+    ],
+    "bytes": 3916,
+    "from": "headphones-rue.png"
+  },
+  "black-mug": {
+    "file": "black-mug.webp",
+    "size": [
+      164,
+      175
+    ],
+    "bytes": 2964,
+    "from": "black-mug.png"
+  },
+  "white-mug": {
+    "file": "white-mug.webp",
+    "size": [
+      184,
+      175
+    ],
+    "bytes": 5948,
+    "from": "white-mug.png"
+  },
+  "mav-mouth": {
+    "file": "mav-mouth.webp",
+    "size": [
+      89,
+      51
+    ],
+    "bytes": 1046,
+    "from": "speaking.jpg",
+    "rect": [
+      585,
+      463,
+      89,
+      51
+    ]
+  },
+  "rue-mouth": {
+    "file": "rue-mouth.webp",
+    "size": [
+      84,
+      55
+    ],
+    "bytes": 990,
+    "from": "speaking.jpg",
+    "rect": [
+      1252,
+      477,
+      84,
+      55
+    ]
+  },
+  "mav-eye-0": {
+    "file": "mav-eye-0.webp",
+    "size": [
+      64,
+      40
+    ],
+    "bytes": 554,
+    "from": "blink.png",
+    "rect": [
+      550,
+      374,
+      64,
+      40
+    ]
+  },
+  "mav-eye-1": {
+    "file": "mav-eye-1.webp",
+    "size": [
+      48,
+      41
+    ],
+    "bytes": 508,
+    "from": "blink.png",
+    "rect": [
+      634,
+      372,
+      48,
+      41
+    ]
+  },
+  "rue-eye-0": {
+    "file": "rue-eye-0.webp",
+    "size": [
+      71,
+      47
+    ],
+    "bytes": 906,
+    "from": "blink.png",
+    "rect": [
+      1224,
+      391,
+      71,
+      47
+    ]
+  },
+  "rue-eye-1": {
+    "file": "rue-eye-1.webp",
+    "size": [
+      54,
+      48
+    ],
+    "bytes": 578,
+    "from": "blink.png",
+    "rect": [
+      1323,
+      405,
+      54,
+      48
+    ]
+  },
+  "cat-sleep": {
+    "file": "cat-sleep.webp",
+    "size": [
+      528,
+      274
+    ],
+    "bytes": 18908,
+    "from": "sleeping-cat.png",
+    "rect": [
+      49,
+      251,
+      264,
+      137
+    ]
+  },
+  "cat-awake": {
+    "file": "cat-awake.webp",
+    "size": [
+      528,
+      274
+    ],
+    "bytes": 30524,
+    "from": "cat-awake.png",
+    "rect": [
+      49,
+      251,
+      264,
+      137
+    ]
+  },
+  "cat-yawn": {
+    "file": "cat-yawn.webp",
+    "size": [
+      528,
+      274
+    ],
+    "bytes": 30904,
+    "from": "cat-yawn.png",
+    "rect": [
+      49,
+      251,
+      264,
+      137
+    ]
+  },
+  "cat-groom": {
+    "file": "cat-groom.webp",
+    "size": [
+      528,
+      274
+    ],
+    "bytes": 28614,
+    "from": "cat-groom.png",
+    "rect": [
+      49,
+      251,
+      264,
+      137
+    ]
+  }
+}

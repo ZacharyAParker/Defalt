@@ -1,5 +1,8 @@
 # Manually reviewed sources. Exact artist + title for song memes; artist
 # callbacks explicitly identify their origin. Never treat model recall as proof.
+# spoken / spoken_quote may address the listener's queue; the optional
+# spoken_station / spoken_quote_station variants air instead when the station
+# picked the song itself, so an automatic pick is never blamed on the listener.
 references:
   - id: rickroll
     scope: song
@@ -9,6 +12,7 @@ references:
     source: https://knowyourmeme.com/memes/rickroll/
     reviewed: '2026-09-18'
     spoken: Rick Astley. You put the Rickroll directly in your queue. Even the internet used to give you a surprise first.
+    spoken_station: Rick Astley. We put the Rickroll directly into our own rotation. Even the internet used to give people a surprise first.
   - id: weezered
     scope: song
     artists: [Weezer]
@@ -19,6 +23,8 @@ references:
     quote: Get Weezered
     spoken_quote: Get Weezered. Buddy Holly has turned your listening session into a booby trap with guitars.
     spoken: Buddy Holly. Getting Weezered is supposed to be a surprise. Your queue has removed the last remaining safeguard.
+    spoken_quote_station: Get Weezered. Buddy Holly has turned our own rotation into a booby trap with guitars.
+    spoken_station: Buddy Holly. Getting Weezered is supposed to be a surprise. Our rotation has removed the last remaining safeguard.
   - id: kendrick_mustard
     scope: song
     artists: [Kendrick Lamar]
@@ -29,6 +35,8 @@ references:
     quote: Mustard!
     spoken_quote: Mustard! Kendrick made a producer shout into a meme. Your queue has condiment notifications enabled.
     spoken: Kendrick's Mustard shout became a meme. Your queue has condiment notifications enabled.
+    spoken_quote_station: Mustard! Kendrick made a producer shout into a meme. Our rotation has condiment notifications enabled.
+    spoken_station: Kendrick's Mustard shout became a meme. Our rotation has condiment notifications enabled.
   - id: drakeposting
     scope: artist
     artists: [Drake]
@@ -36,6 +44,7 @@ references:
     source: https://knowyourmeme.com/memes/drakeposting
     reviewed: '2026-09-18'
     spoken: Drake's Hotline Bling reaction panels, applied to this queue. Broaden your horizons? Rejected. More Drake? Approved.
+    spoken_station: Drake's Hotline Bling reaction panels, applied to our own rotation. Broaden our horizons? Rejected. More Drake? Approved.
   - id: nickelback_graph
     scope: song
     artists: [Nickelback]
@@ -95,3 +104,5 @@ references:
     quote: It's not clocking to you
     spoken_quote: "Bieber's viral phrase: It's not clocking to you. That's me explaining the shuffle button to a queue with this much confidence."
     spoken: That Bieber clocking phrase has meme status. Meanwhile, explaining shuffle to this queue remains a full-time job.
+    spoken_quote_station: "Bieber's viral phrase: It's not clocking to you. That's me explaining the shuffle button to our own rotation with this much confidence."
+    spoken_station: That Bieber clocking phrase has meme status. Meanwhile, explaining shuffle to our own rotation remains a full-time job.

@@ -23,8 +23,9 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
-from . import config, db, discovery, library, taste, timeline, trends, tts, wishes, vibe
+from . import analysis, config, db, discovery, library, taste, timeline, trends, tts, wishes, vibe
 from .segments import writers
 from .segments.base import Line
 
@@ -43,8 +44,27 @@ def _log(*parts: Any) -> None:
         print("[director]", *parts, flush=True)
 
 
+def audio_present(track: dict[str, Any]) -> bool:
+    return bool(track.get("file")) and Path(track["file"]).is_file()
+
+
+def media_url(track: dict[str, Any]) -> str:
+    """Where both players fetch a record's audio.
+
+    Library files stay where the listener keeps them and are served by key;
+    downloads live in the station's audio cache.
+    """
+    if track.get("source") == "local" and track.get("key"):
+        return "/media/track/" + quote(str(track["key"]), safe="")
+    return f"/media/audio/{Path(track['file']).name}"
+
+
 class Clock:
-    """Station time. Pauses when nobody is listening."""
+    """Station time. Pauses when nobody is listening.
+
+    Monotonic: a wall-clock correction (NTP, DST, a manual change) must never
+    jump the schedule forward or back under the listener.
+    """
 
     def __init__(self) -> None:
         self._elapsed = 0.0
@@ -55,19 +75,19 @@ class Clock:
     def now(self) -> float:
         with self._lock:
             if self._running:
-                return self._elapsed + (time.time() - self._mark)
+                return self._elapsed + (time.monotonic() - self._mark)
             return self._elapsed
 
     def start(self) -> None:
         with self._lock:
             if not self._running:
-                self._mark = time.time()
+                self._mark = time.monotonic()
                 self._running = True
 
     def stop(self) -> None:
         with self._lock:
             if self._running:
-                self._elapsed += time.time() - self._mark
+                self._elapsed += time.monotonic() - self._mark
                 self._running = False
 
     def jump(self, seconds: float) -> None:
@@ -142,7 +162,7 @@ class Station:
             library.purge_all()
 
     def heartbeat(self) -> None:
-        self._last_heartbeat = time.time()
+        self._last_heartbeat = time.monotonic()
         self.clock.start()
 
     def start_decks(self, tracks: list[dict[str, Any]], session: str) -> dict[str, Any]:
@@ -189,7 +209,7 @@ class Station:
                 schedule = timeline.Schedule(self.clock.now() + 0.25)
                 for deck, track, offset in prepared:
                     item = schedule.add_music(
-                        f"/media/audio/{Path(track['file']).name}", track, offset=offset, entry_locked=True,
+                        media_url(track), track, offset=offset, entry_locked=True,
                         earliest_start=self.clock.now() + 0.25)
                     item.meta["deck"] = deck
                 schedule.seal()
@@ -214,7 +234,7 @@ class Station:
             return self.snapshot()
 
     def _listening(self) -> bool:
-        return (time.time() - self._last_heartbeat) < LISTENER_TIMEOUT
+        return (time.monotonic() - self._last_heartbeat) < LISTENER_TIMEOUT
 
     # -- clock rules -----------------------------------------------------
     def _roll_break_gap(self) -> int:
@@ -319,6 +339,9 @@ class Station:
             if building:
                 exclude.add(building["track"].get("key"))
                 queued.insert(0, dict(building["track"]))
+            # Songs since the last host break by the time this pick airs, so
+            # the energy arc can build across a run of music.
+            since_break = getattr(self, "_songs_since_break", 0) + len(queued)
         exclude.discard(None)
         context = []
         # Recent history and the live schedule overlap. Keep the latest
@@ -331,7 +354,7 @@ class Station:
         context = context[-int(max(2, min(30, config.station.get(
             "selection.compatibility.history_size", 10)))):]
         return (taste.pick_next(exclude, previous=context[-1] if context else None,
-                                history=context), False)
+                                history=context, break_position=since_break), False)
 
     def _lineup_target(self) -> int:
         return max(1, int(config.station.get("selection.prefetch_depth", 5) or 5))
@@ -374,6 +397,13 @@ class Station:
             self.status_note = f"Could not prepare {track.get('title')}: {message}"
             _log(self.status_note)
             return False
+        try:
+            # Records prepared before the energy/similarity descriptors (or a
+            # better key reader) existed are brought up to date as they come
+            # round, one decode each, here on the feeder thread.
+            prepared = analysis.ensure_features(prepared)
+        except Exception as error:  # noqa: BLE001 - descriptors are optional
+            _log("feature analysis failed", repr(error))
         if track.get("selection"):
             prepared["selection"] = track["selection"]
         with self.lock:
@@ -482,6 +512,7 @@ class Station:
                      (note, request_id))
 
     def _finish_requests(self, now):
+        self._credit_completions(now)
         finished = getattr(self, "_finished_request_ids", set())
         for item in self.schedule.music_items():
             request_id = (item.meta.get("selection_origin") or {}).get("request_id")
@@ -492,6 +523,43 @@ class Station:
                     self._cancel_entry({"request_id": request_id}, "Passed without a playback report")
                 finished.add(request_id)
         self._finished_request_ids = finished
+
+    def _credit_completions(self, now):
+        """A record that reached its planned end without a skip was heard out.
+
+        Players only report what they display, and the console reports only
+        starts, so completion is inferred here, once per airing. The clock
+        only runs while someone is listening, so reaching the end means it
+        was actually heard. Client 'played' reports share the same ledger.
+        """
+        credited = getattr(self, "_credited_items", {})
+        skipped = getattr(self, "_skipped_items", set())
+        for item in self.schedule.music_items():
+            key, ident = item.meta.get("key"), getattr(item, "id", None)
+            if (not key or not ident or ident in credited or ident in skipped
+                    or item.end_at > now or item.start_at > now):
+                continue
+            credited[ident] = key
+            source_end = item.offset + timeline.playback.source_at(
+                item.meta.get("rate_curve"), item.duration, item.meta.get("playback_rate", 1.0))
+            try:
+                taste.record("played", key, item.meta.get("artist") or "",
+                             position=source_end, duration=source_end)
+            except Exception as error:  # noqa: BLE001 - learning must not stop playout
+                _log("completion not recorded", error)
+        self._credited_items = credited
+
+    def _prune_memory(self):
+        """Keep per-item ledgers to what the live schedule can still refer to."""
+        live = {i.id for i in self.schedule.items}
+        live_requests = {(i.meta.get("selection_origin") or {}).get("request_id")
+                         for i in self.schedule.music_items()}
+        self._reported_plays = {t for t in getattr(self, "_reported_plays", set()) if t in live}
+        self._skipped_speech = {t for t in getattr(self, "_skipped_speech", set()) if t in live}
+        self._skipped_items = {t for t in getattr(self, "_skipped_items", set()) if t in live}
+        self._credited_items = {k: v for k, v in getattr(self, "_credited_items", {}).items() if k in live}
+        self._finished_request_ids = {r for r in getattr(self, "_finished_request_ids", set())
+                                      if r in live_requests}
 
     def refresh_vibe(self):
         """Replace unplanned automatic picks; decks and explicit requests stay."""
@@ -542,13 +610,9 @@ class Station:
                 if item.start_at >= cut:
                     self._cancel_entry({"request_id": (item.meta.get("selection_origin") or {}).get("request_id")},
                                        "Removed from the planned schedule")
-            self.schedule.items = [i for i in self.schedule.items
-                                   if i.start_at < cut]
-            surviving = [i for i in self.schedule.items if i.kind == "music"]
-            self.schedule._last_music = surviving[-1] if surviving else None  # noqa: SLF001
-            self.schedule._last_row = (  # noqa: SLF001
-                self.schedule._rows.get(surviving[-1].id) if surviving else None)  # noqa: SLF001
-            self.schedule.cursor = max(now, self.schedule.end_at)
+            # Also gives the record before it back the ending its transition
+            # into the removed one had cut short.
+            self.schedule.drop_from(cut, now)
             self.schedule.seal()
         return True
 
@@ -657,7 +721,11 @@ class Station:
                 wish_state = db.one('SELECT status FROM wishes WHERE id=?', (active_wish['id'],))
                 if not wish_state or wish_state['status'] not in ('pending', 'active'):
                     voices, lines, placement = [], [], 'none'
-            self._place(track, voices, placement)
+            if not self._place(track, voices, placement):
+                self._audio_missing(entry)
+                if kind == "sign_on":
+                    self._signed_on = False  # say hello with the next record instead
+                return
             for item in self.schedule.items:
                 if item.kind == "voice" and item.meta.get("segment") is None:
                     item.meta["segment"] = {"game_ad": "Ad break", "news": "News", "article": "News",
@@ -693,6 +761,16 @@ class Station:
                        for i in self.schedule.music_items()):
                     self._skip_locked(record=False)
 
+    def _audio_missing(self, entry: dict[str, Any]) -> None:
+        """A queued record lost its audio. Requests go back to be prepared
+        again; automatic picks are simply dropped and the feeder refills."""
+        request_id = entry.get("request_id")
+        if request_id:
+            db.write("UPDATE requests SET status='pending', note=? WHERE id=? AND status='queued'",
+                     ("Audio was removed from the cache before it aired; preparing it again", request_id))
+        self.status_note = f"re-preparing {entry['track'].get('title') or 'a song'}; its audio went missing"
+        _log(self.status_note)
+
     def _speech_budget(self, kind: str, track: dict[str, Any]) -> float:
         """Roughly how long this break has to play with."""
         if kind == 'article':
@@ -713,11 +791,17 @@ class Station:
 
     def _render(self, lines: list[Line]) -> list[timeline.VoiceLine]:
         personas = config.personas()
+        voices = [dict((personas.get(line.host) or {}).get("voice") or {}) for line in lines]
+        # Render the break's lines together when the voice layer can; a line
+        # the break cannot do without drops the whole break rather than air
+        # half a conversation.
+        say_many = getattr(tts, "say_many", None)
+        results = (say_many([(line.text, voice) for line, voice in zip(lines, voices)]) if say_many
+                   else [tts.say(line.text, voice) for line, voice in zip(lines, voices)])
+        if getattr(tts, "required_failed", lambda *_: False)(lines, results):
+            return []
         rendered: list[timeline.VoiceLine] = []
-        for line in lines:
-            persona = personas.get(line.host) or {}
-            voice = dict(persona.get("voice") or {})
-            result = tts.say(line.text, voice)
+        for line, voice, result in zip(lines, voices, results):
             if not result:
                 continue
             rendered.append(timeline.VoiceLine(
@@ -731,10 +815,14 @@ class Station:
         return rendered
 
     def _place(self, track: dict[str, Any], voices: list[timeline.VoiceLine],
-               placement: str) -> None:
+               placement: str) -> bool:
         """Put the music and the break on the clock, correctly back-timed."""
         cfg = config.station
-        url = f"/media/audio/{Path(track['file']).name}"
+        if not audio_present(track):
+            # The cache janitor can evict a queued record's file while it
+            # waits in the lineup. Never schedule audio that is not there.
+            return False
+        url = media_url(track)
         previous = self.schedule._last_music  # noqa: SLF001 - same module family
 
         # Lay the lines out relative to zero so we know how long the break runs.
@@ -752,7 +840,7 @@ class Station:
 
         if not laid:
             self.schedule.seal()
-            return
+            return True
 
         intro = db.intro_of(
             track, cfg.get("talk_placement.assumed_intro", 12.0) or 12.0)
@@ -803,6 +891,7 @@ class Station:
         if placement != "dry":
             self.schedule.duck_all_overlapping(start, window_end)
         self.schedule.seal()
+        return True
 
     # -- housekeeping ----------------------------------------------------
     def _janitor_loop(self) -> None:
@@ -811,22 +900,34 @@ class Station:
             if self._stop.is_set():
                 break
             try:
-                with self.lock:
-                    self._finish_requests(self.clock.now())
-                    self.schedule.trim_before(self.clock.now())
-                    protect = {i.url for i in self.schedule.items}
-                keep_audio = {
-                    str(library.AUDIO_DIR / Path(u).name)
-                    for u in protect if "/audio/" in u
-                }
-                keep_voice = {
-                    str(tts.VOICE_DIR / Path(u).name)
-                    for u in protect if "/voice/" in u
-                }
+                keep_audio, keep_voice = self._janitor_protected()
                 library.evict(protect=keep_audio)
                 tts.evict(keep=keep_voice)
+                from . import housekeeping
+                housekeeping.sweep(keep_audio)
             except Exception as error:  # noqa: BLE001
                 _log("janitor failed", error)
+
+    def _janitor_protected(self) -> tuple[set[str], set[str]]:
+        """Every audio and voice file the station still means to play.
+
+        Not just what is on the clock: the queue and the entry the builder
+        is placing right now hold prepared files too, and deleting one of
+        those leaves a gap exactly where a song was promised.
+        """
+        with self.lock:
+            self._finish_requests(self.clock.now())
+            self.schedule.trim_before(self.clock.now())
+            urls = {i.url for i in self.schedule.items}
+            tracks = [i.meta for i in self.schedule.music_items()]
+            tracks.extend(entry["track"] for entry in self._lineup)
+            building = getattr(self, "_building_entry", None)
+            if building:
+                tracks.append(building["track"])
+        keep_audio = {str(library.AUDIO_DIR / Path(u).name) for u in urls if "/audio/" in u}
+        keep_audio.update(str(t["file"]) for t in tracks if t.get("file"))
+        keep_voice = {str(tts.VOICE_DIR / Path(u).name) for u in urls if "/voice/" in u}
+        return keep_audio, keep_voice
 
     # -- public surface --------------------------------------------------
     def snapshot(self) -> dict[str, Any]:
@@ -838,7 +939,11 @@ class Station:
                 self.ads.tick()
             self.transcript()
             self.schedule.trim_before(now)
+            self._prune_memory()
             items = self.schedule.as_dict()
+            # Contract: `now` is read last, after the work above, so a slow
+            # snapshot never hands the players a stale clock.
+            now = self.clock.now()
         return {
             "now": round(now, 4),
             "items": items,
@@ -917,6 +1022,11 @@ class Station:
                     "into": current[-1].meta.get("title"), "skipped": 0}
 
         item = current[-1] if current else None
+        if item:
+            # Skipped records never count as heard out, whatever happens next.
+            skipped_items = getattr(self, "_skipped_items", set())
+            skipped_items.add(item.id)
+            self._skipped_items = skipped_items
         if record and item and getattr(self, "_pending_skip", None) != item.id:
             key = item.meta.get("key")
             if key:
@@ -1006,6 +1116,19 @@ class Station:
                 origin = current.meta.get("selection_origin") if current else {"by": "unknown"}
             db.log_event("played", key, 0.0, selection_origin=origin)
             return
+        if kind == "played":
+            with self.lock:
+                now = self.clock.now()
+                aired = [i for i in self.schedule.music_items()
+                         if i.meta.get("key") == key and (not item_id or i.id == item_id)
+                         and i.start_at <= now]
+                item = max(aired, key=lambda i: i.start_at) if aired else None
+                credited = getattr(self, "_credited_items", {})
+                if item is not None:
+                    if item.id in credited or item.id in getattr(self, "_skipped_items", set()):
+                        return  # already inferred at its end, or skipped
+                    credited[item.id] = key
+                    self._credited_items = credited
         taste.record(kind, key, artist, position=position, duration=duration)
 
 

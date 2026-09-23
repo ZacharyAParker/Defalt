@@ -49,62 +49,144 @@ impl Stage {
     }
 }
 
+/// What a worker's reader thread says: progress, or that the process has
+/// gone and how. The reader reaps the child itself, so nothing on the UI
+/// thread ever waits on one.
+enum Update<T> {
+    Stage(T),
+    Exited(Option<i32>),
+}
+
+/// A worker process: its tree, for stopping it, and what it has said.
+struct Worker<T> {
+    /// Dropping the job -- the window closing -- kills the whole tree,
+    /// yt-dlp and ffmpeg included.
+    job: Option<crate::process::Job>,
+    /// A child that could not be given a job is killed by id instead.
+    pid: Option<u32>,
+    updates: Receiver<Update<T>>,
+}
+
+impl<T: Send + 'static> Worker<T> {
+    fn start(
+        child: Child,
+        job: Option<crate::process::Job>,
+        parse: fn(&serde_json::Value) -> Option<T>,
+        over: fn(&T) -> bool,
+    ) -> Self {
+        let pid = Some(child.id());
+        let (sender, updates) = channel();
+        std::thread::spawn(move || watch(child, sender, parse, over));
+        Worker { job, pid, updates }
+    }
+
+    /// Everything said since last time. `Err(code)` once the process has
+    /// exited, after whatever it said before it went.
+    fn take(&mut self) -> (Vec<T>, Option<Option<i32>>) {
+        let mut said = Vec::new();
+        let mut exited = None;
+        while let Ok(update) = self.updates.try_recv() {
+            match update {
+                Update::Stage(stage) => said.push(stage),
+                Update::Exited(code) => {
+                    exited = Some(code);
+                    self.job = None;
+                    self.pid = None;
+                }
+            }
+        }
+        (said, exited)
+    }
+
+    fn stop(&mut self) {
+        match (self.job.take(), self.pid.take()) {
+            (Some(job), _) => job.terminate(),
+            (None, Some(pid)) => {
+                let _ = crate::process::background("taskkill")
+                    .args(["/PID", &pid.to_string(), "/T", "/F"])
+                    .status();
+            }
+            _ => {}
+        }
+    }
+}
+
+impl<T> Drop for Worker<T> {
+    fn drop(&mut self) {
+        // Closing the window must not leave yt-dlp running. The job's own
+        // drop kills a contained tree; a bare child is killed by id.
+        if self.job.is_none() {
+            if let Some(pid) = self.pid.take() {
+                let _ = crate::process::background("taskkill")
+                    .args(["/PID", &pid.to_string(), "/T", "/F"])
+                    .status();
+            }
+        }
+    }
+}
+
+/// Read a worker's JSON lines until it closes its output, then reap it.
+fn watch<T>(
+    mut child: Child,
+    sender: Sender<Update<T>>,
+    parse: fn(&serde_json::Value) -> Option<T>,
+    over: fn(&T) -> bool,
+) {
+    if let Some(stdout) = child.stdout.take() {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            // The library logs to stdout as well, so anything that is not one
+            // of our objects is somebody else's business.
+            let line = line.trim();
+            if !line.starts_with('{') {
+                continue;
+            }
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+            if let Some(stage) = parse(&value) {
+                let done = over(&stage);
+                if sender.send(Update::Stage(stage)).is_err() || done {
+                    break;
+                }
+            }
+        }
+    }
+    let code = child.wait().ok().and_then(|status| status.code());
+    let _ = sender.send(Update::Exited(code));
+}
+
 pub struct Job {
     pub query: String,
     pub stage: Stage,
-    /// Kept so the process can be stopped, and so it is reaped rather than
-    /// left as a zombie when the window closes.
-    child: Option<Child>,
-    updates: Receiver<Stage>,
+    worker: Worker<Stage>,
     pub started: std::time::Instant,
 }
 
 impl Job {
     /// Take whatever the worker has said since last time.
     pub fn poll(&mut self) {
-        while let Ok(stage) = self.updates.try_recv() {
-            self.stage = stage;
-        }
-        if self.stage.is_over() {
-            if let Some(mut child) = self.child.take() {
-                let _ = child.wait();
+        let (said, exited) = self.worker.take();
+        for stage in said {
+            if !self.stage.is_over() {
+                self.stage = stage;
             }
-            return;
         }
         // A worker that died without saying anything would otherwise sit at
         // "looking" forever.
-        if let Some(child) = self.child.as_mut() {
-            if let Ok(Some(status)) = child.try_wait() {
-                self.child = None;
-                if !self.stage.is_over() {
-                    self.stage = Stage::Failed {
-                        error: match status.code() {
-                            Some(code) => format!("the puller exited with {code}"),
-                            None => "the puller was killed".into(),
-                        },
-                    };
-                }
+        if let Some(code) = exited {
+            if !self.stage.is_over() {
+                self.stage = Stage::Failed {
+                    error: match code {
+                        Some(code) => format!("the puller exited with {code}"),
+                        None => "the puller was killed".into(),
+                    },
+                };
             }
         }
     }
 
     pub fn cancel(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
+        self.worker.stop();
         if !self.stage.is_over() {
             self.stage = Stage::Failed { error: "stopped".into() };
-        }
-    }
-}
-
-impl Drop for Job {
-    fn drop(&mut self) {
-        // Closing the window must not leave yt-dlp running.
-        if let Some(mut child) = self.child.take() {
-            let _ = child.kill();
-            let _ = child.wait();
         }
     }
 }
@@ -129,92 +211,41 @@ pub fn start(root: &Path, query: &str, expected_ms: Option<u64>) -> Result<Job, 
     if let Some(ms) = expected_ms.filter(|ms| *ms > 0) {
         command.arg("--duration-ms").arg(ms.to_string());
     }
-    let mut child = command
+    command
         .current_dir(root)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .stdin(Stdio::null())
-        .spawn()
+        .stdin(Stdio::null());
+    let (child, job) = crate::process::spawn_contained(&mut command)
         .map_err(|error| format!("could not start the puller: {error}"))?;
-
-    let stdout = child.stdout.take().ok_or("the puller has no output")?;
-    let (sender, updates) = channel();
-    std::thread::spawn(move || read(stdout, sender));
 
     Ok(Job {
         query,
         stage: Stage::Resolving,
-        child: Some(child),
-        updates,
+        worker: Worker::start(child, job, parse, Stage::is_over),
         started: std::time::Instant::now(),
     })
 }
 
-fn read(stdout: std::process::ChildStdout, sender: Sender<Stage>) {
-    for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-        // The library logs to stdout as well, so anything that is not one of
-        // our objects is somebody else's business.
-        let line = line.trim();
-        if !line.starts_with('{') {
-            continue;
-        }
-        if let Some(stage) = parse(line) {
-            let over = stage.is_over();
-            if sender.send(stage).is_err() || over {
-                return;
-            }
-        }
-    }
+fn text(value: &serde_json::Value, name: &str) -> Option<String> {
+    value[name].as_str().map(str::to_string)
 }
 
-/// Enough JSON for the five keys we emit.
-///
-/// A parser rather than a dependency: the shape is ours on both ends, and
-/// serde would be a build's worth of crates for one flat object.
-fn parse(line: &str) -> Option<Stage> {
-    let stage = field(line, "stage")?;
-    match stage.as_str() {
+/// One progress line from `radio.pull`.
+fn parse(value: &serde_json::Value) -> Option<Stage> {
+    match value["stage"].as_str()? {
         "resolving" => Some(Stage::Resolving),
         "fetching" => Some(Stage::Fetching),
         "analysing" => Some(Stage::Analysing),
         "done" => Some(Stage::Done {
-            file: PathBuf::from(field(line, "file")?),
-            note: field(line, "note"),
+            file: PathBuf::from(text(value, "file")?),
+            note: text(value, "note"),
         }),
         "failed" => Some(Stage::Failed {
-            error: field(line, "error").unwrap_or_else(|| "it did not say why".into()),
+            error: text(value, "error").unwrap_or_else(|| "it did not say why".into()),
         }),
         _ => None,
     }
-}
-
-/// One string value out of a flat JSON object, unescaped.
-fn field(line: &str, name: &str) -> Option<String> {
-    let needle = format!("\"{name}\"");
-    let at = line.find(&needle)? + needle.len();
-    let rest = line[at..].trim_start();
-    let rest = rest.strip_prefix(':')?.trim_start();
-    let mut chars = rest.strip_prefix('"')?.chars();
-
-    let mut out = String::new();
-    while let Some(c) = chars.next() {
-        match c {
-            '"' => return Some(out),
-            '\\' => match chars.next()? {
-                'n' => out.push('\n'),
-                't' => out.push('\t'),
-                'r' => {}
-                'u' => {
-                    let hex: String = chars.by_ref().take(4).collect();
-                    let code = u32::from_str_radix(&hex, 16).ok()?;
-                    out.push(char::from_u32(code)?);
-                }
-                other => out.push(other),
-            },
-            other => out.push(other),
-        }
-    }
-    None
 }
 
 
@@ -262,43 +293,27 @@ impl Split {
 pub struct Separation {
     pub deck: usize,
     pub stage: Split,
-    child: Option<Child>,
-    updates: Receiver<Split>,
+    worker: Worker<Split>,
     pub started: std::time::Instant,
 }
 
 impl Separation {
     pub fn poll(&mut self) {
-        while let Ok(stage) = self.updates.try_recv() {
-            self.stage = stage;
-        }
-        if self.stage.is_over() {
-            if let Some(mut child) = self.child.take() {
-                let _ = child.wait();
-            }
-            return;
-        }
-        if let Some(child) = self.child.as_mut() {
-            if let Ok(Some(status)) = child.try_wait() {
-                self.child = None;
-                if !self.stage.is_over() {
-                    self.stage = Split::Failed {
-                        error: match status.code() {
-                            Some(code) => format!("the separator exited with {code}"),
-                            None => "the separator was killed".into(),
-                        },
-                    };
-                }
+        let (said, exited) = self.worker.take();
+        for stage in said {
+            if !self.stage.is_over() {
+                self.stage = stage;
             }
         }
-    }
-}
-
-impl Drop for Separation {
-    fn drop(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            let _ = child.kill();
-            let _ = child.wait();
+        if let Some(code) = exited {
+            if !self.stage.is_over() {
+                self.stage = Split::Failed {
+                    error: match code {
+                        Some(code) => format!("the separator exited with {code}"),
+                        None => "the separator was killed".into(),
+                    },
+                };
+            }
         }
     }
 }
@@ -307,62 +322,44 @@ pub fn separate(root: &Path, deck: usize, audio: &Path) -> Result<Separation, St
     let python = python(root)
         .ok_or("Separation needs the station's Python environment, which is not set up here.")?;
 
-    let mut child = crate::process::background(python)
+    let mut command = crate::process::background(python);
+    command
         .arg("-m")
         .arg("radio.stems")
         .arg(audio)
         .current_dir(root)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .stdin(Stdio::null())
-        .spawn()
+        .stdin(Stdio::null());
+    let (child, job) = crate::process::spawn_contained(&mut command)
         .map_err(|error| format!("could not start the separator: {error}"))?;
-
-    let stdout = child.stdout.take().ok_or("the separator has no output")?;
-    let (sender, updates) = channel();
-    std::thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            let line = line.trim();
-            if !line.starts_with('{') {
-                continue;
-            }
-            if let Some(stage) = parse_split(line) {
-                let over = stage.is_over();
-                if sender.send(stage).is_err() || over {
-                    return;
-                }
-            }
-        }
-    });
 
     Ok(Separation {
         deck,
         stage: Split::Working { device: String::new() },
-        child: Some(child),
-        updates,
+        worker: Worker::start(child, job, parse_split, Split::is_over),
         started: std::time::Instant::now(),
     })
 }
 
-fn parse_split(line: &str) -> Option<Split> {
-    match field(line, "stage")?.as_str() {
+fn parse_split(value: &serde_json::Value) -> Option<Split> {
+    match value["stage"].as_str()? {
         "separating" => Some(Split::Working {
-            device: field(line, "device").unwrap_or_default(),
+            device: text(value, "device").unwrap_or_default(),
         }),
         "done" => Some(Split::Done {
             parts: Parts {
-                drums: PathBuf::from(field(line, "drums")?),
-                bass: PathBuf::from(field(line, "bass")?),
+                drums: PathBuf::from(text(value, "drums")?),
+                bass: PathBuf::from(text(value, "bass")?),
                 // Demucs calls the harmonic part "other".
-                harmonic: PathBuf::from(field(line, "other")?),
-                vocals: PathBuf::from(field(line, "vocals")?),
+                harmonic: PathBuf::from(text(value, "other")?),
+                vocals: PathBuf::from(text(value, "vocals")?),
             },
-            cached: field(line, "cached").as_deref() == Some("true")
-                || line.contains("\"cached\": true")
-                || line.contains("\"cached\":true"),
+            cached: value["cached"].as_bool().unwrap_or(false)
+                || value["cached"].as_str() == Some("true"),
         }),
         "failed" => Some(Split::Failed {
-            error: field(line, "error").unwrap_or_else(|| "it did not say why".into()),
+            error: text(value, "error").unwrap_or_else(|| "it did not say why".into()),
         }),
         _ => None,
     }
@@ -372,9 +369,17 @@ fn parse_split(line: &str) -> Option<Split> {
 mod tests {
     use super::*;
 
+    fn line(text: &str) -> Option<Stage> {
+        parse(&serde_json::from_str(text).ok()?)
+    }
+
+    fn split_line(text: &str) -> Option<Split> {
+        parse_split(&serde_json::from_str(text).ok()?)
+    }
+
     #[test]
     fn a_done_line_carries_the_file() {
-        let stage = parse(r#"{"stage": "done", "key": "a|b", "file": "C:\\x\\y.wav"}"#);
+        let stage = line(r#"{"stage": "done", "key": "a|b", "file": "C:\\x\\y.wav"}"#);
         match stage {
             Some(Stage::Done { file, .. }) => {
                 assert_eq!(file, PathBuf::from(r"C:\x\y.wav"));
@@ -385,7 +390,7 @@ mod tests {
 
     #[test]
     fn a_failure_keeps_its_reason() {
-        let stage = parse(r#"{"stage": "failed", "error": "nothing usable found"}"#);
+        let stage = line(r#"{"stage": "failed", "error": "nothing usable found"}"#);
         assert_eq!(
             stage,
             Some(Stage::Failed { error: "nothing usable found".into() })
@@ -394,7 +399,7 @@ mod tests {
 
     #[test]
     fn a_failure_without_a_reason_still_reads_as_one() {
-        match parse(r#"{"stage": "failed"}"#) {
+        match line(r#"{"stage": "failed"}"#) {
             Some(Stage::Failed { error }) => assert!(!error.is_empty()),
             other => panic!("got {other:?}"),
         }
@@ -403,7 +408,7 @@ mod tests {
     #[test]
     fn escapes_and_accents_survive() {
         // Titles arrive with both, and a mangled one is a mangled filename.
-        let stage = parse(r#"{"stage":"done","file":"a\"b","note":"caf\u00e9"}"#);
+        let stage = line(r#"{"stage":"done","file":"a\"b","note":"caf\u00e9"}"#);
         match stage {
             Some(Stage::Done { file, note }) => {
                 assert_eq!(file, PathBuf::from("a\"b"));
@@ -415,8 +420,8 @@ mod tests {
 
     #[test]
     fn the_librarys_own_logging_is_not_mistaken_for_progress() {
-        assert!(parse("ready Alex G - Pretend 360s").is_none());
-        assert!(parse(r#"{"stage": "chatting"}"#).is_none());
+        assert!(line("ready Alex G - Pretend 360s").is_none());
+        assert!(line(r#"{"stage": "chatting"}"#).is_none());
     }
 
     #[test]
@@ -438,9 +443,9 @@ mod tests {
     fn a_separation_maps_other_onto_harmonic() {
         // Demucs calls it "other"; a mixer calls it harmonic, and the engine
         // takes them in a fixed order.
-        let line = r#"{"stage":"done","cached":false,"drums":"d.flac",
+        let text = r#"{"stage":"done","cached":false,"drums":"d.flac",
                        "bass":"b.flac","other":"o.flac","vocals":"v.flac"}"#;
-        match parse_split(line) {
+        match split_line(text) {
             Some(Split::Done { parts, cached }) => {
                 assert!(!cached);
                 assert_eq!(parts.harmonic, PathBuf::from("o.flac"));
@@ -455,14 +460,14 @@ mod tests {
 
     #[test]
     fn three_parts_is_not_a_separation() {
-        let line = r#"{"stage":"done","drums":"d","bass":"b","vocals":"v"}"#;
-        assert!(parse_split(line).is_none());
+        let text = r#"{"stage":"done","drums":"d","bass":"b","vocals":"v"}"#;
+        assert!(split_line(text).is_none());
     }
 
     #[test]
     fn a_cached_separation_says_so() {
-        let line = r#"{"stage":"done","cached":true,"drums":"d","bass":"b","other":"o","vocals":"v"}"#;
-        match parse_split(line) {
+        let text = r#"{"stage":"done","cached":true,"drums":"d","bass":"b","other":"o","vocals":"v"}"#;
+        match split_line(text) {
             Some(Split::Done { cached, .. }) => assert!(cached),
             other => panic!("got {other:?}"),
         }
@@ -474,5 +479,27 @@ mod tests {
         let cpu = Split::Working { device: "cpu".into() };
         assert!(!gpu.label().contains("slow"));
         assert!(cpu.label().contains("slow"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_worker_is_reaped_off_the_ui_thread_and_its_silence_is_a_failure() {
+        let mut command = crate::process::background("cmd");
+        command.args(["/C", "echo", "not json"]).stdout(Stdio::piped()).stdin(Stdio::null());
+        let (child, job) = crate::process::spawn_contained(&mut command).unwrap();
+        let mut job = Job {
+            query: "x".into(),
+            stage: Stage::Resolving,
+            worker: Worker::start(child, job, parse, Stage::is_over),
+            started: std::time::Instant::now(),
+        };
+        let began = std::time::Instant::now();
+        while !job.stage.is_over() && began.elapsed().as_secs() < 10 {
+            let polled = std::time::Instant::now();
+            job.poll();
+            assert!(polled.elapsed().as_millis() < 50, "poll waited on the child");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(matches!(job.stage, Stage::Failed { .. }), "{:?}", job.stage);
     }
 }

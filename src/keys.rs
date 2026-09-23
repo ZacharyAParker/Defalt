@@ -14,7 +14,7 @@
 //!   1  2  3  4                                      7  8  9  0
 //!   |  |  |  |                                      |  |  |  |
 //!   |  |  +--+-- skip back / forward ---------------+--+  |  |
-//!   |  +-------- sync -----------------------------------+  |
+//!   |  +-------- sync (ctrl+alt: phase) -------------------+  |
 //!   +----------- play / pause -----------------------------+
 //!
 //!   Q  W  E  R  T                                Y  U  I  O  P
@@ -25,9 +25,9 @@
 //!   |  |  |    |  |  +-- auto-cut fast              |  |  |
 //!   |  |  |    |  +----- auto-cut slow              |  |  |
 //!   |  |  |    +-------- cut crossfader             |  |  |
-//!   |  |  +-- loop out ------------------------ loop out  |
-//!   |  +----- loop in -------------------------- loop in  |
-//!   +-------- loop on/off --------------------- loop on/off
+//!   |  |  +-- loop out (ctrl+alt: double) ---- loop out  |
+//!   |  +----- loop in (ctrl+alt: halve) ------- loop in  |
+//!   +-------- auto-loop on/off ---------------- loop on/off
 //!
 //!   X  C  V                                         B  N  M
 //!   +--+--+-- low / mid / high kill ----------------+--+--+
@@ -95,13 +95,20 @@ const SPEED_STEP: f32 = 0.1;
 
 pub fn handle(app: &mut Defalt, ctx: &Context) {
     // Never while a text field has the caret: someone searching the crate for
-    // "space" must not start deck A.
-    if ctx.memory(|m| m.focused().is_some()) {
+    // "space" must not start deck A. Only a text field, though -- a control
+    // reached with Tab still leaves every other key working.
+    if ctx.text_edit_focused() {
         release_bends(app);
         return;
     }
 
-    let input = ctx.input(|i| Snapshot::from(i));
+    let mut input = ctx.input(|i| Snapshot::from(i));
+    // A focused control owns the keys it acts on itself: the arrows move it
+    // and Space or Enter press it. Everything else stays global.
+    if ctx.memory(|m| m.focused().is_some()) {
+        input.release(&[Key::ArrowUp, Key::ArrowDown, Key::ArrowLeft, Key::ArrowRight,
+                        Key::Space, Key::Enter]);
+    }
 
     // Space acts on the deck you last touched. With nothing touched yet it
     // takes whichever deck has a record, and with both it takes deck A --
@@ -155,6 +162,11 @@ fn deck_keys(app: &mut Defalt, input: &Snapshot, index: usize, deck: &Deck) {
             app.decks[index].error = Some(error);
         }
     }
+    if input.pressed(deck.sync, ctrl_alt) {
+        if let Err(error) = app.phase_sync(index) {
+            app.say(&error);
+        }
+    }
     if input.pressed(deck.skip_back, Modifiers::NONE) {
         app.skip(index, -SKIP_BEATS);
     }
@@ -189,12 +201,22 @@ fn deck_keys(app: &mut Defalt, input: &Snapshot, index: usize, deck: &Deck) {
         }
     }
 
-    // Loops have no engine behind them yet. Saying so beats silence, which
-    // reads as a broken key.
-    for key in [deck.loop_toggle, deck.loop_in, deck.loop_out] {
-        if input.pressed(key, Modifiers::NONE) {
-            app.say("Loops are not wired up yet.");
-        }
+    // Loops: the plain keys are in, out and on/off; the second functions
+    // halve and double whatever loop is running (or the next one's length).
+    if input.pressed(deck.loop_toggle, Modifiers::NONE) {
+        app.toggle_loop(index);
+    }
+    if input.pressed(deck.loop_in, Modifiers::NONE) {
+        app.set_loop_in(index);
+    }
+    if input.pressed(deck.loop_out, Modifiers::NONE) {
+        app.set_loop_out(index);
+    }
+    if input.pressed(deck.loop_in, ctrl_alt) {
+        app.halve_loop(index);
+    }
+    if input.pressed(deck.loop_out, ctrl_alt) {
+        app.double_loop(index);
     }
 }
 
@@ -242,7 +264,17 @@ fn library_keys(app: &mut Defalt, input: &Snapshot) {
         app.load_selected(1);
     }
     if input.pressed(Key::F, Modifiers::CTRL) {
+        // Searching a folded library opens it first.
+        if app.view_state.library.collapsed {
+            crate::ui::toggle_library(app);
+        }
         app.focus_search = true;
+    }
+    if input.pressed(Key::L, Modifiers::CTRL) {
+        crate::ui::toggle_library(app);
+    }
+    if input.pressed(Key::Q, Modifiers::CTRL) {
+        app.toggle_quantize();
     }
 }
 
@@ -271,6 +303,12 @@ impl Snapshot {
             .filter(|key| input.key_down(*key))
             .collect();
         Snapshot { pressed, held, modifiers: input.modifiers }
+    }
+
+    /// Forget these keys for this frame.
+    fn release(&mut self, keys: &[Key]) {
+        self.pressed.retain(|(key, _)| !keys.contains(key));
+        self.held.retain(|key| !keys.contains(key));
     }
 
     fn pressed(&self, key: Key, modifiers: Modifiers) -> bool {
@@ -311,11 +349,12 @@ pub const HELP: &[(&str, &[(&str, &str)])] = &[
             ("Space", "Play / pause the deck you last touched"),
             ("1 / 0", "Play / pause deck A / B"),
             ("2 / 9", "Sync deck A / B to the other one"),
+            ("Ctrl+Alt+2 / 9", "Phase: line deck A / B up on the other's beat"),
             ("3 4 / 7 8", "Skip back / forward four beats"),
             ("Ctrl+Alt+3/4", "Pitch bend while held"),
             ("Shift+Ctrl+Alt+3/4", "Nudge the pitch fader"),
             ("Ctrl+Alt+1 / 0", "Reverse"),
-            ("Q / P", "Back to the start"),
+            ("Q / P", "CUE: back to the start"),
         ],
     ),
     (
@@ -324,6 +363,16 @@ pub const HELP: &[(&str, &[(&str, &str)])] = &[
             ("W E R T", "Jump to deck A cue 1-4"),
             ("Y U I O", "Jump to deck B cue 4-1"),
             ("Alt + those", "Set that cue here"),
+            ("Ctrl+Q", "Quantize: cues and loops land on the beat"),
+        ],
+    ),
+    (
+        "Loops",
+        &[
+            ("A / L", "Auto-loop on or off, deck A / B"),
+            ("S D / J K", "Loop in / loop out"),
+            ("Ctrl+Alt+S / J", "Halve the loop"),
+            ("Ctrl+Alt+D / K", "Double the loop"),
         ],
     ),
     (
@@ -348,6 +397,7 @@ pub const HELP: &[(&str, &[(&str, &str)])] = &[
             ("Up / Down", "Move the selection"),
             ("Ctrl+Left / Right", "Load onto deck A / B"),
             ("Ctrl+F", "Search"),
+            ("Ctrl+L", "Show or fold away the library"),
             ("F1", "This list"),
             ("F12", "Save a screenshot to target/"),
         ],

@@ -41,7 +41,8 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
 
     healthy &= _ok("ffmpeg", shutil.which(config.FFMPEG) is not None,
                    "install it and put it on PATH")
-    healthy &= _ok("ffprobe", shutil.which("ffprobe") is not None)
+    healthy &= _ok("ffprobe", shutil.which(config.FFPROBE) is not None,
+                   "install it beside ffmpeg, or set FFPROBE_BIN")
 
     key = bool(config.env("OPENROUTER_API_KEY"))
     healthy &= _ok("OpenRouter key", key,
@@ -292,6 +293,19 @@ def cmd_purge(_args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_reanalyse(args: argparse.Namespace) -> int:
+    from . import analysis
+
+    def progress(track: dict, ok: bool) -> None:
+        mark = "ok  " if ok else "FAIL"
+        print(f"{mark} {track.get('artist', '?')} - {track.get('title', '?')}", flush=True)
+
+    counts = analysis.reanalyse(limit=args.limit, progress=progress)
+    print(f"updated {counts.get('updated', 0)}, failed {counts.get('failed', 0)}, "
+          f"still pending {counts.get('pending', 0)}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     # The Windows console defaults to cp1252, and half the library has an
     # accent or a CJK character in it. Without this, printing a track name is
@@ -340,6 +354,11 @@ def main(argv: list[str] | None = None) -> int:
     audit.set_defaults(func=cmd_audit)
 
     subparsers.add_parser("purge").set_defaults(func=cmd_purge)
+
+    reanalyse = subparsers.add_parser("reanalyse",
+                                      help="refresh key, energy, phrase and similarity data")
+    reanalyse.add_argument("--limit", type=int, default=None)
+    reanalyse.set_defaults(func=cmd_reanalyse)
 
     args = parser.parse_args(argv)
     return int(args.func(args) or 0)

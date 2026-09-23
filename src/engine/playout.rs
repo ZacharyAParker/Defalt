@@ -95,9 +95,12 @@ pub struct Item {
     pub envelope: Arc<Envelope>,
 }
 
+/// Items stay in the box they arrived in. Unboxing one on the audio thread
+/// frees the box there; keeping it means the whole thing -- box, record and
+/// envelope -- leaves through the graveyard in one piece.
 #[derive(Default)]
 struct Channel {
-    item: Option<Item>,
+    item: Option<Box<Item>>,
     cursor: usize,
 }
 
@@ -106,7 +109,9 @@ pub struct Playout {
     /// Output frames since the stream opened. The one clock everything here is
     /// scheduled against.
     pub frame: u64,
+    /// The radio's level. Moved toward over about 5 ms, never jumped to.
     pub gain: f32,
+    gain_state: f32,
     pub peak: f32,
     pub channel_peaks: [f32; CHANNELS],
 }
@@ -117,6 +122,7 @@ impl Default for Playout {
             channels: std::array::from_fn(|_| Channel::default()),
             frame: 0,
             gain: 1.0,
+            gain_state: 1.0,
             peak: 0.0,
             channel_peaks: [0.0; CHANNELS],
         }
@@ -125,13 +131,14 @@ impl Default for Playout {
 
 impl Playout {
     /// Put an item on a channel, handing back whatever it displaced so the
-    /// caller can drop it somewhere allowed to take its time.
-    pub fn set(&mut self, channel: usize, item: Option<Item>) -> Option<Arc<Track>> {
-        let channel = self.channels.get_mut(channel)?;
+    /// caller can drop it somewhere allowed to take its time. An item for a
+    /// channel that does not exist comes straight back.
+    pub fn set(&mut self, channel: usize, item: Option<Box<Item>>) -> Option<Box<Item>> {
+        let Some(channel) = self.channels.get_mut(channel) else { return item };
         channel.cursor = 0;
         let old = channel.item.take();
         channel.item = item;
-        old.map(|item| item.track)
+        old
     }
 
     /// True when something is sounding or still to come. Read by the tests,
@@ -143,14 +150,14 @@ impl Playout {
 
     /// Mix every live channel into `out`, and advance the clock.
     ///
-    /// Finished tracks leave through `retire`, which must not allocate:
-    /// dropping an `Arc<Track>` here could be the last reference, and freeing
-    /// a few megabytes inside a callback is how a stream underruns.
+    /// Finished items leave through `retire`, which must not allocate:
+    /// dropping one here could drop the last reference to its record, and
+    /// freeing a few megabytes inside a callback is how a stream underruns.
     pub fn mix_into(
         &mut self,
         out: &mut [f32],
         device_rate: u32,
-        mut retire: impl FnMut(Arc<Track>),
+        mut retire: impl FnMut(Box<Item>),
     ) {
         let frames = out.len() / 2;
         let start = self.frame;
@@ -161,6 +168,12 @@ impl Playout {
 
         let seconds_per_frame = 1.0 / device_rate as f64;
         let mut peak = self.peak;
+        // Every channel walks the same gain glide, frame for frame.
+        let smoothing = 1.0 - (-1.0 / (device_rate as f32 * 0.005)).exp();
+        let (from, to) = (self.gain_state, self.gain);
+        let mut settled = from;
+        for _ in 0..frames { settled += (to - settled) * smoothing; }
+        self.gain_state = settled;
 
         for (channel_index, channel) in self.channels.iter_mut().enumerate() {
             let Some(item) = channel.item.as_ref() else { continue };
@@ -169,7 +182,7 @@ impl Playout {
             // rather than divide by it.
             if item.track.sample_rate == 0 {
                 if let Some(done) = channel.item.take() {
-                    retire(done.track);
+                    retire(done);
                 }
                 continue;
             }
@@ -181,8 +194,10 @@ impl Playout {
             let last = item.track.frames() as f64;
             let rate = item.track.sample_rate as f64;
             let mut finished = false;
+            let mut level = from;
 
             for (index, pair) in out.chunks_exact_mut(2).enumerate() {
+                level += (to - level) * smoothing;
                 let here = start + index as u64;
                 if here < item.start_frame {
                     continue;
@@ -198,7 +213,7 @@ impl Playout {
                     break;
                 }
 
-                let gain = item.envelope.at(elapsed as f32, &mut channel.cursor) * self.gain;
+                let gain = item.envelope.at(elapsed as f32, &mut channel.cursor) * level;
                 let [left, right] = sample_at(&item.track, position);
                 let (left, right) = (left * gain, right * gain);
                 pair[0] += left;
@@ -209,7 +224,7 @@ impl Playout {
 
             if finished {
                 if let Some(done) = channel.item.take() {
-                    retire(done.track);
+                    retire(done);
                 }
             }
         }
@@ -218,11 +233,11 @@ impl Playout {
     }
 
     /// Off the air at once.
-    pub fn clear(&mut self, mut retire: impl FnMut(Arc<Track>)) {
+    pub fn clear(&mut self, mut retire: impl FnMut(Box<Item>)) {
         for channel in self.channels.iter_mut() {
             channel.cursor = 0;
             if let Some(item) = channel.item.take() {
-                retire(item.track);
+                retire(item);
             }
         }
     }
@@ -261,15 +276,29 @@ mod tests {
         Arc::new(Track { samples: vec![level; frames * 2], sample_rate: rate })
     }
 
-    fn item(track: Arc<Track>, start_frame: u64, envelope: Envelope) -> Item {
+    fn item(track: Arc<Track>, start_frame: u64, envelope: Envelope) -> Box<Item> {
         let duration = track.seconds();
-        Item {
+        Box::new(Item {
             track,
             start_frame,
             offset: 0.0,
             duration,
             envelope: Arc::new(envelope),
-        }
+        })
+    }
+
+    #[test]
+    fn a_change_of_radio_level_glides_instead_of_stepping() {
+        let mut playout = Playout::default();
+        playout.set(0, Some(item(tone(1.0, 48_000, 0.5), 0, Envelope::flat(1.0))));
+        playout.mix_into(&mut vec![0.0; 64], 48_000, |_| {});
+        playout.gain = 0.0;
+        let mut out = vec![0.0; 960 * 2];
+        playout.mix_into(&mut out, 48_000, |_| {});
+        let left: Vec<f32> = out.iter().step_by(2).copied().collect();
+        assert!(left[0] > 0.49, "the level jumped: {}", left[0]);
+        assert!(left.windows(2).all(|w| (w[1] - w[0]).abs() < 0.01));
+        assert!(left[959] < 0.01);
     }
 
     #[test]
@@ -371,13 +400,13 @@ mod tests {
 
         let mut playout = Playout::default();
         playout.frame = rate as u64 / 2;
-        playout.set(0, Some(Item {
+        playout.set(0, Some(Box::new(Item {
             duration: track.seconds(),
             track,
             start_frame: 0,
             offset: 0.0,
             envelope: Arc::new(Envelope::flat(1.0)),
-        }));
+        })));
 
         let mut out = vec![0.0; 32 * 2];
         playout.mix_into(&mut out, rate, |_| {});
@@ -396,13 +425,13 @@ mod tests {
         let track = Arc::new(Track { samples: ramp, sample_rate: rate });
 
         let mut playout = Playout::default();
-        playout.set(0, Some(Item {
+        playout.set(0, Some(Box::new(Item {
             duration: 0.4,
             track,
             start_frame: 0,
             offset: 0.25,
             envelope: Arc::new(Envelope::flat(1.0)),
-        }));
+        })));
 
         let mut out = vec![0.0; 32 * 2];
         playout.mix_into(&mut out, rate, |_| {});
@@ -414,13 +443,13 @@ mod tests {
         // A record trimmed of its cold ending must not play the ending.
         let mut playout = Playout::default();
         let track = tone(1.0, 48_000, 0.5);
-        playout.set(0, Some(Item {
+        playout.set(0, Some(Box::new(Item {
             track,
             start_frame: 0,
             offset: 0.0,
             duration: 0.005,
             envelope: Arc::new(Envelope::flat(1.0)),
-        }));
+        })));
 
         let mut out = vec![0.0; 48_000 * 2 / 100];
         playout.mix_into(&mut out, 48_000, |_| {});

@@ -58,9 +58,11 @@ class SpeechAndMix(unittest.TestCase):
     def test_tempo_matching_changes_duration_and_preserves_phase(self):
         s = timeline.Schedule()
         a = s.add_music("a", self.track("a", 120))
-        b = s.add_music("b", self.track("b", 124))
+        # 122 BPM stays inside the pitch band that keeps the shared key; a
+        # wider gap is capped for harmony (see test_timeline).
+        b = s.add_music("b", self.track("b", 122))
         rate = b.meta["playback_rate"]
-        self.assertAlmostEqual(rate, 120/124, places=4)
+        self.assertAlmostEqual(rate, 120/122, places=4)
         self.assertAlmostEqual(b.duration * rate, 120, places=4)
         phase = (b.start_at + 0.1/rate - (a.start_at + 0.1)) % 0.5
         self.assertLess(min(phase, 0.5-phase), 0.001)

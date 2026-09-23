@@ -40,4 +40,17 @@ for (const width of [1324,1964]) {
   assert.ok(bars.every(b=>b[0]>=0 && b[0]+b[2]<=width),'wide display stays within canvas');
   assert.ok(bars[0][2]>width/48*.7,'bars retain their share of the width on large displays');
 }
-console.log('browser visualizer: audio, silence, toggle, persistence, visibility and reduced motion passed');
+// The studio's bass level: works with the visualizer switched off, rises on a
+// kick, settles in silence, and never analyses more than 15 times a second.
+toggle.checked=false;toggle.change();
+let lowReads=0;
+const bass={context:{sampleRate:48000},fftSize:2048,frequencyBinCount:1024,
+  getFloatFrequencyData(data){lowReads++;data.fill(-100);data[3]=-12;}};
+let level=0;
+for(let t=30000;t<31000;t+=70) level=window.RadioVisualizer.lowBand(bass,t);
+assert.ok(level>.7,`a loud low end reads high (${level})`);
+const before=lowReads;window.RadioVisualizer.lowBand(bass,31010);
+assert.equal(lowReads,before,'bass analysis is limited to 15 Hz');
+for(let t=31100;t<34000;t+=70) level=window.RadioVisualizer.lowBand(null,t);
+assert.ok(level<.05,'silence settles');
+console.log('browser visualizer: audio, silence, toggle, persistence, visibility, reduced motion and bass level passed');

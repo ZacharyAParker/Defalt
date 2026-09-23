@@ -7,6 +7,8 @@ a note is preserved across rewrites.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import time
 from datetime import datetime
@@ -17,15 +19,35 @@ from . import config, db, taste
 
 NOTES_MARKER = "## Notes"
 _UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+# Device names Windows refuses as a file name, with or without an extension.
+_RESERVED = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
+             *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+NAME_LIMIT = 80
 
 
 def _root() -> Path:
     return config.VAULT_DIR
 
 
-def _safe(name: str) -> str:
-    cleaned = _UNSAFE.sub("-", (name or "unknown").strip())
-    return (cleaned[:80] or "unknown").rstrip(". ")
+def _safe(name: str, limit: int = NAME_LIMIT) -> str:
+    """A file-name-safe note name that is stable for the same input.
+
+    Long names are shortened with a short hash so two long titles sharing a
+    prefix do not collide and the full path stays well under Windows' limit.
+    """
+    original = (name or "unknown").strip()
+    cleaned = _UNSAFE.sub("-", original).rstrip(". ") or "unknown"
+    if len(cleaned) > limit:
+        digest = hashlib.sha1(original.encode("utf-8")).hexdigest()[:8]
+        cleaned = cleaned[:limit - 9].rstrip(". ") + "~" + digest
+    if cleaned.split(".", 1)[0].strip().upper() in _RESERVED:
+        cleaned = "_" + cleaned
+    return cleaned
+
+
+def _yaml(value: object) -> str:
+    """A YAML-safe scalar. JSON strings are valid YAML double-quoted scalars."""
+    return json.dumps(str(value), ensure_ascii=False)
 
 
 def artist_note(artist: str) -> str:
@@ -133,8 +155,8 @@ def write_track_note(key: str) -> None:
 
     body = f"""---
 type: track
-artist: "{artist}"
-title: "{title}"
+artist: {_yaml(artist)}
+title: {_yaml(title)}
 affinity: {score:.3f}
 plays: {row['play_count']}
 skips: {row['skip_count']}
@@ -154,16 +176,24 @@ skips: {row['skip_count']}
     _write(_root() / "Tracks" / f"{track_note(artist, title)}.md", body)
 
 
+def _like(text: str) -> str:
+    return re.sub(r"([\\%_])", r"\\\1", text)
+
+
 def write_artist_note(artist: str) -> None:
-    key = db.norm(db.primary_artist(artist))
+    from .compatibility import artists as credits
+    primary = db.primary_artist(artist)
+    key = db.norm(primary)
     score = taste.affinity("artist", key)
-    tracks = db.query(
+    candidates = db.query(
         "SELECT artist, title, play_count, skip_count FROM tracks "
-        "WHERE artist LIKE ? ORDER BY play_count DESC LIMIT 40",
-        (f"%{db.primary_artist(artist)}%",))
+        "WHERE artist LIKE ? ESCAPE '\\' ORDER BY play_count DESC LIMIT 400",
+        (f"%{_like(primary)}%",))
+    # LIKE is only a prefilter: "Ye" must not collect every "Yeat" record.
+    tracks = [row for row in candidates if key in credits(row["artist"])][:40]
 
     lines = [
-        "---", "type: artist", f'name: "{artist}"',
+        "---", "type: artist", f"name: {_yaml(artist)}",
         f"affinity: {score:.3f}", "---", "",
         f"# {db.primary_artist(artist)}", "",
         f"**Affinity:** {score:+.2f}", "", "## Tracks in rotation", "",
@@ -183,7 +213,7 @@ def write_break(kind: str, lines: list[dict[str, str]],
         return
     stamp = datetime.now()
     body = [
-        "---", "type: break", f"kind: {kind}",
+        "---", "type: break", f"kind: {_yaml(kind)}",
         f"aired: {stamp.isoformat(timespec='seconds')}", "---", "",
         f"# {kind.replace('_', ' ').title()} — {stamp.strftime('%H:%M')}", "",
     ]
@@ -193,7 +223,7 @@ def write_break(kind: str, lines: list[dict[str, str]],
         body.append(f"**{line.get('host', '?').upper()}:** {line.get('text', '')}")
         body.append("")
     path = (_root() / "Breaks" / stamp.strftime("%Y-%m-%d") /
-            f"{stamp.strftime('%H%M%S')}-{kind}.md")
+            f"{stamp.strftime('%H%M%S')}-{_safe(kind, 40)}.md")
     _write(path, "\n".join(body))
 
 

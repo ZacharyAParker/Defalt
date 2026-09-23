@@ -5,9 +5,9 @@
 //! control moves the window, which is what every application with a custom
 //! chrome has to do by hand.
 
-use egui::{vec2, Align2, FontId, Rect, Sense, Stroke, Ui, ViewportCommand};
+use egui::{vec2, Align2, Rect, Sense, Stroke, Ui, ViewportCommand};
 
-use super::{theme, widgets};
+use super::{theme, widgets, Look};
 use crate::Defalt;
 
 pub fn draw(app: &mut Defalt, ui: &mut Ui) {
@@ -15,43 +15,67 @@ pub fn draw(app: &mut Defalt, ui: &mut Ui) {
 
     ui.painter().line_segment(
         [full.left_bottom(), full.right_bottom()],
-        Stroke::new(1.0, theme::EDGE),
+        Stroke::new(theme::LINE, theme::EDGE),
     );
 
-    // Left cluster.
-    let left_rect = Rect::from_min_max(full.min + vec2(12.0, 6.0), full.center_bottom() - vec2(65.0, 6.0));
+    // Left cluster: the panel's own switches, quiet until they are on.
+    let left_rect = Rect::from_min_max(full.min + vec2(theme::SP_3, 6.0), full.center_bottom() - vec2(60.0, 6.0));
     let mut left = super::child(ui, left_rect, super::left_row(), "barL");
-    left.spacing_mut().item_spacing.x = 6.0;
+    left.spacing_mut().item_spacing.x = theme::SP_1;
 
-    super::chip(&mut left, "Beat grid", vec2(76.0, 28.0), app.show_grid, true)
+    let toggle = |ui: &mut Ui, text: &str, on: bool| {
+        let size = super::fit(ui, text, theme::CONTROL_S);
+        super::button(ui, text, size, Look::ghost(on, true))
+    };
+    toggle(&mut left, "Beat grid", app.show_grid)
         .clicked()
         .then(|| app.show_grid = !app.show_grid);
-    super::chip(&mut left, "Stems", vec2(62.0, 28.0), app.show_stems, true)
+    toggle(&mut left, "Stems", app.show_stems)
         .clicked()
         .then(|| app.show_stems = !app.show_stems);
-    if super::chip(&mut left, "Shortcuts", vec2(78.0, 28.0), app.show_help, true).clicked() {
+    if toggle(&mut left, "Shortcuts", app.show_help).clicked() {
         app.show_help = !app.show_help;
     }
+    toggle(&mut left, "FX", app.show_fx)
+        .on_hover_text("A beat echo on each deck")
+        .clicked()
+        .then(|| app.show_fx = !app.show_fx);
+    let three_band = app.view_state.wave_mode == super::WaveMode::ThreeBand;
+    if toggle(&mut left, "3-band", three_band)
+        .on_hover_text("Colour the waveforms by band: bass blue, mids amber, highs white")
+        .clicked()
+    {
+        app.view_state.wave_mode = if three_band { super::WaveMode::Blend } else { super::WaveMode::ThreeBand };
+    }
+    if toggle(&mut left, "Quantize", app.quantize)
+        .on_hover_text("Cues, cue jumps and loops land on the beat (Ctrl+Q)")
+        .clicked()
+    {
+        app.toggle_quantize();
+    }
 
-    // Wordmark, dead centre of the window rather than of the leftover space.
-    ui.painter().text(
-        full.center(),
-        Align2::CENTER_CENTER,
-        "DEFALT",
-        FontId::proportional(15.0),
-        theme::TEXT_BRIGHT,
-    );
+    // Wordmark, dead centre of the window rather than of the leftover space,
+    // in the display face and spaced out, as a maker's name on a faceplate.
+    let mut job = egui::text::LayoutJob::default();
+    job.append("DEFALT", 0.0, egui::TextFormat {
+        font_id: theme::display(theme::SIZE_L),
+        color: theme::TEXT_BRIGHT,
+        extra_letter_spacing: 3.0,
+        ..Default::default()
+    });
+    let wordmark = ui.painter().layout_job(job);
+    ui.painter().galley(full.center() - wordmark.size() / 2.0 + vec2(1.5, 0.0), wordmark, theme::TEXT_BRIGHT);
 
     // Right cluster.
-    let right_rect = Rect::from_min_max(full.center_top() + vec2(65.0, 6.0), full.max - vec2(8.0, 6.0));
+    let right_rect = Rect::from_min_max(full.center_top() + vec2(56.0, 6.0), full.max - vec2(8.0, 6.0));
     let mut right = super::child(ui, right_rect, super::right_row(), "barR");
-    right.spacing_mut().item_spacing.x = 4.0;
+    right.spacing_mut().item_spacing.x = theme::SP_1;
 
     window_button(&mut right, Glyph::Close);
     window_button(&mut right, Glyph::Maximise);
     window_button(&mut right, Glyph::Minimise);
 
-    right.add_space(8.0);
+    right.add_space(theme::SP_2);
     // The reference has a view picker here; ours has two views and they are
     // both real, so it is two buttons rather than a menu.
     for (view, name) in [
@@ -59,16 +83,21 @@ pub fn draw(app: &mut Defalt, ui: &mut Ui) {
         (crate::View::Console, "Console"),
     ] {
         let on = app.view == view;
-        if super::chip(&mut right, name, vec2(68.0, 28.0), on, true).clicked() {
+        if super::button(&mut right, name, vec2(62.0, theme::CONTROL_S), Look::ghost(on, true)).clicked() {
             app.view = view;
         }
     }
+    right.add_space(theme::SP_1);
     output(app, &mut right);
+    limiter(app, &mut right);
+    super::remote::indicator(app, &mut right);
 
-    right.add_space(6.0);
-    right.label(
-        super::rich(&app.clock, 11.0, theme::TEXT_DIM),
-    );
+    // The clock is the first thing to go when the window is narrow.
+    let clock = ui.painter().layout_no_wrap(app.clock.clone(), egui::FontId::monospace(theme::SIZE_S), theme::TEXT_DIM);
+    if right.available_width() >= clock.size().x + theme::SP_2 {
+        right.add_space(theme::SP_1);
+        right.label(egui::RichText::new(&app.clock).font(egui::FontId::monospace(theme::SIZE_S)).color(theme::TEXT_DIM));
+    }
 
     // Native dragging a maximized window restores it. Keep this hit target
     // disjoint from both control clusters instead of layering it behind them.
@@ -91,11 +120,12 @@ pub fn draw(app: &mut Defalt, ui: &mut Ui) {
 
 /* ── Icons ───────────────────────────────────────────────────────────── */
 
-fn icon_slot(ui: &mut Ui, live: bool) -> (Rect, egui::Response) {
-    let (rect, response) = ui.allocate_exact_size(vec2(22.0, 20.0), Sense::click());
-    let hovered = response.hovered() && live;
+fn icon_slot(ui: &mut Ui, live: bool, width: f32) -> (Rect, egui::Response) {
+    let (rect, response) = ui.allocate_exact_size(vec2(width, theme::CONTROL_S), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, live, "Master output"));
+    let hovered = (response.hovered() || response.has_focus()) && live;
     if hovered {
-        ui.painter().rect_filled(rect, 4.0, theme::RAISED);
+        ui.painter().rect_filled(rect, theme::R_M, theme::RAISED);
     }
     (rect, if live { response } else { response.on_hover_text(super::NOT_WIRED) })
 }
@@ -109,43 +139,108 @@ fn output(app: &mut Defalt, ui: &mut Ui) {
     let live = app.engine_ready();
     let response = speaker_icon(ui, live);
 
-    // Clipping is worth saying without being asked.
-    let peak = app.master_peak[0].max(app.master_peak[1]);
-    if peak > 0.99 {
-        let dot = egui::pos2(response.rect.right() - 3.0, response.rect.top() + 4.0);
-        ui.painter().circle_filled(dot, 3.0, theme::RED);
+    // The master, always in view: left over right, each with its held peak
+    // and its own clip lamp. Clipping is worth saying without being asked.
+    let bars = Rect::from_min_max(response.rect.left_top() + vec2(26.0, 6.0),
+                                  response.rect.right_bottom() - vec2(4.0, 6.0));
+    let half = (bars.height() - 2.0) / 2.0;
+    for channel in 0..2 {
+        let row = Rect::from_min_size(bars.min + vec2(0.0, channel as f32 * (half + 2.0)), vec2(bars.width(), half));
+        widgets::level_meter(ui, row, egui::Id::new(("master-meter", channel)), app.master_peak[channel],
+                             app.master_peak[channel] > 1.0, theme::BLUE, false);
     }
 
     egui::Popup::from_toggle_button_response(&response)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show(|ui| {
             ui.set_min_width(190.0);
-            ui.label(super::rich("Master", 11.0, theme::TEXT_DIM));
-            ui.add_space(4.0);
-            widgets::meter(ui, app.master_peak[0], vec2(178.0, 7.0), false);
-            widgets::meter(ui, app.master_peak[1], vec2(178.0, 7.0), false);
+            ui.label(super::rich("Master", theme::SIZE_S, theme::TEXT_DIM));
+            ui.add_space(theme::SP_1);
+            widgets::meter(ui, app.master_peak[0], vec2(178.0, 8.0), false);
+            widgets::meter(ui, app.master_peak[1], vec2(178.0, 8.0), false);
+            if over(app) {
+                ui.label(super::rich("Over: the master went past full scale", theme::SIZE_XS, theme::RED));
+            }
             ui.add_space(6.0);
+            // A level, not a crossfader: unity marked, and a double-click
+            // goes back to it rather than to the middle of the travel.
             let mut master = app.master;
-            if widgets::crossfader(ui, egui::Id::new("master"), &mut master, vec2(178.0, 26.0)).changed() {
+            let travel = widgets::Travel::level(MASTER_MAX, 1.0);
+            if widgets::level(ui, egui::Id::new("master"), &mut master, vec2(178.0, 26.0), travel, "Master level")
+                .on_hover_text("Double-click for unity")
+                .changed()
+            {
                 app.set_master(master);
             }
-            ui.label(super::rich(
-                &format!("{:.0}%", app.master * 100.0),
-                10.0,
-                theme::TEXT_MUTE,
-            ));
+            ui.label(super::rich(&master_label(app.master), theme::SIZE_XS, theme::TEXT_MUTE));
             ui.add_space(4.0);
             ui.label(super::rich(
                 if app.device.is_empty() { "no output device" } else { &app.device },
-                9.0,
+                theme::SIZE_XS,
                 theme::TEXT_MUTE,
             ));
         });
 }
 
+/// The master went past full scale in the last two seconds. Only possible
+/// with the limiter off: the meter reads before the final clamp.
+fn over(app: &Defalt) -> bool {
+    app.over_at.is_some_and(|at| at.elapsed().as_secs_f32() < 2.0)
+}
+
+/// The limiter: how hard it is pulling the master down, and a click to turn
+/// it off or on. A limiter that is always working is a mix that is too hot.
+fn limiter(app: &mut Defalt, ui: &mut Ui) {
+    let live = app.engine_ready();
+    let text = if !app.limiter_on {
+        "LIM off".to_string()
+    } else if app.limiter_db >= 0.1 {
+        format!("LIM -{:.1}", app.limiter_db)
+    } else {
+        "LIM".to_string()
+    };
+    let working = app.limiter_on && app.limiter_db >= 0.1;
+    let (rect, response) = ui.allocate_exact_size(vec2(76.0, theme::CONTROL_S),
+                                                  if live { Sense::click() } else { Sense::hover() });
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, live, app.limiter_on, "Master limiter"));
+    let hovered = live && (response.hovered() || response.has_focus());
+    let ink = super::paint_control(ui, rect, Look::ghost(false, live), hovered, live && response.is_pointer_button_down_on());
+    // The lamp: green when the limiter is standing by, amber while it is
+    // pulling the master down, and a warm warning when it is off.
+    let lamp = if !app.limiter_on { theme::WARN } else if working { theme::AMBER } else { theme::GREEN };
+    let dot = egui::pos2(rect.left() + 11.0, rect.center().y);
+    if live && (working || !app.limiter_on) {
+        ui.painter().circle_filled(dot, 5.5, lamp.gamma_multiply(0.22));
+    }
+    ui.painter().circle_filled(dot, 3.0, if live { lamp } else { theme::TEXT_MUTE });
+    ui.painter().text(egui::pos2(rect.left() + 20.0, rect.center().y), Align2::LEFT_CENTER, &text,
+                      egui::FontId::monospace(theme::SIZE_XS), if working { theme::TEXT_BRIGHT } else { ink });
+    let response = response.on_hover_text(if app.limiter_on {
+        "Master limiter: gain reduction in dB. Click to turn it off."
+    } else {
+        "The limiter is off, so the master can clip. Click to turn it on."
+    });
+    if response.clicked() {
+        app.toggle_limiter();
+    }
+}
+
+/// A little headroom over unity, and no more: the master is a trim, not a
+/// second gain stage.
+const MASTER_MAX: f32 = 1.5;
+
+/// The master as you would read it off a desk: decibels from unity.
+fn master_label(value: f32) -> String {
+    if value <= 0.001 {
+        return "-inf dB".into();
+    }
+    let db = 20.0 * value.log10();
+    if db.abs() < 0.05 { "0.0 dB (unity)".into() } else { format!("{db:+.1} dB") }
+}
+
 fn speaker_icon(ui: &mut Ui, live: bool) -> egui::Response {
-    let (rect, response) = icon_slot(ui, live);
-    let centre = rect.center();
+    let (rect, response) = icon_slot(ui, live, 84.0);
+    let centre = rect.left_center() + vec2(12.0, 0.0);
     let colour = if live { theme::TEXT_DIM } else { theme::TEXT_MUTE };
 
     // Cone.
@@ -178,13 +273,13 @@ enum Glyph {
 }
 
 fn window_button(ui: &mut Ui, glyph: Glyph) {
-    let (rect, response) = ui.allocate_exact_size(vec2(30.0, 22.0), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(vec2(30.0, theme::CONTROL_S), Sense::click());
     let danger = matches!(glyph, Glyph::Close);
 
     if response.hovered() {
         ui.painter().rect_filled(
             rect,
-            4.0,
+            theme::R_M,
             if danger { theme::RED.gamma_multiply(0.75) } else { theme::RAISED },
         );
     }
@@ -243,6 +338,7 @@ mod tests {
             time: Some(time), events, ..Default::default()
         };
         input.viewports.get_mut(&ViewportId::ROOT).unwrap().maximized = Some(true);
+        theme::apply(ctx);
         let output = ctx.run_ui(input, |ui| {
             egui::Panel::top("toolbar").exact_size(42.0)
                 .frame(egui::Frame::NONE).show(ui, |ui| draw(app, ui));
@@ -283,6 +379,13 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn the_master_reads_in_decibels_from_unity() {
+        assert_eq!(master_label(1.0), "0.0 dB (unity)");
+        assert_eq!(master_label(0.5), "-6.0 dB");
+        assert_eq!(master_label(0.0), "-inf dB");
     }
 
     #[test]

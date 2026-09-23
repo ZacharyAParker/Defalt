@@ -1,5 +1,5 @@
 //! A modeless, private conversation alongside the running radio.
-use egui::{Color32, RichText};
+use egui::RichText;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use super::theme;
@@ -17,37 +17,70 @@ pub struct Chat {
     last_poll: Instant,
     error: Option<String>,
     retry: Option<serde_json::Value>,
-    incoming: Receiver<(bool, Result<serde_json::Value,String>)>,
-    outgoing: Sender<(bool, Result<serde_json::Value,String>)>,
+    incoming: Receiver<Reply>,
+    outgoing: Sender<Reply>,
+    /// The one worker that talks to the director, started on first use.
+    /// None of the requests overlap -- `inflight` sees to that -- so one
+    /// thread and one connection pool serve the whole session instead of a
+    /// new thread every two seconds.
+    worker: Option<Sender<Option<serde_json::Value>>>,
+}
+
+type Reply = (bool, Result<serde_json::Value, String>);
+
+/// Serve requests until the chat is dropped.
+fn serve(url: String, jobs: Receiver<Option<serde_json::Value>>, replies: Sender<Reply>) {
+    let agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .timeout_global(Some(Duration::from_secs(8)))
+        .build()
+        .new_agent();
+    while let Ok(body) = jobs.recv() {
+        let sent = body.is_some();
+        let result = (|| {
+            let mut response = match body {
+                Some(body) => agent.post(&url).send_json(body),
+                None => agent.get(&url).call(),
+            }.map_err(|_| "Can't reach the director. Start Radio, then retry.".to_string())?;
+            let status = response.status().as_u16();
+            let value: serde_json::Value = response.body_mut().read_json()
+                .map_err(|_| "The director returned an unreadable reply. Retry your message.".to_string())?;
+            if status >= 400 {
+                return Err(value["error"].as_str()
+                    .unwrap_or("Director chat is unavailable. Start Radio or update its backend.").to_string());
+            }
+            Ok(value)
+        })();
+        if replies.send((sent, result)).is_err() {
+            return;
+        }
+    }
 }
 
 impl Chat {
     pub fn new(port: u16) -> Self {
         let (outgoing,incoming)=channel();
         Self {preview:false,open:false,draft:String::new(),state:serde_json::json!({}),save:false,share:false,
-            port,inflight:false,last_poll:Instant::now()-Duration::from_secs(5),error:None,retry:None,incoming,outgoing}
+            port,inflight:false,last_poll:Instant::now()-Duration::from_secs(5),error:None,retry:None,incoming,outgoing,
+            worker:None}
     }
 
     fn request(&mut self, body: Option<serde_json::Value>) {
         self.inflight=true;
         self.last_poll=Instant::now();
-        let url=format!("http://127.0.0.1:{}/api/director/chat",self.port);
-        let sender=self.outgoing.clone();
-        std::thread::spawn(move || {
-            let sent=body.is_some();
-            let result=(|| {
-                let mut response=if let Some(body)=body {
-                    ureq::post(&url).config().http_status_as_error(false).timeout_global(Some(Duration::from_secs(8))).build().send_json(body)
-                } else {
-                    ureq::get(&url).config().http_status_as_error(false).timeout_global(Some(Duration::from_secs(8))).build().call()
-                }.map_err(|_| "Can't reach the director. Start Radio, then retry.".to_string())?;
-                let status=response.status().as_u16();
-                let value:serde_json::Value=response.body_mut().read_json().map_err(|_| "The director returned an unreadable reply. Retry your message.".to_string())?;
-                if status>=400 {return Err(value["error"].as_str().unwrap_or("Director chat is unavailable. Start Radio or update its backend.").to_string());}
-                Ok(value)
-            })();
-            let _=sender.send((sent,result));
+        let worker = self.worker.get_or_insert_with(|| {
+            let (jobs, queue) = channel();
+            let url = format!("http://127.0.0.1:{}/api/director/chat", self.port);
+            let replies = self.outgoing.clone();
+            std::thread::spawn(move || serve(url, queue, replies));
+            jobs
         });
+        if worker.send(body).is_err() {
+            // The worker only ends if a reply could not be delivered, which
+            // means nothing is listening; start afresh next time.
+            self.worker = None;
+            self.inflight = false;
+        }
     }
 
     fn send(&mut self) {
@@ -81,7 +114,7 @@ impl Chat {
             .frame(egui::Frame::window(&ctx.style_of(egui::Theme::Dark)).fill(theme::PANEL))
             .min_width(330.).min_height(380.).max_height((ctx.content_rect().height()-100.).max(380.))
             .show(ctx,|ui| {
-                ui.label(RichText::new("Steer the station, keep the music going.").size(17.).color(theme::TEXT));
+                ui.label(RichText::new("Steer the station, keep the music going.").size(theme::SIZE_L).color(theme::TEXT));
                 ui.label(RichText::new("Private unless you request an ad or send a message to the hosts.").color(theme::TEXT_DIM));
                 if let Some(direction)=self.state["direction"]["description"].as_str() {
                     ui.add_space(6.);ui.label(RichText::new(format!("Music direction: {direction}")).color(theme::CYAN));
@@ -97,7 +130,7 @@ impl Chat {
                     .show(ui,|ui| {
                         let messages=self.state["messages"].as_array();
                         if messages.is_none_or(|m|m.is_empty()) {
-                            ui.label(RichText::new("Tell me what you're in the mood for.").size(18.));
+                            ui.label(RichText::new("Tell me what you're in the mood for.").size(theme::SIZE_XL));
                             ui.add_space(8.);
                             for example in ["Keep this energy, but less rap.","Go back to normal suggestions.","Less talking for twenty minutes.","Give the hosts a sarcastic gaming-news ad."] {
                                 if ui.button(example).clicked() {self.draft=example.into();}
@@ -113,7 +146,7 @@ impl Chat {
                     });
                 let busy=self.state["busy"].as_bool().unwrap_or(false);
                 if busy {ui.horizontal(|ui| {ui.spinner();ui.label("Director is replying...");});}
-                if let Some(error)=&self.error {ui.colored_label(Color32::from_rgb(245,180,130),error);}
+                if let Some(error)=&self.error {ui.colored_label(theme::WARN,error);}
                 if !running {ui.label("Start Radio to chat with the director.");}
                 ui.separator();
                 let entry=egui::ScrollArea::vertical().id_salt("private-director-draft")
@@ -124,8 +157,8 @@ impl Chat {
                         .hint_text("Music direction, a question, or an ad brief..."))).inner;
                 let count=self.draft.chars().count();
                 ui.label(RichText::new(format!("{count} / {MAX_MESSAGE_CHARS} characters")).small()
-                    .color(if count>MAX_MESSAGE_CHARS {Color32::from_rgb(245,180,130)}else{theme::TEXT_DIM}));
-                if self.share && count>240 {ui.colored_label(Color32::from_rgb(245,180,130),"Direct on-air messages allow 240 characters. Uncheck Send this to hosts to discuss a longer draft or commission an ad.");}
+                    .color(if count>MAX_MESSAGE_CHARS {theme::WARN}else{theme::TEXT_DIM}));
+                if self.share && count>240 {ui.colored_label(theme::WARN,"Direct on-air messages allow 240 characters. Uncheck Send this to hosts to discuss a longer draft or commission an ad.");}
                 ui.horizontal_wrapped(|ui| {
                     ui.checkbox(&mut self.save,"Save music direction").on_hover_text("Keep a music direction across restarts. Ordinary messages apply to this session only.");
                     ui.checkbox(&mut self.share,"Send this to hosts").on_hover_text("Share this message on air instead of changing station controls. Maximum 240 characters.");

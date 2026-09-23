@@ -19,7 +19,11 @@ class NewsContextTests(unittest.TestCase):
         with patch.object(writers.rss,'stories',return_value=('Science',[self.story])), patch('radio.segments.base.llm.complete_json',return_value=None):
             lines = writers.news(context)
         self.assertEqual(len(lines),1)
-        self.assertIn('Friday',lines[0].text)
+        # Headline plus one complete sentence: a short bulletin, not a recitation.
+        self.assertIn('Monday',lines[0].text)
+        self.assertIn('Observatory opens visitor centre',lines[0].text)
+        self.assertNotIn('Friday',lines[0].text)
+        self.assertLessEqual(len(lines[0].text.split()),news_context.FALLBACK_WORDS)
         self.assertIn('Local Bulletin',lines[0].text)
         self.assertNotIn('whole story',lines[0].text)
         self.assertEqual(context['_news_items'],[self.story])
@@ -43,7 +47,7 @@ class NewsContextTests(unittest.TestCase):
         bad = [Line('mav','The observatory opened.'),Line('rue',"that's it? that's the whole story?"),Line('mav','That is the whole story.')]
         with patch.object(writers.rss,'stories',return_value=('Science',[self.story])), patch.object(writers,'write',return_value=bad):
             lines=writers.news({})
-        self.assertIn('Friday',lines[0].text)
+        self.assertIn('Monday',lines[0].text)
         self.assertNotIn('whole story',' '.join(l.text for l in lines))
 
     def test_substantive_feed_needs_no_article_request(self):

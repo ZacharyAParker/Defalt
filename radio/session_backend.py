@@ -50,6 +50,10 @@ class SessionUnavailable(RuntimeError):
     pass
 
 
+class ContentRejected(SessionUnavailable):
+    """The backend worked; this one answer was unusable. Not a health signal."""
+
+
 def setting(name: str, default=None):
     return config.station.get('director_backend.' + name, default)
 
@@ -231,7 +235,7 @@ def complete(system, user, *, purpose, memory, memory_fingerprint, timeout,
                 parsed = json.loads(text) if json_mode else text
             except json.JSONDecodeError:
                 if format_attempt:
-                    raise SessionUnavailable('Response is not valid JSON') from None
+                    raise ContentRejected('Response is not valid JSON') from None
                 # One fresh attempt shares the original deadline. Do not resume an
                 # invalid answer or weaken any event, memory, or action validation.
                 thread_id, resume = None, False
@@ -240,7 +244,7 @@ def complete(system, user, *, purpose, memory, memory_fingerprint, timeout,
                     'request': user, 'approved_memory': memory}, ensure_ascii=False)
                 continue
             if validator is not None and not validator(parsed):
-                raise SessionUnavailable('Response failed validation')
+                raise ContentRejected('Response failed validation')
             break
         lane['state'] = ({'thread_id': found_thread, 'fingerprint': fingerprint,
                           'turns': state.get('turns', 0) + 1 if resume else 1,
@@ -248,6 +252,13 @@ def complete(system, user, *, purpose, memory, memory_fingerprint, timeout,
         record('codex', elapsed=round(time.monotonic() - started, 2),
                resumed=bool(resume), format_retries=format_attempt, memory_refs=refs, memory_warning=memory_warning)
         return text
+    except ContentRejected as exc:
+        # A draft that fails the writer's checks says nothing about whether
+        # Codex is healthy. Drop the conversation, but do not bench the
+        # backend for every other purpose.
+        lane['state'] = {}
+        record('rejected', error=str(exc))
+        return None
     except Exception as exc:
         lane['state'] = {}
         _RETRY_AT = time.monotonic() + 30

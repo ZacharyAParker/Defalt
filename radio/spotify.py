@@ -27,15 +27,22 @@ def _checked(response):
 
 
 def search(query):
+    return _tracks(query)
+
+
+def _tracks(query, limit=8, offset=0):
     global _token
     query = str(query or "").strip()
     if not 2 <= len(query) <= 240 or re.search(r"https?://|youtube\.com/|youtu\.be/", query, re.I):
         return []
     if not available():
         raise ValueError("Spotify suggestions need the same Spotify credentials used by Console.")
+    limit = max(1, min(50, int(limit)))
+    offset = max(0, min(950, int(offset)))
+    cache_key = query if (limit, offset) == (8, 0) else (query, limit, offset)
     try:
         with _lock:
-            cached = _cache.get(query)
+            cached = _cache.get(cache_key)
             if cached and cached[0] > time.monotonic():
                 return cached[1]
             if not _token or _token[1] <= time.monotonic():
@@ -44,14 +51,17 @@ def search(query):
                     data={"grant_type": "client_credentials"}, timeout=8))
                 _token = (body["access_token"], time.monotonic() + max(1, int(body.get("expires_in", 3600)) - 60))
             token = _token[0]
-        response = httpx.get("https://api.spotify.com/v1/search", params={"q": query, "type": "track", "limit": 8},
+        params = {"q": query, "type": "track", "limit": limit}
+        if offset:
+            params["offset"] = offset
+        response = httpx.get("https://api.spotify.com/v1/search", params=params,
                             headers={"Authorization": "Bearer " + token}, timeout=8)
         if response.status_code == 401:
             with _lock:
                 _token = None
         body = _checked(response)
         results = []
-        for item in body.get("tracks", {}).get("items", [])[:8]:
+        for item in body.get("tracks", {}).get("items", [])[:limit]:
             if not isinstance(item, dict):
                 continue
             artist = ", ".join(a["name"] for a in item.get("artists", [])
@@ -60,18 +70,53 @@ def search(query):
             if not artist or not isinstance(title, str) or not title:
                 continue
             album = item.get("album") or {}
-            results.append({"artist": artist, "title": title, "album": album.get("name"),
-                            "artwork": next((image.get("url") for image in album.get("images", [])
-                                             if isinstance(image, dict) and str(image.get("url", "")).startswith("https://i.scdn.co/")), None),
-                            "year": str(album.get("release_date") or "")[:4],
-                            "duration_ms": item.get("duration_ms") or 0})
+            entry = {"artist": artist, "title": title, "album": album.get("name"),
+                     "artwork": next((image.get("url") for image in album.get("images", [])
+                                      if isinstance(image, dict) and str(image.get("url", "")).startswith("https://i.scdn.co/")), None),
+                     "year": str(album.get("release_date") or "")[:4],
+                     "duration_ms": item.get("duration_ms") or 0}
+            if (limit, offset) != (8, 0):
+                entry["explicit"] = bool(item.get("explicit"))
+                entry["popularity"] = item.get("popularity") if type(item.get("popularity")) is int else None
+            results.append(entry)
         with _lock:
             if len(_cache) >= 128:
                 _cache.pop(next(iter(_cache)))
-            _cache[query] = (time.monotonic() + 300, results)
+            _cache[cache_key] = (time.monotonic() + 300, results)
         return results
     except (httpx.HTTPError, KeyError, TypeError) as error:
         raise ValueError("Spotify search is unavailable. You can still type a request or paste a YouTube link.") from error
+
+
+def _quoted(value):
+    value = re.sub(r'\s+', " ", re.sub(r'["\\]', " ", str(value or ""))).strip()
+    return f'"{value}"' if " " in value else value
+
+
+def catalog(*, years=None, genre=None, artist=None, title=None, limit=20, offset=0):
+    """Filtered catalog search: real recordings with year, album and length.
+
+    Spotify's field filters do the narrowing (year:2010-2015, genre:"r&b",
+    artist:, track:), so no free text can match a title by accident. Each
+    result's `year` is an int or None; the caller still checks it.
+    """
+    parts = []
+    if title:
+        parts.append(f"track:{_quoted(title)}")
+    if artist:
+        parts.append(f"artist:{_quoted(artist)}")
+    if genre:
+        parts.append(f"genre:{_quoted(genre)}")
+    if years:
+        first, last = years
+        parts.append(f"year:{first}" if first == last else f"year:{first}-{last}")
+    if not parts:
+        return []
+    results = []
+    for item in _tracks(" ".join(parts), limit=limit, offset=offset):
+        year = item.get("year")
+        results.append({**item, "year": int(year) if str(year or "").isdigit() else None})
+    return results
 
 
 def selected(query, payload):

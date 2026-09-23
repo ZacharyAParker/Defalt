@@ -17,7 +17,7 @@
   /* Silkscreen */
   --text:      #ece5d8;
   --text-dim:  #a49a89;
-  --text-mute: #6f6759;
+  --text-mute: #948a78;   /* 4.6:1 on the lightest panel, 5.7:1 on the page */
 
   /* Signal */
   --amber:      #ffb020;
@@ -166,7 +166,7 @@ button, input { font: inherit; color: inherit; }
 .readout { display: grid; gap: 2px; }
 .readout__label {
   font-family: var(--mono);
-  font-size: 9.5px;
+  font-size: 11px;
   letter-spacing: .16em;
   text-transform: uppercase;
   color: var(--text-mute);
@@ -209,7 +209,7 @@ button, input { font: inherit; color: inherit; }
 
 .now__eyebrow {
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: .2em;
   text-transform: uppercase;
   color: var(--text-mute);
@@ -428,7 +428,7 @@ button, input { font: inherit; color: inherit; }
 }
 .pill {
   margin-inline-start: auto;
-  font-family: var(--mono); font-size: 10px;
+  font-family: var(--mono); font-size: 11px;
   padding: 3px 8px;
   color: var(--text-mute);
   background: #ffffff07;
@@ -455,7 +455,7 @@ button, input { font: inherit; color: inherit; }
 
 .line__host {
   font-family: var(--mono);
-  font-size: 9.5px;
+  font-size: 11px;
   letter-spacing: .18em;
   text-transform: uppercase;
   color: var(--green);
@@ -477,7 +477,7 @@ button, input { font: inherit; color: inherit; }
   display: grid; gap: 8px;
 }
 .request__label {
-  font-family: var(--mono); font-size: 9.5px;
+  font-family: var(--mono); font-size: 11px;
   letter-spacing: .18em; text-transform: uppercase;
   color: var(--text-mute);
 }
@@ -515,7 +515,7 @@ textarea.request__input:not([hidden]) + .btn--send { align-self: flex-start; min
 .request__input:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
 
 .request__note { font-size: 11.5px; color: var(--text-mute); line-height: 1.5; }
-.request__note[data-tone="bad"]  { color: #ffb9b2; }
+.request__note[data-tone="bad"]  { color: var(--red); }
 .request__note[data-tone="good"] { color: var(--green); }
 
 /* ── The queue ────────────────────────────────────────────────────── */
@@ -527,19 +527,19 @@ textarea.request__input:not([hidden]) + .btn--send { align-self: flex-start; min
 .lineup__head { display: flex; align-items: center; gap: 8px; }
 .lineup__head h3 {
   margin: 0;
-  font-size: 9.5px; font-weight: 700;
+  font-size: 11px; font-weight: 700;
   letter-spacing: .18em; text-transform: uppercase;
   color: var(--text-mute);
 }
 .lineup__count {
-  font-family: var(--mono); font-size: 9.5px; color: var(--text-mute);
+  font-family: var(--mono); font-size: 11px; color: var(--text-mute);
   padding: 1px 6px; border-radius: 99px;
   background: #ffffff08; border: 1px solid var(--edge);
 }
 .lineup__clear {
   margin-inline-start: auto;
   background: none; border: 0; cursor: pointer;
-  font-family: var(--mono); font-size: 9.5px;
+  font-family: var(--mono); font-size: 11px;
   letter-spacing: .12em; text-transform: uppercase;
   color: var(--text-mute);
   transition: color .15s;
@@ -562,7 +562,7 @@ textarea.request__input:not([hidden]) + .btn--send { align-self: flex-start; min
 .queue__item {
   display: flex; align-items: center; gap: 8px;
   min-width: 0;
-  padding: 5px 8px;
+  padding: 2px 4px 2px 8px;
   background: #ffffff06;
   border: 1px solid var(--edge);
   border-radius: var(--r-sm);
@@ -576,7 +576,7 @@ textarea.request__input:not([hidden]) + .btn--send { align-self: flex-start; min
 .queue__item--wish { border-color: #2c5a44; background: #6ee7a80a; }
 
 .queue__kind {
-  font-family: var(--mono); font-size: 8.5px;
+  font-family: var(--mono); font-size: 11px;
   letter-spacing: .12em; text-transform: uppercase;
   color: var(--text-mute); flex: none;
   min-width: 46px;
@@ -599,32 +599,32 @@ textarea.request__input:not([hidden]) + .btn--send { align-self: flex-start; min
 .queue__item[data-stage="finding"] .queue__label { opacity: .6; }
 
 .queue__note {
-  font-family: var(--mono); font-size: 9.5px; color: var(--text-mute);
+  font-family: var(--mono); font-size: 11px; color: var(--text-mute);
   flex: none;
 }
 
-/* Controls stay out of the way until you are looking at the row. Always
-   visible on touch, where there is no hover to reveal them. */
-.queue__actions { display: flex; gap: 1px; flex: none; opacity: .3; transition: opacity .15s; }
+/* Controls stay quiet until you are looking at the row. Always fully visible
+   on touch or a coarse pointer, where there is no hover to reveal them. */
+.queue__actions { display: flex; gap: 2px; flex: none; opacity: .55; transition: opacity .15s; }
 .queue__item:hover .queue__actions,
 .queue__item:focus-within .queue__actions { opacity: 1; }
-@media (hover: none) { .queue__actions { opacity: 1; } }
+@media (hover: none), (pointer: coarse) { .queue__actions { opacity: 1; } }
 
 .queue__act {
   background: none; border: 0; cursor: pointer;
   color: var(--text-mute);
-  padding: 3px;
-  border-radius: 3px;
+  min-width: 32px; min-height: 32px;
+  padding: 0;
+  border-radius: var(--r-sm);
   display: grid; place-items: center;
   transition: color .15s, background .15s;
 }
+@media (pointer: coarse) { .queue__act { min-width: 44px; min-height: 44px; } }
 .queue__act:hover:not(:disabled) { color: var(--text); background: #ffffff10; }
 .queue__act:last-child:hover:not(:disabled) { color: var(--red); }
 .queue__act:disabled { opacity: .4; cursor: default; }
 
 .icon--xs { width: 13px; height: 13px; stroke-width: 2; }
-.request__note[data-tone="bad"] { color: var(--red); }
-.request__note[data-tone="good"] { color: var(--green); }
 
 /* ═══ Timeline ════════════════════════════════════════════════════════ */
 .timeline { padding: 0 0 14px; position: relative; }
@@ -641,7 +641,7 @@ textarea.request__input:not([hidden]) + .btn--send { align-self: flex-start; min
 
 .legend { display: flex; gap: 14px; margin-inline-start: auto; flex-wrap: wrap; }
 .key {
-  font-family: var(--mono); font-size: 9.5px;
+  font-family: var(--mono); font-size: 11px;
   letter-spacing: .13em; text-transform: uppercase;
   color: var(--text-mute);
   display: inline-flex; align-items: center; gap: 6px;
@@ -683,7 +683,7 @@ textarea.request__input:not([hidden]) + .btn--send { align-self: flex-start; min
   letter-spacing: .17em; text-transform: uppercase;
 }
 .panel__sub {
-  font-family: var(--mono); font-size: 10px;
+  font-family: var(--mono); font-size: 11px;
   color: var(--text-mute); letter-spacing: .04em;
 }
 .panel__chevron {
@@ -721,6 +721,7 @@ textarea.request__input:not([hidden]) + .btn--send { align-self: flex-start; min
   border: 1px solid var(--edge-lit);
   border-radius: var(--r-md);
   box-shadow: var(--shadow-lift);
+  max-width: 340px;
   font-family: var(--mono);
   font-size: 12.5px;
   letter-spacing: .04em;
@@ -728,6 +729,7 @@ textarea.request__input:not([hidden]) + .btn--send { align-self: flex-start; min
   transition: border-color .18s;
 }
 .picker:hover { border-color: #5b4e3b; }
+.picker:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
 .picker option { background: var(--ink-200); color: var(--text); }
 .fader__top {
   display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
@@ -815,107 +817,6 @@ textarea.request__input:not([hidden]) + .btn--send { align-self: flex-start; min
   .rate { margin-inline-start: 0; }
   .talkback { min-height: 320px; }
 }
-
-/* =========================================================================
-   DECK — the manual half. A record, a waveform, and a hand on it.
-   ========================================================================= */
-
-.desk {
-  margin: 0 18px 14px;
-  padding: 14px 16px 16px;
-  background: linear-gradient(180deg, var(--ink-100), var(--ink-050));
-  border: 1px solid var(--edge);
-  border-radius: var(--r-lg);
-  box-shadow: var(--shadow-panel);
-}
-
-.desk__head { display: flex; align-items: center; gap: 12px; }
-.desk__head h2 {
-  font-size: 11px; font-weight: 700;
-  letter-spacing: .17em; text-transform: uppercase;
-  color: var(--amber);
-}
-.desk__spacer { margin-inline-start: auto; }
-
-.desk__stat {
-  font-family: var(--mono); font-size: 10px;
-  letter-spacing: .06em;
-  color: var(--text-mute);
-  padding: 2px 7px;
-  border: 1px solid var(--edge);
-  border-radius: var(--r-sm);
-}
-
-.picker {
-  font-family: var(--mono); font-size: 11px;
-  color: var(--text); background: var(--ink-200);
-  border: 1px solid var(--edge-lit); border-radius: var(--r-sm);
-  padding: 5px 8px; max-width: 340px;
-}
-.picker:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
-
-.desk__title {
-  font-family: var(--sans); font-size: 21px; font-weight: 700;
-  letter-spacing: -.01em; margin: 10px 0 0;
-}
-.desk__artist { font-size: 12px; color: var(--text-dim); margin: 1px 0 0; }
-
-/* The waveform owns its own height; the canvas is sized in JS to the device
-   pixel ratio, so it must not be scaled by CSS or it goes soft. */
-.wave {
-  display: block; width: 100%; height: 132px;
-  margin: 12px 0 10px;
-  background: var(--ink-000);
-  border: 1px solid var(--edge);
-  border-radius: var(--r-md);
-  cursor: ew-resize;
-  touch-action: none;
-}
-.wave[data-empty="true"] { cursor: default; }
-
-.desk__row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.desk__play { min-width: 104px; }
-
-.desk__time {
-  display: flex; align-items: baseline; gap: 6px;
-  font-family: var(--mono); font-size: 15px;
-}
-.desk__time-sep { color: var(--text-mute); }
-.desk__time-left { color: var(--text-dim); font-size: 13px; }
-
-.pitch { display: flex; align-items: center; gap: 9px; }
-.pitch__label {
-  font-family: var(--mono); font-size: 9.5px;
-  letter-spacing: .14em; text-transform: uppercase;
-  color: var(--text-mute);
-}
-.pitch__value { font-size: 11px; color: var(--text-dim); min-width: 46px; text-align: right; }
-
-.pitch__fader {
-  -webkit-appearance: none; appearance: none;
-  width: 190px; height: 22px; background: none; cursor: pointer;
-}
-.pitch__fader::-webkit-slider-runnable-track {
-  height: 3px; border-radius: 2px;
-  background: var(--edge-lit);
-}
-.pitch__fader::-webkit-slider-thumb {
-  -webkit-appearance: none; appearance: none;
-  width: 11px; height: 20px; margin-top: -8.5px;
-  border-radius: 2px;
-  background: linear-gradient(180deg, #d9d2c4, #857c6c);
-  border: 1px solid #0006;
-  box-shadow: 0 1px 3px #000a;
-}
-.pitch__fader:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
-
-.pitch__reset {
-  font-family: var(--mono); font-size: 9px; letter-spacing: .1em;
-  color: var(--text-mute); background: none;
-  border: 1px solid var(--edge); border-radius: var(--r-sm);
-  padding: 3px 6px; cursor: pointer;
-}
-.pitch__reset:hover { color: var(--text); border-color: var(--edge-lit); }
 
 .ad-controls { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:16px; border-bottom:1px solid var(--edge); }
 .ad-controls strong { flex-basis:100%; font-size:13px; }

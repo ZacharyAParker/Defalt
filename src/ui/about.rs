@@ -34,10 +34,11 @@ pub fn footer(app: &mut Defalt, ui: &mut Ui) {
         .frame(egui::Frame::NONE.fill(theme::GROUND).inner_margin(egui::Margin::symmetric(12, 4)))
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
-                ui.label(RichText::new(format!("Defalt v{VERSION}  ·  {COPYRIGHT}")).size(11.0).color(theme::TEXT_DIM));
+                ui.label(RichText::new(format!("Defalt v{VERSION}  ·  {COPYRIGHT}")).size(theme::SIZE_S).color(theme::TEXT_DIM));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    super::feedback::footer_button(app, ui);
                     for page in Page::ALL.into_iter().rev() {
-                        if ui.add(egui::Button::new(RichText::new(page.label()).size(11.0)).frame(false)).clicked() {
+                        if ui.add(egui::Button::new(RichText::new(page.label()).size(theme::SIZE_S)).frame(false)).clicked() {
                             app.info_page = Some(page);
                         }
                     }
@@ -76,7 +77,7 @@ pub fn overlay(app: &mut Defalt, ctx: &egui::Context) {
                 .show(ui, |ui| document(ui, page.content()));
             ui.separator();
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(format!("v{VERSION}  ·  {COPYRIGHT}")).size(11.0).color(theme::TEXT_DIM));
+                ui.label(RichText::new(format!("v{VERSION}  ·  {COPYRIGHT}")).size(theme::SIZE_S).color(theme::TEXT_DIM));
                 ui.hyperlink_to("Repository", "https://github.com/ZacharyAParker/Defalt");
             });
         });
@@ -91,20 +92,20 @@ fn document(ui: &mut Ui, text: &str) {
         if line.is_empty() { ui.add_space(6.0); }
         else if let Some(title) = line.strip_prefix("### ") {
             ui.add_space(8.0);
-            ui.label(RichText::new(title).size(15.0).strong());
+            ui.label(RichText::new(title).size(theme::SIZE_L).strong());
         } else if let Some(title) = line.strip_prefix("## ") {
             ui.add_space(10.0);
-            ui.label(RichText::new(title).size(17.0).strong());
+            ui.label(RichText::new(title).size(theme::SIZE_L).strong());
         } else if let Some(title) = line.strip_prefix("# ") {
-            ui.label(RichText::new(title).size(23.0).strong());
+            ui.label(RichText::new(title).size(theme::SIZE_XXL).strong());
         } else if let Some(item) = line.strip_prefix("- ") {
             ui.horizontal_top(|ui| {
                 ui.label("•");
-                ui.add(egui::Label::new(RichText::new(item).size(13.0)).wrap().selectable(true));
+                ui.add(egui::Label::new(RichText::new(item).size(theme::SIZE_M)).wrap().selectable(true));
             });
             ui.add_space(4.0);
         } else {
-            ui.add(egui::Label::new(RichText::new(line).size(13.0)).wrap().selectable(true));
+            ui.add(egui::Label::new(RichText::new(line).size(theme::SIZE_M)).wrap().selectable(true));
         }
     }
 }

@@ -10,6 +10,7 @@ import os
 import copy
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +50,24 @@ DEBUG = env_bool("RADIO_DEBUG")
 FFMPEG = env("FFMPEG_BIN", "ffmpeg")
 
 
+def _ffprobe() -> str:
+    """ffprobe lives beside a configured ffmpeg far more often than on PATH."""
+    explicit = env("FFPROBE_BIN")
+    if explicit:
+        return explicit
+    ffmpeg = Path(FFMPEG)
+    if ffmpeg.parent != Path("."):
+        return str(ffmpeg.with_name("ffprobe" + ffmpeg.suffix))
+    return "ffprobe"
+
+
+FFPROBE = _ffprobe()
+
+# How often a config file is looked at on disk. Every request reads settings
+# dozens of times; a stat per read was most of what a status poll cost.
+STAT_INTERVAL = 1.0
+
+
 class ConfigFile:
     """A single YAML file that reloads itself when it changes on disk."""
 
@@ -56,19 +75,33 @@ class ConfigFile:
         self.path = path
         self._lock = threading.Lock()
         self._mtime: float | None = None
+        self._checked = 0.0
         self._data: dict[str, Any] = {}
+        # Bumped on every reload, so anything derived from it knows to redo.
+        self.version = 0
 
     def data(self) -> dict[str, Any]:
         with self._lock:
+            now = time.monotonic()
+            # A cleared _mtime means "look now" (set_many does that after a
+            # write); otherwise the disk is asked at most once a second.
+            if self._mtime is not None and now - self._checked < STAT_INTERVAL:
+                return self._data
+            self._checked = now
             try:
                 mtime = self.path.stat().st_mtime
             except OSError:
+                # Absent (an overrides file usually is). Remember that we
+                # looked, so the next read inside the interval does not.
+                if self._mtime is None:
+                    self._mtime = -1.0
                 return self._data
             if mtime != self._mtime:
                 try:
                     loaded = yaml.safe_load(self.path.read_text(encoding="utf-8"))
                     self._data = loaded if isinstance(loaded, dict) else {}
                     self._mtime = mtime
+                    self.version += 1
                 except (OSError, yaml.YAMLError):
                     # Keep serving the last good copy. A typo mid-edit should
                     # never take the station off the air.
@@ -96,9 +129,21 @@ class OverridableConfig:
         self.base = ConfigFile(base)
         self.override = ConfigFile(override)
         self._write_lock = threading.Lock()
+        self._merged: tuple[Any, Any, dict[str, Any]] | None = None
+
+    def version(self) -> tuple[int, int]:
+        """Changes whenever either layer is reloaded from disk."""
+        self.base.data()
+        self.override.data()
+        return self.base.version, self.override.version
 
     def data(self) -> dict[str, Any]:
-        return _deep_merge(self.base.data(), self.override.data())
+        base, top = self.base.data(), self.override.data()
+        merged = self._merged
+        if merged is None or merged[0] is not base or merged[1] is not top:
+            merged = (base, top, _deep_merge(base, top))
+            self._merged = merged
+        return merged[2]
 
     def get(self, dotted: str, default: Any = None) -> Any:
         sentinel = object()
@@ -163,10 +208,39 @@ news = ConfigFile(CONFIG_DIR / "news.yaml")
 games = ConfigFile(CONFIG_DIR / "games.yaml")
 
 
+_PERSONAS_LOCK = threading.Lock()
+_personas: dict[str, Any] = {"checked": 0.0, "signature": None, "directory": None, "value": {}}
+
+
 def personas() -> dict[str, dict[str, Any]]:
-    """Load every persona file. Filename is irrelevant; the `id` field wins."""
-    found: dict[str, dict[str, Any]] = {}
+    """Load every persona file. Filename is irrelevant; the `id` field wins.
+
+    Parsed once and kept until a file in the folder changes. Callers get
+    their own copy, so nothing one of them does leaks into the next.
+    """
     directory = CONFIG_DIR / "personas"
+    with _PERSONAS_LOCK:
+        now = time.monotonic()
+        cache = _personas
+        if (cache["signature"] is None or cache["directory"] != directory
+                or now - cache["checked"] >= STAT_INTERVAL):
+            cache["checked"] = now
+            signature = []
+            try:
+                for path in directory.glob("*.yaml"):
+                    stat = path.stat()
+                    signature.append((path.name, stat.st_mtime_ns, stat.st_size))
+            except OSError:
+                pass
+            signature = tuple(sorted(signature))
+            if signature != cache["signature"] or cache["directory"] != directory:
+                cache.update(signature=signature, directory=directory,
+                             value=_load_personas(directory))
+        return copy.deepcopy(cache["value"])
+
+
+def _load_personas(directory: Path) -> dict[str, dict[str, Any]]:
+    found: dict[str, dict[str, Any]] = {}
     if not directory.is_dir():
         return found
     for path in sorted(directory.glob("*.yaml")):

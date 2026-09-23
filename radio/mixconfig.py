@@ -4,7 +4,24 @@ from . import config
 
 # key, label, default, bounds/options. One schema serves validation and the UI.
 FIELDS = [
-    ("transitions.preset", "Transition", "auto", ["auto", "fade", "rise", "blend", "wave", "melt", "slam"]),
+    ("transitions.preset", "Transition", "auto", ["auto", "fade", "rise", "blend", "wave", "melt", "slam",
+                                                  "echo_out", "loop_roll", "brake", "spinback", "echo_freeze",
+                                                  "reverb_wash", "stem_swap", "acapella_intro", "filter_ride",
+                                                  "silence_punch", "drop_swap"]),
+    ("transitions.creativity", "Transition creativity (0 smooth radio, 1 show-off DJ)", 0.5, [0.0, 1.0]),
+    ("transitions.technique_memory", "Mixes before a technique may repeat", 3, [0, 8]),
+    ("transitions.allow_echo_out", "Echo out", True, None),
+    ("transitions.allow_loop_roll", "Loop roll into the drop", True, None),
+    ("transitions.allow_brake", "Turntable brake", True, None),
+    ("transitions.allow_spinback", "Spinback", True, None),
+    ("transitions.allow_echo_freeze", "Echo freeze", True, None),
+    ("transitions.allow_reverb_wash", "Reverb wash", True, None),
+    ("transitions.allow_stem_swap", "Stem swap (separated records)", True, None),
+    ("transitions.allow_acapella_intro", "Acapella intro (separated records)", True, None),
+    ("transitions.allow_filter_ride", "Filter ride", True, None),
+    ("transitions.allow_silence_punch", "Silence before the drop", True, None),
+    ("transitions.allow_drop_swap", "Drop swap on the downbeat", True, None),
+    ("hosts.transition_note_chance", "Hosts mention a flashy transition", 0.3, [0.0, 1.0]),
     ("crossfade.duration", "Base overlap (seconds)", 6.0, [0.5, 20.0]),
     ("transitions.minimum_blend_seconds", "Shortest automatic blend (seconds)", 3.0, [0.5, 12.0]),
     ("transitions.long_multiplier", "Compatible tracks: length multiplier", 1.5, [1.0, 2.5]),
@@ -95,22 +112,58 @@ FIELDS = [
     ("selection.compatibility.energy_weight", "Energy direction influence", 0.3, [0.0, 1.0]),
 ]
 
+# Where a field is shown and in what unit, for the settings panels that lay
+# themselves out from the schema. Fields without an entry use each panel's
+# own grouping.
+PRESENTATION = {
+    "transitions.preset": {"group": "Transitions"},
+    "transitions.creativity": {"group": "Transitions", "unit": "percent"},
+    "transitions.technique_memory": {"group": "Transitions", "unit": "transitions"},
+    **{f"transitions.allow_{name}": {"group": "Transitions"} for name in (
+        "echo_out", "loop_roll", "brake", "spinback", "echo_freeze", "reverb_wash", "stem_swap",
+        "acapella_intro", "filter_ride", "silence_punch", "drop_swap")},
+    "hosts.transition_note_chance": {"group": "Hosts and speech", "unit": "percent"},
+}
+
 BASE = {key: default for key, _, default, _ in FIELDS if not key.startswith("selection.")}
 PROFILES = {
     "Smooth DJ": dict(BASE),
     "Clean radio": {**BASE, "crossfade.duration": 3.0, "transitions.tempo_match": False,
+                    "transitions.creativity": 0.0,
                     "transitions.eq_strength": 0.5, "transitions.filters_enabled": False,
                     "transitions.echo_enabled": False, "transitions.phrase_beats": 0},
     "Expressive club": {**BASE, "crossfade.duration": 10.0, "transitions.eq_strength": 1.0,
-                        "transitions.echo_mix": 0.28, "transitions.phrase_beats": 8},
+                        "transitions.echo_mix": 0.28, "transitions.phrase_beats": 8,
+                        "transitions.creativity": 0.85},
 }
 
 
+_snapshot_cache = {"entry": (None, None)}
+
+
 def snapshot():
+    """The settings panel's view. Rebuilt only after a config file reloads."""
+    settings = config.station
+    version = getattr(settings, "version", None)
+    if not callable(version):
+        return _build_snapshot()
+    # The reader is part of the identity: a substituted get() (tests do this)
+    # must never be answered from a cache built through another one.
+    reader = getattr(settings.get, "__func__", settings.get)
+    key = (id(settings), id(reader), version())
+    cached_key, cached = _snapshot_cache["entry"]
+    if cached_key == key:
+        return cached
+    value = _build_snapshot()
+    _snapshot_cache["entry"] = (key, value)  # one assignment: never half-updated
+    return value
+
+
+def _build_snapshot():
     return {"profiles": PROFILES, "fields": [
         {"key": key, "label": label, "value": config.station.get(key, default),
          "kind": "bool" if isinstance(default, bool) else "choice" if isinstance(default, str) else "int" if isinstance(default, int) else "number",
-         "bounds": bounds}
+         "bounds": bounds, **PRESENTATION.get(key, {})}
         for key, label, default, bounds in FIELDS]}
 
 

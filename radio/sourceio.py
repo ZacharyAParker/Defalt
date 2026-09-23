@@ -58,7 +58,6 @@ def guess_metadata(evidence):
 
 
 def main():
-    from yt_dlp import YoutubeDL
     for stream in (sys.stdout, sys.stderr):
         stream.reconfigure(encoding="utf-8", errors="replace")
     payload = json.load(sys.stdin)
@@ -105,6 +104,9 @@ def main():
         print(json.dumps({"id": payload["video_id"], "title": data.get("title"),
                           "uploader": data.get("author_name")}), flush=True)
         return
+    # yt-dlp takes a second or more to import; only the YouTube operations
+    # pay for it. News, articles and song context start immediately.
+    from yt_dlp import YoutubeDL
     options = {**payload["options"], "quiet": True, "no_warnings": True,
                "noprogress": True, "extractor_retries": 1, "fragment_retries": 1,
                "cachedir": False}

@@ -65,10 +65,8 @@ Target the listener's {targets} to an
 artist. Artist jokes may mock the supplied titles, stage name, genre tag or
 artistic brand as opinion. No invented biography, scandals, quotes or lyrics.
 Only the supplied VERIFIED MEME opening may quote a meme. Do not add any other
-meme, quotation, lyric or music lore from memory.
-Exaggeration must read as a joke, not a claim about the listener's private life.
-No protected-trait attacks, diagnoses, threats or slurs. Do not apologize for
-the joke, reassure the listener afterwards, explain it or say 'just kidding'."""
+meme, quotation, lyric or music lore from memory. No diagnoses, and no
+reassurance or 'just kidding' after the joke."""
 
 
 def fallback(data, anchor, wildcard, recent, introduce):
@@ -220,7 +218,7 @@ Two to four short lines, about {context.get('speech_budget', 12):.0f} seconds to
 {wildcard} starts. {instruction}"""
     if reference and introduce:
         # Both lines are already fixed; do not make an unused model request.
-        return backup
+        return _named(backup, data, anchor, introduce)
     lines = write(brief, fallback=backup, max_tokens=450, temperature=0.95)
     if reference:
         # The sourced opening is authored, not reconstructed from model memory.
@@ -230,7 +228,22 @@ Two to four short lines, about {context.get('speech_budget', 12):.0f} seconds to
             reply = backup[-1]
         return [backup[0], reply]
     if recycled(lines, recent, data) or (angle != 'listening' and uses_history(lines, data)):
-        return backup
+        return _named(backup, data, anchor, introduce)
     if background:
-        return [Line(line.host, line.text, {k: v for k, v in background.items() if k != "text"}) for line in lines]
+        lines = [Line(line.host, line.text, {k: v for k, v in background.items() if k != "text"}) for line in lines]
+    return _named(lines, data, anchor, introduce)
+
+
+def _named(lines, data, anchor, introduce):
+    """An introduction must end on the line naming the song, and that line is required.
+
+    If a model dropped it (or the contrast filter removed it), append the
+    plain credit rather than air an intro that never says what is playing.
+    """
+    if not introduce or not lines or not data.get("incoming"):
+        return lines
+    title = str(data["incoming"].get("title") or "")
+    if title and title.casefold() not in lines[-1].text.casefold():
+        lines = lines + [Line(anchor, f"{title}, by {data['incoming'].get('artist')}.")]
+    lines[-1].required = True
     return lines

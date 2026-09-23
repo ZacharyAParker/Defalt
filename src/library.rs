@@ -41,6 +41,23 @@ pub fn database(root: &Path) -> PathBuf {
     root.join("cache").join("station.db")
 }
 
+/// Read the library on a thread of its own. A few thousand rows with a file
+/// check each is a noticeable pause on a slow disk, and the console must be
+/// drawing while it happens -- at startup most of all.
+pub fn load_in_background(root: &Path) -> std::sync::mpsc::Receiver<Result<Vec<Record>, String>> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let root = root.to_path_buf();
+    std::thread::Builder::new()
+        .name("library".into())
+        .spawn(move || {
+            let result = std::panic::catch_unwind(|| load(&root))
+                .unwrap_or_else(|_| Err("reading the library crashed".into()));
+            let _ = sender.send(result);
+        })
+        .ok();
+    receiver
+}
+
 /// Every local record with a file still on disk.
 ///
 /// The radio's own fetched records are deliberately left out: they are cache,
@@ -59,6 +76,11 @@ pub fn load(root: &Path) -> Result<Vec<Record>, String> {
         | rusqlite::OpenFlags::SQLITE_OPEN_URI
         | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
     let connection = rusqlite::Connection::open_with_flags(&path, flags)
+        .map_err(|error| format!("could not open the library: {error}"))?;
+    // The station may be mid-write (an import, a fetch). Wait a moment for
+    // it rather than failing the whole crate on SQLITE_BUSY.
+    connection
+        .busy_timeout(std::time::Duration::from_secs(2))
         .map_err(|error| format!("could not open the library: {error}"))?;
 
     let mut statement = connection

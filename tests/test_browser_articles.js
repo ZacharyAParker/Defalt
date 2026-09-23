@@ -1,7 +1,6 @@
-const fs = require('node:fs');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
-const source = fs.readFileSync('web/static/radio.js', 'utf8');
+const {section} = require('./browser_harness');
 function element() {
   return {value: '', disabled: false, hidden: false, dataset: {}, handlers: {},
     addEventListener(type, fn) { this.handlers[type] = fn; }, focus() {}, replaceChildren() {}};
@@ -18,7 +17,7 @@ async function run() {
       if (fail) throw {payload: {message: 'Paste a longer article.'}};
       return {ok: true, kind: 'article', message: 'Article queued.'};
     }});
-  vm.runInContext(source.slice(source.indexOf('const KIND_LABEL ='), source.indexOf('const STAGE_LABEL =')), context);
+  vm.runInContext(section('web/static/radio.js', 'const KIND_LABEL =', 'const STAGE_LABEL ='), context);
   ui.input.value = 'Artist - Song';
   ui.requestMode.value = 'article';
   ui.requestMode.handlers.change();

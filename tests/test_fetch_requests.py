@@ -33,7 +33,7 @@ class RequestFeederTests(unittest.TestCase):
         s.schedule = timeline.Schedule()
         s.rng = random.Random(1)
         s._recent_keys = []
-        s._last_heartbeat = time.time()
+        s._last_heartbeat = time.monotonic()
         s._lineup = [{"track": {"key": str(i)}, "source": "auto"} for i in range(5)]
         self.ready = {"key": "verity", "title": "Verity", "duration": 123, "file": "verity.flac"}
 

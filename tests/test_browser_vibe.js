@@ -1,11 +1,7 @@
 // Run the actual request/vibe handlers against a small UI and API boundary.
-const fs = require('node:fs');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
-const source = fs.readFileSync('web/static/radio.js', 'utf8');
-const start = source.indexOf('const KIND_LABEL =');
-const end = source.indexOf('const STAGE_LABEL =', start);
-assert(start >= 0 && end > start);
+const {section} = require('./browser_harness');
 function element() {
   return { value: '', textContent: '', disabled: false, hidden: false, dataset: {}, handlers: {},
     addEventListener(type, fn) { this.handlers[type] = fn; }, focus() {}, replaceChildren() {} };
@@ -26,7 +22,7 @@ async function run() {
     if (path === '/api/vibe/clear') state = {};
     return {ok: true, vibe: state, message: 'Cleared'};
   }});
-  vm.runInContext(source.slice(start, end), context);
+  vm.runInContext(section('web/static/radio.js', 'const KIND_LABEL =', 'const STAGE_LABEL ='), context);
   ui.requestMode.value = 'vibe';
   ui.requestMode.handlers.change();
   assert.match(ui.requestPrompt.textContent, /what are you doing/);

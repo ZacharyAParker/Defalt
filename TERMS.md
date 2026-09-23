@@ -1,6 +1,6 @@
 # Terms of use
 
-Effective September 18, 2026. Applies to Defalt 0.3.9 as distributed in this repository.
+Effective September 18, 2026. Applies to Defalt 0.4.0 as distributed in this repository.
 
 ## Scope
 
@@ -31,4 +31,4 @@ To the extent permitted by applicable law, the maintainer disclaims implied warr
 Future releases may change these terms; their effective date and bundled version identify the applicable text. Contact the maintainer through the Defalt repository on GitHub. Do not post credentials or private records in public issues.
 
 ---
-Defalt v0.3.9 · © 2026 Zachary Parker
+Defalt v0.4.0 · © 2026 Zachary Parker

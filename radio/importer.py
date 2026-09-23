@@ -160,16 +160,19 @@ def import_file(path: Path | str) -> dict:
     identity = os.path.normcase(str(path))
     stat = path.stat()
 
-    seen = db.one(
-        "SELECT * FROM tracks WHERE import_path=?",
-        (identity,))
-    if (seen and seen["import_mtime_ns"] == stat.st_mtime_ns
-            and seen["import_size"] == stat.st_size):
+    seen = _unchanged(identity, stat)
+    if seen is not None:
+        status = "skipped"
         if (seen["metadata_version"] or 0) < METADATA_VERSION:
             refreshed = refresh_tags(dict(seen), path)
             if refreshed.get("metadata_version") == METADATA_VERSION:
-                return {"key": seen["key"], "status": "updated"}
-        return {"key": seen["key"], "status": "skipped"}
+                status = "updated"
+        if seen["lufs"] is None:
+            # Imported before levels were kept. Players need it to trim a
+            # local file to the station's loudness; one pass, then never again.
+            _store_levels(seen["key"], library.measure(path))
+            status = "updated"
+        return {"key": seen["key"], "status": status}
 
     values = metadata(path)
     if values.get("source_url") and values.get("video_id"):
@@ -181,10 +184,15 @@ def import_file(path: Path | str) -> dict:
 
     # Everything is measured before anything is written, so a file that fails
     # halfway leaves no fingerprint behind and gets retried on the next scan.
-    values["duration"] = values["duration"] or library._probe_duration(path)
     measured = library.measure(path)
+    values["duration"] = (values["duration"] or measured.get("duration")
+                          or library._probe_duration(path))
     values.update(library.shape(measured["samples"], values["duration"]))
+    # Played as it is on disk: the measured level is the playing level.
     values["lufs"] = measured["integrated"]
+    values["source_lufs"] = measured["integrated"]
+    values["applied_gain_db"] = 0.0
+    values["true_peak"] = measured.get("true_peak")
     values.update(analysis.profile(path))
     analysis.peaks(path)
 
@@ -202,8 +210,50 @@ def import_file(path: Path | str) -> dict:
         "ON CONFLICT(key) DO UPDATE SET "
         + ", ".join(f"{column}=excluded.{column}" for column in columns),
         (key, time.time(), *values.values()))
+    _remember(identity, stat, key)
 
     return {"key": key, "status": "updated" if known else "imported"}
+
+
+def _remember(identity: str, stat: os.stat_result, key: str) -> None:
+    db.write("INSERT INTO import_paths (path, mtime_ns, size, key, seen_at) VALUES (?,?,?,?,?) "
+             "ON CONFLICT(path) DO UPDATE SET mtime_ns=excluded.mtime_ns, size=excluded.size, "
+             "key=excluded.key, seen_at=excluded.seen_at",
+             (identity, stat.st_mtime_ns, stat.st_size, key, time.time()))
+
+
+def _unchanged(identity: str, stat: os.stat_result):
+    """The track row for a file read before and untouched since, else None.
+
+    Looked up by path in import_paths, not on the track row: two files with
+    the same artist and title share a row, and the row only remembers the
+    last one imported, so the other was re-analysed on every single scan.
+    """
+    recorded = db.one("SELECT key, mtime_ns, size FROM import_paths WHERE path=?", (identity,))
+    if recorded is not None:
+        if (recorded["mtime_ns"], recorded["size"]) != (stat.st_mtime_ns, stat.st_size):
+            return None
+        row = db.one("SELECT * FROM tracks WHERE key=?", (recorded["key"],))
+    else:
+        # Imported before import_paths existed: the row itself still knows.
+        row = db.one("SELECT * FROM tracks WHERE import_path=?", (identity,))
+        if row is None or (row["import_mtime_ns"], row["import_size"]) != (
+                stat.st_mtime_ns, stat.st_size):
+            return None
+        _remember(identity, stat, row["key"])
+    if row is None:
+        return None
+    # The row may now describe the twin of this file, and the twin may be
+    # gone. Then this copy is the record, and it has to be read properly.
+    current = row["file"]
+    if current and os.path.normcase(str(current)) != identity and not Path(current).is_file():
+        return None
+    return row
+
+
+def _store_levels(key: str, measured: dict) -> None:
+    db.write("UPDATE tracks SET lufs=?, source_lufs=?, applied_gain_db=0, true_peak=? WHERE key=?",
+             (measured["integrated"], measured["integrated"], measured.get("true_peak"), key))
 
 
 def import_folder(directory: Path | str) -> dict:
@@ -222,6 +272,8 @@ def import_folder(directory: Path | str) -> dict:
             path = Path(folder) / name
             if path.suffix.lower() not in AUDIO_EXTENSIONS:
                 continue
+            if name.startswith(library.STAGING_PREFIX):
+                continue  # a pull still rendering into this folder
             try:
                 report[import_file(path)["status"]] += 1
             except Exception as error:  # one bad file, not one bad folder

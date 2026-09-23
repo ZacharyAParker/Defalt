@@ -161,6 +161,12 @@ def separate(source: Path | str) -> int:
     folder = cache_dir(source)
 
     if (found := existing(folder)) is not None:
+        # The janitor evicts separations least recently used first, by the
+        # folder's mtime. Loading a record's parts counts as using them.
+        try:
+            os.utime(folder)
+        except OSError:
+            pass
         emit("done", cached=True, **{name: str(p) for name, p in zip(PARTS, found)})
         return 0
 

@@ -4,3 +4,6 @@
 *.wav binary
 *.mp3 binary
 *.opus binary
+*.webp binary
+*.woff2 binary
+*.ico binary

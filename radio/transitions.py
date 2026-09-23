@@ -35,6 +35,10 @@ HPF_OPEN = 20.0
 STEPS = 20
 
 PRESETS = ("fade", "rise", "blend", "wave", "melt", "slam")
+# The effect techniques. Forcing one (`transitions.preset`) pins it wherever
+# it is technically possible; see radio/techniques.py.
+TECHNIQUES = ("echo_out", "loop_roll", "brake", "spinback", "echo_freeze", "reverb_wash",
+              "stem_swap", "acapella_intro", "filter_ride", "silence_punch", "drop_swap")
 
 
 def minimum_overlap(requested: float) -> float:
@@ -65,9 +69,16 @@ class Plan:
     vocal_swap: float | None = None
     vocal_depth: float = 0.0
     echo_start: float = 0.0
+    # A technique (radio/techniques.py) layered over the preset above, which
+    # stays as the base: the schedule falls back to it when a host ends up
+    # talking over the mix. Empty means the preset is the whole transition.
+    technique: str = ""
+    shape: dict | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        return {"preset": self.preset, "volume": self.volume, "eq": self.eq,
+        technique = self.technique or self.preset
+        return {"preset": technique, "base": self.preset, "technique": technique,
+                "volume": self.volume, "eq": self.eq,
                 "effects": list(self.effects), "overlap": round(self.overlap, 2),
                 "reason": self.reason, "eq_strength": self.eq_strength,
                 "echo_mix": self.echo_mix, "echo_feedback": self.echo_feedback,
@@ -311,6 +322,71 @@ def tempo_match(outgoing: Any, incoming: Any) -> tuple[float, str]:
     return (round(best_rate, 5), "")
 
 
+def semitones(rate: float) -> int:
+    """How far a playback rate moves pitch, to the nearest semitone.
+
+    Without key lock the pitch fader is a varispeed: +5.9% is a semitone up.
+    Anything inside about +/-2.9% rounds to no audible key change.
+    """
+    if not math.isfinite(rate) or rate <= 0:
+        return 0
+    return int(round(12 * math.log2(rate)))
+
+
+def shift_camelot(code: str, steps: int) -> str:
+    """A Camelot code moved by `steps` semitones (seven wheel places each)."""
+    try:
+        number, letter = int(code[:-1]), code[-1]
+    except (ValueError, IndexError, TypeError):
+        return ""
+    if not 1 <= number <= 12 or letter not in "AB":
+        return ""
+    return f"{(number - 1 + 7 * steps) % 12 + 1}{letter}"
+
+
+def harmonic_choice(out_key: str, in_key: str, rate: float, *, out_rate: float = 1.0,
+                    key_lock: bool = False, limit: float = 0.06,
+                    tolerance: float = 0.02) -> tuple[float, str]:
+    """The playback rate to use once pitch is taken into account.
+
+    A tempo match can drag a compatible pair out of key: 4% faster is a
+    semitone up. When the natural keys agree, cap the rate just inside the
+    band that keeps the key. When they clash, a nearby rate that lands the
+    incoming record in a compatible key is worth a small tempo compromise --
+    but only within `tolerance`, so the beats still hold across the blend.
+    Key lock (a real time-stretcher) keeps the key at any rate, so nothing
+    changes there. Returns (rate, note); note is empty when nothing changed.
+    """
+    if key_lock or not out_key or not in_key or not math.isfinite(rate) or rate <= 0:
+        return rate, ""
+    played_out = shift_camelot(out_key, semitones(out_rate))
+    if not played_out or not shift_camelot(in_key, 0):
+        return rate, ""
+    fits = lambda steps: analysis.keys_compatible(played_out, shift_camelot(in_key, steps))
+    if fits(semitones(rate)):
+        return rate, ""
+    natural = fits(0)
+    best = None
+    for steps in (-1, 0, 1):
+        if not fits(steps):
+            continue
+        low = 2 ** ((steps - 0.5) / 12) * 1.0005
+        high = 2 ** ((steps + 0.5) / 12) * 0.9995
+        candidate = min(max(rate, low), high)
+        if abs(candidate - 1) > limit + 1e-9 or semitones(candidate) != steps:
+            continue
+        cost = abs(candidate / rate - 1)
+        if cost > tolerance and not (steps == 0 and natural):
+            continue
+        if best is None or cost < best[1]:
+            best = (round(candidate, 5), cost, steps)
+    if best is None:
+        return rate, ""
+    if best[2] == 0:
+        return best[0], "pitch capped to keep the keys compatible"
+    return best[0], f"pitched {best[2]:+d} semitone into a compatible key"
+
+
 def beat_nudge(outgoing: Any, incoming: Any, out_local: float,
                overlap: float, rate: float = 1.0) -> tuple[float, str]:
     """How far to shift the incoming record so its beats land on the outgoing
@@ -394,8 +470,16 @@ def choose(outgoing: Any, incoming: Any, rng: random.Random | None = None
     in_bpm = float(db.field(incoming, "bpm") or 0)
     out_key = db.field(outgoing, "camelot") or ""
     in_key = db.field(incoming, "camelot") or ""
-    out_loud = float(db.field(outgoing, "lufs") or 0)
-    in_loud = float(db.field(incoming, "lufs") or 0)
+    # Perceived energy (density, pulse, low end), not loudness: a quiet
+    # master of a banger is still a banger, and stored LUFS mixes source and
+    # normalised measurements.
+    def energy(track):
+        try:
+            value = float(db.field(track, "energy"))
+        except (TypeError, ValueError):
+            return None
+        return value if math.isfinite(value) else None
+    out_energy, in_energy = energy(outgoing), energy(incoming)
 
     def trusted(track, field, minimum):
         confidence = db.field(track, field)
@@ -411,8 +495,8 @@ def choose(outgoing: Any, incoming: Any, rng: random.Random | None = None
                   and trusted(outgoing, "key_confidence", 0.15)
                   and trusted(incoming, "key_confidence", 0.15))
     harmonic = keys_known and analysis.keys_compatible(out_key, in_key)
-    rising = (math.isfinite(out_loud) and math.isfinite(in_loud)
-              and in_loud and out_loud and (in_loud - out_loud) > 1.5)
+    rising = (out_energy is not None and in_energy is not None
+              and in_energy - out_energy > float(cfg.get("transitions.rise_energy_step", 0.12) or 0.12))
 
     long_mix = base * float(cfg.get("transitions.long_multiplier", 1.5) or 1.5)
     short_mix = base * float(cfg.get("transitions.short_multiplier", 0.55) or 0.55)

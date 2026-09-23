@@ -1,0 +1,83 @@
+/* =========================================================================
+   Stream mode and the home-screen app.
+   On a phone the page is a remote control with a speaker in it: what is on,
+   skip, like, dislike, the request box and the queue, big enough to hit at a
+   red light. The studio, the scope and the timeline are the browser mixer's
+   and stay home.
+   ========================================================================= */
+
+.btn--mode { min-width: 92px; font-variant-numeric: tabular-nums; }
+.btn--mode[aria-pressed="true"] { border-color: #2c5a44; color: var(--green); }
+
+.stream-note { margin: 0; font-size: 12px; color: var(--text-dim); min-height: 1em; }
+.stream-note:empty { display: none; }
+
+/* A lamp on the rail for the stream's own state. */
+[data-mode="stream"][data-stream="buffering"] .lamp,
+[data-mode="stream"][data-stream="connecting"] .lamp,
+[data-mode="stream"][data-stream="reconnecting"] .lamp { animation: stream-wait 1.2s ease-in-out infinite; }
+@keyframes stream-wait { 50% { opacity: .35; } }
+
+.remote-panel {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--edge);
+  border-radius: var(--r-md);
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+}
+.remote-panel legend { padding: 0 6px; font-size: 12px; color: var(--text-dim); letter-spacing: .04em; }
+.remote-panel label { display: flex; gap: 10px; align-items: center; min-height: 32px; }
+.remote-panel input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--amber); }
+.remote-panel p { margin: 0; }
+
+/* The mixer's instruments mean nothing when the console at home is mixing. */
+[data-mode="stream"] .scope,
+[data-mode="stream"] .timeline { display: none; }
+
+@media (max-width: 720px) {
+  [data-mode="stream"] .live-booth,
+  [data-mode="stream"] .booth-options,
+  [data-mode="stream"] .live-record { display: none; }
+  /* iOS ignores element volume anyway; the phone's buttons are the fader. */
+  [data-mode="stream"] .volume { display: none; }
+
+  [data-mode="stream"] .transport {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+  }
+  [data-mode="stream"] .transport #power { grid-column: 1 / -1; min-height: 52px; font-size: 16px; }
+  [data-mode="stream"] .transport .rate { display: contents; }
+  [data-mode="stream"] .transport .btn { min-height: 52px; width: 100%; }
+  [data-mode="stream"] .transport .btn--mode { min-width: 0; padding: 0 6px; font-size: 13px; }
+
+  [data-mode="stream"] .now__title { font-size: clamp(22px, 7vw, 30px); }
+  [data-mode="stream"] .request__input,
+  [data-mode="stream"] .request select { font-size: 16px; } /* no zoom-on-focus on iOS */
+  [data-mode="stream"] .queue__act { min-width: 44px; min-height: 44px; }
+  [data-mode="stream"] .ad-controls .btn { min-height: 44px; }
+}
+
+/* Installed to the home screen: no browser chrome, so keep clear of the
+   notch, the home indicator and rounded corners. */
+@supports (padding: max(0px)) {
+  .console {
+    padding-left: max(clamp(14px, 2.4vw, 30px), env(safe-area-inset-left));
+    padding-right: max(clamp(14px, 2.4vw, 30px), env(safe-area-inset-right));
+  }
+  @media (display-mode: standalone) {
+    .console { padding-top: max(14px, env(safe-area-inset-top)); }
+    .app-footer { padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+    .toast { bottom: max(16px, calc(env(safe-area-inset-bottom) + 8px)); }
+  }
+}
+
+/* Nothing may push the page sideways on a phone. */
+@media (max-width: 480px) {
+  html, body { overflow-x: hidden; }
+  .console { min-width: 0; }
+  .deck, .talkback, .deck__now { min-width: 0; }
+}

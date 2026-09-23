@@ -54,17 +54,22 @@
     }
     controls();
   }
+  // Quick while the director is writing a reply, slow otherwise: an idle open
+  // panel has nothing to wait for, and every request here competes with playout.
+  function later() {clearTimeout(timer);timer=panel.open?setTimeout(poll,busy||posting?2000:8000):null;}
   async function poll() {
-    if(!panel.open || fetching || posting || document.hidden) return;
+    if(!panel.open) return;
+    if(fetching || posting || document.hidden) {later();return;}
     fetching=true;
     const started=generation;
-    try {const state=await api();if(started===generation) paint(state);} catch(error) {if(started===generation) status.textContent=error.name==='AbortError'?'The director took too long to respond. Retrying…':error.message;} finally {fetching=false;}
+    try {const state=await api();if(started===generation) paint(state);} catch(error) {if(started===generation) status.textContent=error.name==='AbortError'?'The director took too long to respond. Retrying…':error.message;} finally {fetching=false;later();}
   }
   byId('director-chat-open').addEventListener('click',()=>{
     if(!panel.open) panel.show();
-    draft.focus();poll();clearInterval(timer);timer=setInterval(poll,2000);
+    draft.focus();poll();
   });
-  function close() {panel.close();clearInterval(timer);byId('director-chat-open').focus();}
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden&&panel.open) poll();});
+  function close() {panel.close();clearTimeout(timer);timer=null;byId('director-chat-open').focus();}
   byId('director-chat-close').addEventListener('click',close);
   panel.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();event.stopPropagation();close();}});
   for(const element of [draft,save,share]) element.addEventListener('input',controls);
@@ -79,7 +84,15 @@
     retry=body;posting=true;generation++;controls();
     try {paint(await api(body));draft.value='';save.checked=false;share.checked=false;retry=null;}
     catch(error) {status.textContent=error.name==='AbortError'?'Connection timed out. Your draft is kept; retrying will not send it twice.':error.message;}
-    finally {posting=false;controls();}
+    finally {posting=false;controls();later();}
   });
-  undo.addEventListener('click',()=>{draft.value='Undo last change';save.checked=false;share.checked=false;form.requestSubmit();});
+  // Undo goes straight to the director. Routing it through the form used to
+  // overwrite whatever was being typed, and untick the draft's options too.
+  undo.addEventListener('click',async()=>{
+    if(busy || posting) return;
+    posting=true;generation++;controls();
+    try {paint(await api({message:'Undo last change',save:false,share:false,id:crypto.randomUUID()}));}
+    catch(error) {status.textContent=error.name==='AbortError'?'Connection timed out. Try Undo again.':error.message;}
+    finally {posting=false;controls();later();}
+  });
 })();

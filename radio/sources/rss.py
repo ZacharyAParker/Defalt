@@ -6,10 +6,12 @@ hot-reloaded, so adding a category is a text edit and nothing more.
 from __future__ import annotations
 
 import hashlib
+import json
 import random
 import re
 import time
 from calendar import timegm
+from concurrent.futures import ThreadPoolExecutor, wait
 from typing import Any
 
 import feedparser
@@ -21,6 +23,36 @@ _TAGS = re.compile(r"<[^>]+>")
 _WS = re.compile(r"\s+")
 _CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 CACHE_TTL = 600.0
+# Feeds are fetched in parallel; the whole batch gets this long past one
+# feed's timeout, and stragglers are simply left out of this break.
+FETCH_WORKERS = 6
+BATCH_GRACE = 3.0
+
+
+def _disk_path(url: str):
+    return config.CACHE_DIR / "news-feeds" / (hashlib.sha1(url.encode()).hexdigest()[:20] + ".json")
+
+
+def _disk_read(url: str) -> tuple[float, list[dict[str, Any]]] | None:
+    """The feed cache survives restarts and is shared with worker processes."""
+    try:
+        data = json.loads(_disk_path(url).read_text(encoding="utf-8"))
+        if isinstance(data.get("items"), list):
+            return float(data["at"]), data["items"]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        pass
+    return None
+
+
+def _disk_write(url: str, stamp: float, items: list[dict[str, Any]]) -> None:
+    path = _disk_path(url)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(path.name + ".tmp")
+        temporary.write_text(json.dumps({"at": stamp, "items": items}), encoding="utf-8")
+        temporary.replace(path)
+    except OSError:
+        pass
 
 
 def _clean(text: str) -> str:
@@ -41,6 +73,10 @@ def _published(entry: Any) -> float:
 def _fetch_feed(url: str, timeout: float) -> list[dict[str, Any]]:
     cached = _CACHE.get(url)
     if cached and time.time() - cached[0] < CACHE_TTL:
+        return cached[1]
+    cached = _disk_read(url)
+    if cached and 0 <= time.time() - cached[0] < CACHE_TTL:
+        _CACHE[url] = cached
         return cached[1]
 
     try:
@@ -70,8 +106,31 @@ def _fetch_feed(url: str, timeout: float) -> list[dict[str, Any]]:
             "ident": hashlib.sha1((link or title).encode()).hexdigest()[:16],
         })
 
-    _CACHE[url] = (time.time(), items)
+    stamp = time.time()
+    _CACHE[url] = (stamp, items)
+    _disk_write(url, stamp, items)
     return items
+
+
+def _fetch_all(urls: list[str], timeout: float) -> dict[str, list[dict[str, Any]]]:
+    """Fetch several feeds at once, bounded by one wall-clock budget."""
+    urls = list(dict.fromkeys(str(url) for url in urls))
+    if not urls:
+        return {}
+    pool = ThreadPoolExecutor(max_workers=min(FETCH_WORKERS, len(urls)),
+                              thread_name_prefix="news-feed")
+    futures = {pool.submit(_fetch_feed, url, timeout): url for url in urls}
+    done, _ = wait(futures, timeout=timeout + BATCH_GRACE)
+    pool.shutdown(wait=False, cancel_futures=True)
+    results = {}
+    for future in done:
+        try:
+            results[futures[future]] = future.result()
+        except Exception as error:  # noqa: BLE001 - one bad feed never sinks the rest
+            if config.DEBUG:
+                print("[news] feed failed", futures[future], type(error).__name__, flush=True)
+    # Preserve configured order so results do not depend on network timing.
+    return {url: results[url] for url in urls if url in results}
 
 
 def _blocked(title: str, blocklist: list[str]) -> bool:
@@ -118,8 +177,8 @@ def stories(category: str | None = None, limit: int | None = None
 
     collected: list[dict[str, Any]] = []
     now = time.time()
-    for url in data.get("feeds") or []:
-        for item in _fetch_feed(str(url), timeout):
+    for items in _fetch_all(data.get("feeds") or [], timeout).values():
+        for item in items:
             if item["published"] and now - item["published"] > max_age:
                 continue
             if _blocked(item["title"], blocklist):
@@ -168,11 +227,12 @@ def search(topic: str, limit: int = 3) -> list[dict[str, Any]]:
     now = time.time()
 
     scored: list[tuple[float, dict[str, Any]]] = []
-    for name, data in (config.news.get("categories", {}) or {}).items():
-        if not isinstance(data, dict) or not data.get("enabled"):
-            continue
+    enabled = [(name, data) for name, data in (config.news.get("categories", {}) or {}).items()
+               if isinstance(data, dict) and data.get("enabled")]
+    fetched = _fetch_all([url for _, data in enabled for url in data.get("feeds") or []], timeout)
+    for name, data in enabled:
         for url in data.get("feeds") or []:
-            for item in _fetch_feed(str(url), timeout):
+            for item in fetched.get(str(url), []):
                 if item["published"] and now - item["published"] > max_age:
                     continue
                 haystack = f"{item['title']} {item['summary']}".lower()
@@ -216,4 +276,11 @@ def mark_read(items: list[dict[str, Any]]) -> None:
     for item in items:
         db.mark_seen("news", item["ident"])
     days = int((config.news.get("defaults", {}) or {}).get("dedupe_days", 5) or 5)
-    db.prune_seen(max(days, 1) * 4)
+    try:
+        # Only the news ledger ages out here; patches, ads and memes keep theirs.
+        db.prune_seen(max(days, 1) * 4, kind="news")
+    except TypeError:
+        # Older db.prune_seen(days) has no kind filter and would clear every
+        # ledger; do the news-only delete here instead.
+        db.write("DELETE FROM seen WHERE kind='news' AND ts < ?",
+                 (time.time() - max(days, 1) * 4 * 86400,))

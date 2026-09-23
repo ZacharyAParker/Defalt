@@ -1,6 +1,6 @@
 [package]
 name = "defalt"
-version = "0.3.9"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.80"
 description = "Defalt -- a DJ application"
@@ -12,7 +12,9 @@ winresource = "0.1"
 cc = "1.4.5"
 
 [dependencies]
-cpal = "0.18"
+# "realtime" asks the OS for a pro-audio (MMCSS) slot for the callback
+# thread, so a busy UI or a background decode cannot starve it.
+cpal = { version = "0.18", features = ["realtime"] }
 rtrb = "0.4"
 # Everything symphonia can decode. Opus is deliberately absent from
 # this list because symphonia has no Opus decoder at all, which is
@@ -30,12 +32,16 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 ureq = { version = "3", features = ["json"] }
 serde_json = "1"
+# Already in the build through serde_json; derive reads the station's
+# schedule into typed structs instead of by hand.
+serde = { version = "1", features = ["derive"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_System_JobObjects",
+    "Win32_System_Power",
     "Win32_System_Threading",
 ] }
 
@@ -47,6 +53,13 @@ strip = true
 
 [profile.dev]
 opt-level = 2          # a debug build still has to keep an audio thread fed
+
+# The test build of this crate crashes rustc (access violation, or a test
+# binary that dies of an illegal instruction) when built incrementally with
+# the dev optimisation level -- a compiler fault, not the code: the same
+# source builds and passes non-incrementally. Tests build whole each time.
+[profile.test]
+incremental = false
 
 [profile.dev.package."*"]
 opt-level = 3

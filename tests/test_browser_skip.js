@@ -1,13 +1,8 @@
 // Exercise the actual browser Skip handler with a stubbed audio/UI boundary.
-const fs = require('node:fs');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
-const source = fs.readFileSync('web/static/radio.js', 'utf8');
-const start = source.indexOf('ui.skip.addEventListener("click", async () => {');
-assert(start >= 0);
-const end = source.indexOf('\n});', start);
-assert(end > start);
-const handlerSource = source.slice(start, end + 4);
+const {section} = require('./browser_harness');
+const handlerSource = section('web/static/radio.js', 'ui.skip.addEventListener("click", async () => {', 'for (const [button, value] of');
 
 async function run(result) {
   let handler;

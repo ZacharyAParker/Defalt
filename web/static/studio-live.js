@@ -12,20 +12,21 @@
   preference.addEventListener('change',()=>{$('reduced').checked=preference.matches;sync();});sync();
   let last=0,key='',generation=0;
   const holds={mav:0,rue:0};
-  window.LiveStudio={update(levels,music){
+  window.LiveStudio={update(levels,music,energy=0,running=!!music){
     const now=performance.now();if(now-last<32)return;
     const elapsed=last ? (now-last)/1000:0;last=now;
     const dt=elapsed<.25 ? elapsed:0;
     for(const [index,host] of ['mav','rue'].entries()){
       if(levels[host]>.018)holds[host]=now+75;
       const speaking=now<holds[host];
-      $(`${host}-tag`).classList.toggle('speaking',speaking);
+      const tag=$(`${host}-tag`);if(tag.classList.contains('speaking')!==speaking)tag.classList.toggle('speaking',speaking);
     }
     const both=now<holds.mav&&now<holds.rue;
-    $('studio-status').textContent=both?'Both mics open':now<holds.mav?'Mav has the mic':now<holds.rue?'Rue has the mic':music?'On air':'Between records';
+    const status=both?'Both mics open':now<holds.mav?'Mav has the mic':now<holds.rue?'Rue has the mic':music?'On air':'Between records';
+    if($('studio-status').textContent!==status)$('studio-status').textContent=status;
     window.StudioAmbience?.tick(dt,both);
-    window.StudioScene?.update(dt,{mav:now<holds.mav,rue:now<holds.rue});
-    $('studio-vinyl').classList.toggle('playing',!!music);
+    window.StudioScene?.update(dt,{mav:now<holds.mav,rue:now<holds.rue},energy,running);
+    if($('studio-vinyl').classList.contains('playing')!==!!music)$('studio-vinyl').classList.toggle('playing',!!music);
     const next=music?.meta?.key||'';
     if(next!==key){
       key=next;const token=++generation;

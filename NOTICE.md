@@ -19,12 +19,16 @@ Keep that interface on loopback; the app has no public-facing authentication.
 
 ## The rules this project holds itself to
 
-**Local only.** The server binds to `127.0.0.1` by default. It is not built to
-be exposed, it has no authentication, and you should not put it on a public
-address. If you change `HOST` in `.env`, that is on you.
+**Local only.** The server binds to `127.0.0.1` by default. Do not change
+`HOST` to put it on a public address. The one supported way to reach it from
+elsewhere is the optional Cloudflare Tunnel in [Remote listening](docs/REMOTE.md),
+which runs only while the radio is on and refuses every request that lacks a
+valid Cloudflare Access token for your own application.
 
-**Personal use only.** One machine, one listener. There is no multi-user mode,
-no sharing, no public stream, and none is planned.
+**Personal use only.** One listener: you. Remote listening streams the console's
+mix to your own devices behind your own Access policy. There is no multi-user
+mode, no sharing and no public stream. Do not give anyone else access to the
+tunnel or the `/listen` address.
 
 **Never redistributed.** Nothing in `cache/` should ever be uploaded, shared,
 committed, published, or handed to another person. That is the whole line, and
@@ -79,8 +83,9 @@ the original. Every story keeps its source URL.
 | Steam Web API | Your SteamID, to read your library and wishlist | Yes |
 | RSS and article publishers | Page/feed requests, IP address, and request headers | Yes |
 | YouTube | Searches, metadata requests, and requests for selected audio | When fetching sources |
-| Spotify | Search queries and application credentials | Yes |
-| Google Fonts | Font requests from the browser player, including network information | Browser player only |
+| Spotify | Search queries, catalog lookups for missing years and genres, and application credentials | Yes |
+| Open-Meteo | The latitude and longitude you configure, for weather | Yes — off until a location is set |
+| Cloudflare | Tunnelled page, control and stream traffic, and Access sign-in | Yes — remote listening only |
 
 The database and vault stay on this machine. When host dialogue or request
 interpretation uses OpenRouter, the prompt can include song details, your vibe
@@ -88,9 +93,13 @@ brief, selected listening-history facts, and the full text of articles you
 submit for a host break. Article links are fetched from their publisher.
 Voice providers receive the lines they are asked to read.
 
+The browser player bundles Archivo (© The Archivo Project Authors) and IBM Plex
+Mono (© IBM Corp.), both under the SIL Open Font License 1.1; the licence texts
+are in `web/static/fonts/`.
+
 The [privacy policy](PRIVACY.md) covers storage, external providers, retention,
 and deletion limits. See the [terms](TERMS.md), [copyright notice](COPYRIGHT.md),
 and [patch notes](CHANGELOG.md) for the rest of the release information.
 
 ---
-Defalt v0.2.0 · © 2026 Zachary Parker
+Defalt v0.4.0 · © 2026 Zachary Parker

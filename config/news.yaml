@@ -5,7 +5,10 @@
 #
 #  `weight`  -- relative chance this category is picked for a news break.
 #  `max_age_hours` -- stories older than this are never read on air.
-#  `items_per_segment` -- how many stories the hosts cover in one break.
+#  `items_per_segment` -- how many fresh candidate stories a news break
+#                         considers. The break airs ONE: the first that has
+#                         enough detail (thin feed items get one bounded
+#                         article fetch each, and the search stops there).
 # ============================================================================
 
 defaults:

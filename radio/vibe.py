@@ -10,7 +10,7 @@ import re
 import threading
 import uuid
 
-from . import config, db, llm
+from . import config, db, eras, llm
 from .intent import clean, MAX_CHARS
 
 _LOCK = threading.RLock()
@@ -94,11 +94,13 @@ def fallback(description):
         positive = positive.replace(part, " ")
     avoid = [g for g in sorted(GENRE_WORDS) if any(re.search(r"\b" + re.escape(g) + r"\b", part) for part in negative)]
     explicit = [g for g in sorted(GENRE_WORDS) if g not in avoid and re.search(r"\b" + re.escape(g) + r"\b", text)]
+    years = eras.parse(positive)
+    era = {"years": list(years)} if years else {}
     for pattern, genres, pace in groups:
         if re.search(pattern, positive):
             return {"genres": explicit or [g for g in genres if g not in avoid],
-                    "avoid_genres": avoid, "pace": pace, "fits": {}}
-    return {"genres": explicit, "avoid_genres": avoid, "pace": "any", "fits": {}}
+                    "avoid_genres": avoid, "pace": pace, "fits": {}, **era}
+    return {"genres": explicit, "avoid_genres": avoid, "pace": "any", "fits": {}, **era}
 
 
 def set_current(description, *, enrich=True, on_change=None):
@@ -184,6 +186,25 @@ def fit(track, profile):
             evidence.append((related, 1))
         if db.norm(db.primary_artist(track.get('artist') or '')) == db.norm(db.primary_artist(reference.get('artist') or '')):
             evidence.append((.85, .8))
+        # How it actually sounds, when both records have been analysed.
+        from .compatibility import similarity
+        sounds = similarity(track, reference)
+        if sounds is not None:
+            evidence.append((sounds, .8))
+        # "More like this" leans toward the same era, weakly and only when
+        # both years are actually known.
+        anchor = eras.year_of(reference)
+        if anchor and not profile.get('years'):
+            near = eras.fit(eras.year_of(track), (anchor - 3, anchor + 3))
+            if near is not None:
+                evidence.append((near, .4))
+    years = profile.get('years')
+    if years:
+        # A soft era preference: known in-range years score like a genre
+        # match; unknown years add no evidence and stay neutral.
+        span = eras.fit(eras.year_of(track), years)
+        if span is not None:
+            evidence.append((span, 1))
     genres = profile.get("genres") or []
     if genres and track.get("genre"):
         scores = [genre_fit(track, {"genre": g}) for g in genres]

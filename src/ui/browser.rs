@@ -7,37 +7,123 @@
 use egui::{vec2, Align, Align2, FontId, Layout, Rect, RichText, Sense, Stroke, Ui};
 use egui_extras::{Column as TableColumn, TableBuilder};
 
-use super::{theme, Column};
+use super::{theme, Column, Library, Look};
 use crate::Defalt;
 
 const RAIL: f32 = 224.0;
+/// The grip between the decks and the library.
+pub const SPLITTER: f32 = 8.0;
 
 pub fn draw(app: &mut Defalt, ui: &mut Ui) {
-    let full = ui.max_rect();
+    let whole = ui.max_rect();
+    let grip = Rect::from_min_size(whole.min, vec2(whole.width(), SPLITTER));
+    splitter(app, ui, grip);
+    let full = Rect::from_min_max(egui::pos2(whole.left(), grip.bottom()), whole.max);
+    if app.view_state.library.collapsed {
+        folded(app, ui, full);
+        return;
+    }
     let rail = Rect::from_min_size(full.min, vec2(RAIL.min(full.width() * 0.4), full.height()));
     let main = Rect::from_min_max(egui::pos2(rail.right(), full.top()), full.max);
 
     sidebar(app, ui, rail);
     ui.painter().line_segment(
         [rail.right_top(), rail.right_bottom()],
-        Stroke::new(1.0, theme::EDGE),
+        Stroke::new(theme::LINE, theme::EDGE),
     );
     crate_pane(app, ui, main);
+}
+
+/* ── Splitter ────────────────────────────────────────────────────────── */
+
+/// The grip between the decks and the library: drag it to give one more
+/// room, double-click it to fold the library away or bring it back. The
+/// arrows move it too, once it has focus.
+fn splitter(app: &mut Defalt, ui: &mut Ui, rect: Rect) {
+    let response = ui.interact(rect, egui::Id::new("library-splitter"), Sense::click_and_drag());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true,
+        "Library size. Drag, or double-click to fold it away."));
+    let hot = response.hovered() || response.dragged() || response.has_focus();
+    if hot {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+    }
+    let space = app.view_state.console_height.max(1.0);
+    let bottom = ui.max_rect().bottom();
+    let library = &mut app.view_state.library;
+    let mut moved = false;
+    if response.double_clicked() {
+        library.collapsed = !library.collapsed;
+        moved = true;
+    } else if response.dragged() {
+        if let Some(pointer) = ui.ctx().pointer_interact_pos() {
+            // Dragged well down while open, it folds; dragged up while
+            // folded, it opens where the pointer is.
+            let share = (bottom - pointer.y) / space;
+            if share < Library::LEAST * 0.6 {
+                library.collapsed = true;
+            } else {
+                library.collapsed = false;
+                library.set_share(share);
+            }
+        }
+    }
+    let steps = super::widgets::arrow_steps(ui, &response);
+    if steps != 0.0 {
+        library.collapsed = false;
+        library.set_share(library.share + steps * 0.02);
+        moved = true;
+    }
+    if moved || response.drag_stopped() {
+        library.save(&app.root);
+    }
+
+    let painter = ui.painter();
+    painter.rect_filled(rect, 0.0, theme::GROUND);
+    painter.line_segment([rect.left_bottom(), rect.right_bottom()], Stroke::new(theme::LINE, theme::EDGE));
+    let ink = if hot { theme::TEXT_DIM } else { theme::EDGE_LIT };
+    for dy in [-1.5, 1.5] {
+        let y = rect.center().y + dy;
+        painter.line_segment([egui::pos2(rect.center().x - 16.0, y), egui::pos2(rect.center().x + 16.0, y)],
+                             Stroke::new(theme::LINE, ink));
+    }
+    if response.has_focus() {
+        painter.rect_stroke(rect, theme::R_S, Stroke::new(theme::LINE_MID, theme::BLUE), egui::StrokeKind::Inside);
+    }
+    response.on_hover_text("Drag to resize the library. Double-click or Ctrl+L to fold it away.");
+}
+
+/// The library folded to one row: what it holds, and the way back.
+fn folded(app: &mut Defalt, ui: &mut Ui, rect: Rect) {
+    ui.painter().rect_filled(rect, 0.0, theme::PANEL);
+    let mut bar = super::child(ui, rect.shrink2(vec2(theme::SP_3, 0.0)), super::left_row(), "bro-folded");
+    bar.spacing_mut().item_spacing.x = theme::SP_2;
+    if super::glyph_button(&mut bar, super::Glyph::Up, vec2(theme::CONTROL_S, theme::CONTROL_S),
+                           Look::secondary(false, true), "Show the library")
+        .on_hover_text("Show the library (Ctrl+L)").clicked() {
+        super::toggle_library(app);
+    }
+    bar.label(RichText::new("Music").font(theme::display(theme::SIZE_L)).color(theme::TEXT_BRIGHT));
+    bar.label(RichText::new(format!("{} tracks", app.records.len())).font(FontId::monospace(theme::SIZE_XS)).color(theme::TEXT_MUTE));
+    if let Some(record) = app.selected.and_then(|i| app.records.get(i)) {
+        bar.label(RichText::new(format!("Selected: {}", super::elide(&record.title, 40))).size(theme::SIZE_S).color(theme::TEXT_DIM));
+    }
+    let mut right = super::child(ui, rect.shrink2(vec2(theme::SP_3, 0.0)), super::right_row(), "bro-folded-r");
+    right.label(RichText::new("Ctrl+L to show").font(FontId::monospace(theme::SIZE_XS)).color(theme::TEXT_MUTE));
 }
 
 /* ── Sidebar ─────────────────────────────────────────────────────────── */
 fn sidebar(app: &mut Defalt, ui: &mut Ui, rect: Rect) {
     ui.painter().rect_filled(rect, 0.0, theme::GROUND);
-    let inner = rect.shrink2(vec2(8.0, 8.0));
+    let inner = rect.shrink2(vec2(theme::SP_2, theme::SP_2));
 
     let mut column = super::child(ui, inner, Layout::top_down(Align::Min), "bro0");
     egui::ScrollArea::vertical().id_salt("library_sources").show(&mut column, |column| {
-    column.spacing_mut().item_spacing.y = 6.0;
+    column.spacing_mut().item_spacing.y = theme::SP_2 - 2.0;
 
     column.label(
         RichText::new("Library")
-            .font(FontId::proportional(14.0))
-            .color(theme::TEXT_MUTE),
+            .font(theme::display(theme::SIZE_M))
+            .color(theme::TEXT_DIM),
     );
 
     // The one real source: everything the importer has put in the database.
@@ -48,7 +134,7 @@ fn sidebar(app: &mut Defalt, ui: &mut Ui, rect: Rect) {
     let selected = true;
     ui.painter().rect_filled(
         row,
-        4.0,
+        theme::R_M,
         if selected { theme::BLUE_DEEP } else if response.hovered() { theme::RAISED } else { theme::GROUND },
     );
     ui.painter().circle_filled(row.left_center() + vec2(11.0, 0.0), 5.0, theme::CYAN);
@@ -56,29 +142,29 @@ fn sidebar(app: &mut Defalt, ui: &mut Ui, rect: Rect) {
         row.left_center() + vec2(24.0, 0.0),
         Align2::LEFT_CENTER,
         "Music",
-        FontId::proportional(11.5),
+        FontId::proportional(theme::SIZE_S),
         if selected { theme::TEXT_BRIGHT } else { theme::TEXT },
     );
     ui.painter().text(
         row.right_center() - vec2(8.0, 0.0),
         Align2::RIGHT_CENTER,
         &format!("{}", app.records.len()),
-        FontId::monospace(9.5),
+        FontId::monospace(theme::SIZE_XS),
         if selected { theme::TEXT } else { theme::TEXT_MUTE },
     );
 
-    column.add_space(4.0);
+    column.add_space(theme::SP_1);
     let rescan_width = column.available_width().min(96.0);
-    if super::chip(column, "Refresh", vec2(rescan_width, 28.0), false, true).on_hover_text("Reload imported tracks from the library").clicked() {
+    if super::chip(column, "Refresh", vec2(rescan_width, theme::CONTROL_S), false, true).on_hover_text("Reload imported tracks from the library").clicked() {
         app.reload_library();
     }
 
     if let Some(error) = &app.library_error {
         column.add_space(6.0);
-        column.label(RichText::new(error).font(FontId::proportional(10.0)).color(theme::RED));
+        column.label(RichText::new(error).font(FontId::proportional(theme::SIZE_XS)).color(theme::RED));
     }
 
-    column.add_space(12.0);
+    column.add_space(theme::SP_4);
     requests(app, column);
     });
 }
@@ -91,15 +177,15 @@ fn sidebar(app: &mut Defalt, ui: &mut Ui, rect: Rect) {
 fn requests(app: &mut Defalt, ui: &mut Ui) {
     ui.label(
         RichText::new("Find a track")
-            .font(FontId::proportional(14.0))
-            .color(theme::TEXT_MUTE),
+            .font(theme::display(theme::SIZE_M))
+            .color(theme::TEXT_DIM),
     );
-    ui.add_space(3.0);
+    ui.add_space(theme::SP_1);
 
     if !app.can_pull() {
         ui.label(
             RichText::new("Needs the station's Python environment.")
-                .font(FontId::proportional(10.0))
+                .font(FontId::proportional(theme::SIZE_XS))
                 .color(theme::TEXT_MUTE),
         );
         return;
@@ -110,7 +196,7 @@ fn requests(app: &mut Defalt, ui: &mut Ui) {
         egui::TextEdit::singleline(&mut app.pull_query)
             .hint_text("Artist - Title or YouTube link")
             .desired_width(width)
-            .font(FontId::proportional(11.0)),
+            .font(FontId::proportional(theme::SIZE_S)),
     );
 
     // Typing invalidates a duration taken from an earlier suggestion: the
@@ -127,11 +213,11 @@ fn requests(app: &mut Defalt, ui: &mut Ui) {
         app.begin_pull();
     }
 
-    ui.add_space(4.0);
+    ui.add_space(theme::SP_1);
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 5.0;
+        ui.spacing_mut().item_spacing.x = theme::SP_1;
         let ready = !app.pull_query.trim().is_empty();
-        if super::chip(ui, "Get it", vec2(76.0, 20.0), false, ready).clicked() {
+        if super::chip(ui, "Get it", vec2(96.0f32.min(width), theme::CONTROL_S), false, ready).clicked() {
             app.begin_pull();
         }
         // The length is the useful half of taking a suggestion, so it is
@@ -140,7 +226,7 @@ fn requests(app: &mut Defalt, ui: &mut Ui) {
             let whole = ms / 1000;
             ui.label(
                 RichText::new(format!("{}:{:02}", whole / 60, whole % 60))
-                    .font(FontId::monospace(9.5))
+                    .font(FontId::monospace(theme::SIZE_XS))
                     .color(theme::CYAN),
             )
             .on_hover_text("From the catalogue. The resolver uses it to reject the wrong upload.");
@@ -163,19 +249,19 @@ fn requests(app: &mut Defalt, ui: &mut Ui) {
             ui.spacing_mut().item_spacing.x = 5.0;
             ui.label(
                 RichText::new(mark)
-                    .font(FontId::monospace(10.0))
+                    .font(FontId::monospace(theme::SIZE_XS))
                     .color(colour),
             );
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 ui.label(
                     RichText::new(super::elide(&job.query, 24))
-                        .font(FontId::proportional(10.5))
+                        .font(FontId::proportional(theme::SIZE_XS))
                         .color(theme::TEXT),
                 );
                 ui.label(
                     RichText::new(super::elide(&job.stage.label(), 30))
-                        .font(FontId::proportional(9.5))
+                        .font(FontId::proportional(theme::SIZE_XS))
                         .color(colour),
                 );
             });
@@ -189,26 +275,32 @@ fn crate_pane(app: &mut Defalt, ui: &mut Ui, rect: Rect) {
     let head = Rect::from_min_size(rect.min, vec2(rect.width(), 44.0));
     let body = Rect::from_min_max(egui::pos2(rect.left(), head.bottom()), rect.max);
 
-    let mut bar = super::child(ui, head.shrink2(vec2(10.0, 5.0)), super::left_row(), "bro1");
+    let mut bar = super::child(ui, head.shrink2(vec2(theme::SP_3, 5.0)), super::left_row(), "bro1");
+    bar.spacing_mut().item_spacing.x = theme::SP_2;
+    if super::glyph_button(&mut bar, super::Glyph::Down, vec2(theme::CONTROL_S, theme::CONTROL_S),
+                           Look::ghost(false, true), "Fold the library away")
+        .on_hover_text("Fold the library away (Ctrl+L)").clicked() {
+        super::toggle_library(app);
+    }
     bar.label(
         RichText::new("Music")
-            .font(FontId::proportional(16.0))
-            .color(theme::TEXT),
+            .font(theme::display(theme::SIZE_L))
+            .color(theme::TEXT_BRIGHT),
     );
 
-    let mut right = super::child(ui, head.shrink2(vec2(10.0, 5.0)), super::right_row(), "bro2");
+    let mut right = super::child(ui, head.shrink2(vec2(theme::SP_3, 5.0)), super::right_row(), "bro2");
     let search = egui::TextEdit::singleline(&mut app.search)
         .hint_text("Search title, artist or key")
         .desired_width(220.0)
-        .font(FontId::proportional(13.0));
+        .font(FontId::proportional(theme::SIZE_M));
     let search = right.add(search);
     if app.focus_search {
         app.focus_search = false;
         search.request_focus();
     }
 
-    right.add_space(8.0);
-    let assist = super::chip(&mut right, "Assist", vec2(62.0, 28.0), app.assist, true);
+    right.add_space(theme::SP_2);
+    let assist = super::chip(&mut right, "Assist", vec2(68.0, theme::CONTROL_S), app.assist, true);
     if assist.clicked() {
         app.assist = !app.assist;
         // Turning it on is only half an answer if the crate is still sorted
@@ -222,60 +314,61 @@ fn crate_pane(app: &mut Defalt, ui: &mut Ui, rect: Rect) {
     assist.on_hover_text(
         "Match levels on load, and order the crate by what mixes with what is playing.",
     );
+    let rows = super::rows(app);
     right.label(
-        RichText::new(format!("{}", super::filtered(app).len()))
-            .font(FontId::monospace(9.5))
+        RichText::new(format!("{}", rows.len()))
+            .font(FontId::monospace(theme::SIZE_XS))
             .color(theme::TEXT_MUTE),
     );
 
     ui.painter().line_segment(
         [head.left_bottom(), head.right_bottom()],
-        Stroke::new(1.0, theme::EDGE),
+        Stroke::new(theme::LINE, theme::EDGE),
     );
 
     if app.records.is_empty() {
         empty_state(app, ui, body);
         return;
     }
-    if super::filtered(app).is_empty() {
+    if rows.is_empty() {
         let mut empty = super::child(ui, body.shrink(24.0), Layout::top_down(Align::Center), "no_matches");
-        empty.add_space(22.0);
-        empty.label(super::rich("No matching tracks", 16.0, theme::TEXT));
+        empty.add_space(theme::SP_5);
+        empty.label(RichText::new("No matching tracks").font(theme::display(theme::SIZE_L)).color(theme::TEXT));
         empty.label("Try another title, artist or Camelot key.");
-        if super::chip(&mut empty, "Clear search", vec2(110.0, 30.0), false, true).clicked() {
+        if super::chip(&mut empty, "Clear search", vec2(120.0, theme::CONTROL_M), false, true).clicked() {
             app.search.clear();
         }
         return;
     }
-    table(app, ui, body);
+    table(app, ui, body, &rows);
 }
 
 fn empty_state(app: &Defalt, ui: &mut Ui, rect: Rect) {
     let centre = rect.center();
     ui.painter().text(
-        centre - vec2(0.0, 12.0),
+        centre - vec2(0.0, 14.0),
         Align2::CENTER_CENTER,
         "Your library is empty",
-        FontId::proportional(14.0),
-        theme::TEXT_MUTE,
+        theme::display(theme::SIZE_L),
+        theme::TEXT,
     );
     if app.library_error.is_none() {
         ui.painter().text(
-            centre + vec2(0.0, 10.0),
+            centre + vec2(0.0, 12.0),
             Align2::CENTER_CENTER,
             "Import a music folder with radio.importer, then choose Refresh.",
-            FontId::monospace(10.5),
+            FontId::monospace(theme::SIZE_XS),
             theme::BLUE,
         );
     }
 }
 
-fn table(app: &mut Defalt, ui: &mut Ui, rect: Rect) {
-    let rows = super::filtered(app);
+fn table(app: &mut Defalt, ui: &mut Ui, rect: Rect, rows: &[usize]) {
     let mut clicked: Option<usize> = None;
     let mut wanted: Option<(usize, usize)> = None;
 
     let mut area = super::child(ui, rect, Layout::top_down(Align::Min), "bro3");
+    let spacing = area.spacing().item_spacing.x * 7.0 + 14.0;
 
     let mut table = TableBuilder::new(&mut area).sense(Sense::click());
     if app.scroll_to_selection {
@@ -284,19 +377,24 @@ fn table(app: &mut Defalt, ui: &mut Ui, rect: Rect) {
         }
         app.scroll_to_selection = false;
     }
+    // Title and artist share what the fixed columns leave, in proportion,
+    // so a wide window does not open a gutter between them.
+    const FIXED: [f32; 5] = [LOAD_COLUMN, 58.0, 60.0, 48.0, 70.0];
+    let words = (rect.width() - FIXED.iter().sum::<f32>() - spacing).max(280.0);
     table
         .striped(true)
         .cell_layout(Layout::left_to_right(Align::Center))
-        .column(TableColumn::exact(76.0))
-        .column(TableColumn::initial((rect.width() * 0.34).max(160.0)).at_least(160.0).clip(true))
+        .column(TableColumn::exact(LOAD_COLUMN))
+        .column(TableColumn::exact((words * 0.56).round()).clip(true))
         .column(TableColumn::remainder().at_least(120.0).clip(true))
-        .column(TableColumn::exact(54.0))
-        .column(TableColumn::exact(54.0))
-        .column(TableColumn::exact(44.0))
-        .column(TableColumn::exact(62.0))
+        .column(TableColumn::exact(FIXED[1]))
+        .column(TableColumn::exact(FIXED[2]))
+        .column(TableColumn::exact(FIXED[3]))
+        .column(TableColumn::exact(FIXED[4]))
         .header(28.0, |mut header| {
             header.col(|ui| {
-                ui.label(RichText::new("LOAD").font(FontId::proportional(10.5)).color(theme::TEXT_DIM));
+                ui.add_space(theme::SP_2);
+                ui.label(RichText::new("LOAD").font(FontId::proportional(theme::SIZE_XS)).color(theme::TEXT_MUTE));
             });
             for (column, name) in [
                 (Column::Title, "TITLE"),
@@ -308,11 +406,18 @@ fn table(app: &mut Defalt, ui: &mut Ui, rect: Rect) {
             ] {
                 header.col(|ui| {
                     let active = app.sort.0 == column;
-                    let title = if active { format!("{} {}", name, if app.sort.1 { "+" } else { "-" }) } else { name.to_owned() };
-                    let text = RichText::new(title)
-                        .font(FontId::proportional(10.5))
-                        .color(if active { theme::BLUE } else { theme::TEXT_MUTE });
-                    if ui.add(egui::Label::new(text).sense(Sense::click())).clicked() {
+                    let text = RichText::new(name)
+                        .font(FontId::proportional(theme::SIZE_XS))
+                        .color(if active { theme::TEXT_BRIGHT } else { theme::TEXT_MUTE });
+                    let label = ui.add(egui::Label::new(text).sense(Sense::click()));
+                    if active {
+                        // A drawn chevron: up for ascending, down for
+                        // descending, in the panel's accent.
+                        let at = label.rect.right_center() + vec2(8.0, 0.0);
+                        let glyph = if app.sort.1 { super::Glyph::Up } else { super::Glyph::Down };
+                        super::draw_glyph(ui, glyph, at, theme::BLUE);
+                    }
+                    if label.clicked() {
                         if active {
                             app.sort.1 = !app.sort.1;
                         } else {
@@ -330,18 +435,21 @@ fn table(app: &mut Defalt, ui: &mut Ui, rect: Rect) {
                 let record = &app.records[index];
                 let selected = app.selected == Some(index);
                 row.set_selected(selected);
+                let loaded: Vec<usize> = (0..2)
+                    .filter(|deck| app.decks[*deck].record.as_ref().is_some_and(|r| r.key == record.key))
+                    .collect();
 
                 row.col(|ui| {
+                    // A record on a deck says which, down its left edge.
+                    let cell = ui.max_rect();
+                    let share = cell.height() / loaded.len().max(1) as f32;
+                    for (at, deck) in loaded.iter().enumerate() {
+                        let bar = Rect::from_min_size(cell.left_top() + vec2(0.0, at as f32 * share), vec2(3.0, share));
+                        ui.painter().rect_filled(bar, 0.0, theme::DECK_COLOURS[*deck]);
+                    }
+                    ui.add_space(theme::SP_2);
                     for deck in 0..2 {
-                        let label = if deck == 0 { "A" } else { "B" };
-                        let hit = super::chip(
-                            ui,
-                            label,
-                            vec2(32.0, 24.0),
-                            app.decks[deck].record.as_ref().is_some_and(|r| r.key == record.key),
-                            app.engine_ready(),
-                        );
-                        if hit.clicked() {
+                        if load_key(ui, deck, loaded.contains(&deck), app.engine_ready()).clicked() {
                             wanted = Some((deck, index));
                         }
                     }
@@ -368,24 +476,22 @@ fn table(app: &mut Defalt, ui: &mut Ui, rect: Rect) {
                     };
                     ui.label(
                         RichText::new(record.camelot.clone().unwrap_or_else(|| "--".into()))
-                            .font(FontId::monospace(10.0))
+                            .font(FontId::monospace(theme::SIZE_XS))
                             .color(colour),
                     );
                 });
                 row.col(|ui| match fit {
                     Some(fit) => {
-                        let colour = if !fit.reachable {
-                            theme::TEXT_MUTE
-                        } else if fit.score > 0.8 {
-                            theme::CYAN
-                        } else if fit.score > 0.55 {
-                            theme::BLUE
+                        // Green when the pitch fader can make the match in
+                        // a small move; everything else is just a number.
+                        let colour = if match_is_close(fit.shift, fit.reachable) {
+                            theme::GREEN
                         } else {
-                            theme::TEXT_DIM
+                            theme::TEXT_MUTE
                         };
                         ui.label(
                             RichText::new(fit.badge())
-                                .font(FontId::monospace(10.0))
+                                .font(FontId::monospace(theme::SIZE_XS))
                                 .color(colour),
                         )
                         .on_hover_text(format!(
@@ -402,7 +508,7 @@ fn table(app: &mut Defalt, ui: &mut Ui, rect: Rect) {
                     None => {
                         ui.label(
                             RichText::new("--")
-                                .font(FontId::monospace(10.0))
+                                .font(FontId::monospace(theme::SIZE_XS))
                                 .color(theme::TEXT_MUTE),
                         );
                     }
@@ -431,105 +537,70 @@ fn table(app: &mut Defalt, ui: &mut Ui, rect: Rect) {
 /// matters -- on title alone a record and a documentary about the record
 /// score the same.
 fn suggestions(app: &mut Defalt, ui: &mut Ui, width: f32) {
-    if !app.catalogue.available() {
-        if !app.pull_query.trim().is_empty() {
-            ui.add_space(4.0);
-            ui.label(
-                RichText::new("No Spotify credentials, so no suggestions.")
-                    .font(FontId::proportional(9.5))
-                    .color(theme::TEXT_MUTE),
-            );
-        }
+    super::suggestion_status(ui, &app.catalogue, !app.pull_query.trim().is_empty());
+    if app.catalogue.showing.is_empty() || app.catalogue.error.is_some() {
         return;
     }
-
-    if let Some(error) = &app.catalogue.error {
-        ui.add_space(4.0);
-        ui.label(
-            RichText::new(error)
-                .font(FontId::proportional(9.5))
-                .color(theme::RED),
-        );
-        return;
-    }
-
-    if app.catalogue.showing.is_empty() {
-        if app.catalogue.busy {
-            ui.add_space(4.0);
-            ui.label(
-                RichText::new("searching...")
-                    .font(FontId::proportional(9.5))
-                    .color(theme::TEXT_MUTE),
-            );
-        }
-        return;
-    }
-
     ui.add_space(6.0);
-    let mut chosen: Option<usize> = None;
-    for (at, found) in app.catalogue.showing.iter().enumerate() {
-        let (rect, response) = ui.allocate_exact_size(
-            vec2(width, 30.0),
-            Sense::click(),
-        );
-        if response.hovered() {
-            ui.painter().rect_filled(rect, 4.0, theme::RAISED);
-        }
-        let inner = rect.shrink2(vec2(6.0, 3.0));
-
-        ui.painter().text(
-            inner.left_top(),
-            Align2::LEFT_TOP,
-            super::elide(&found.title, 26),
-            FontId::proportional(10.5),
-            theme::TEXT,
-        );
-        ui.painter().text(
-            inner.left_bottom() - vec2(0.0, 11.0),
-            Align2::LEFT_TOP,
-            super::elide(&found.artist, 28),
-            FontId::proportional(9.5),
-            theme::TEXT_DIM,
-        );
-        ui.painter().text(
-            inner.right_top(),
-            Align2::RIGHT_TOP,
-            found.length(),
-            FontId::monospace(9.5),
-            theme::TEXT_MUTE,
-        );
-        if let Some(year) = &found.year {
-            ui.painter().text(
-                inner.right_bottom() - vec2(0.0, 11.0),
-                Align2::RIGHT_TOP,
-                year,
-                FontId::monospace(9.0),
-                theme::TEXT_MUTE,
-            );
-        }
-
-        if response.clicked() {
-            chosen = Some(at);
-        }
-        response.on_hover_text(match &found.album {
-            Some(album) => format!("{album} - {}", found.length()),
-            None => found.length(),
-        });
-    }
-
-    if let Some(at) = chosen {
+    if let Some(at) = super::suggestion_list(ui, &app.catalogue.showing, width, usize::MAX) {
         app.take_suggestion(at);
     }
 }
 
+/// The load column: a lamp strip and two keys.
+const LOAD_COLUMN: f32 = 88.0;
+
+/// Within this many percent of the playing tempo, a record is an easy mix.
+const CLOSE_MATCH: f64 = 3.0;
+
+fn match_is_close(shift: Option<f64>, reachable: bool) -> bool {
+    reachable && shift.is_some_and(|s| s.abs() <= CLOSE_MATCH)
+}
+
+/// A row's load key: quiet until the pointer or focus reaches it, then in
+/// its deck's colour; lit in that colour while the record is on the deck.
+fn load_key(ui: &mut Ui, deck: usize, loaded: bool, live: bool) -> egui::Response {
+    let colour = theme::DECK_COLOURS[deck];
+    let letter = theme::DECK_LETTERS[deck];
+    let size = vec2(34.0, theme::CONTROL_S);
+    let (rect, response) = ui.allocate_exact_size(size, if live { Sense::click() } else { Sense::hover() });
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, live, loaded,
+                                                         format!("Load on deck {letter}")));
+    let hovered = live && (response.hovered() || response.has_focus());
+    let look = if loaded { Look::secondary(true, live) } else { Look::ghost(false, live) }.accent(colour);
+    let look = if hovered && !loaded { look.outlined() } else { look };
+    let ink = super::paint_control(ui, rect, look, hovered, live && response.is_pointer_button_down_on());
+    let ink = if hovered && !loaded { colour } else { ink };
+    ui.painter().text(rect.center(), Align2::CENTER_CENTER, letter, theme::display(theme::SIZE_S), ink);
+    if response.has_focus() {
+        ui.painter().rect_stroke(rect.expand(2.0), theme::R_M + 2.0, Stroke::new(theme::LINE_MID, theme::BLUE),
+                                 egui::StrokeKind::Outside);
+    }
+    response.on_hover_text(format!("Load on deck {letter}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_small_reachable_tempo_move_is_called_a_match() {
+        assert!(match_is_close(Some(0.0), true));
+        assert!(match_is_close(Some(-3.0), true));
+        assert!(!match_is_close(Some(3.1), true));
+        assert!(!match_is_close(Some(1.0), false), "past the fader is never a match");
+        assert!(!match_is_close(None, true));
+    }
+}
+
 fn cell(ui: &mut Ui, text: &str, colour: egui::Color32) {
-    ui.add(egui::Label::new(RichText::new(text).size(13.0).color(colour)).truncate()).on_hover_text(text);
+    ui.add(egui::Label::new(RichText::new(text).size(theme::SIZE_M).color(colour)).truncate()).on_hover_text(text);
 }
 
 fn number(ui: &mut Ui, text: String) {
     ui.label(
         RichText::new(text)
-            .font(FontId::monospace(11.5))
+            .font(FontId::monospace(theme::SIZE_S))
             .color(theme::TEXT_DIM),
     );
 }

@@ -55,6 +55,15 @@ def references():
             continue
         if any(len(text.split()) > 45 for text in (entry["spoken"], quoted)):
             continue
+        # Optional station-owned variants, for plays the director picked.
+        station = entry.get("spoken_station", "")
+        station_quoted = entry.get("spoken_quote_station", "")
+        if not isinstance(station, str) or not isinstance(station_quoted, str):
+            continue
+        if station_quoted and quote and quote not in station_quoted:
+            continue
+        if any(len(text.split()) > 45 for text in (station, station_quoted)):
+            continue
         ids.add(entry["id"])
         result.append(dict(entry))
     return result
@@ -87,6 +96,11 @@ def prepare(data, recent=()):
                     _norm(title) for title in ref["titles"]}:
                 continue
             spoken = ref.get("spoken_quote") if quotes and ref.get("quote") else ref["spoken"]
+            # Lines that say "your queue" must not air over the station's own
+            # pick. Director plays use the station-owned wording when there is one.
+            if (track.get("selected_for_this_play") or {}).get("by") == "director":
+                spoken = (ref.get("spoken_quote_station") if quotes and ref.get("quote")
+                          else ref.get("spoken_station")) or spoken
             if any(_norm(spoken) == _norm(line) for line in recent):
                 continue
             candidates.append({**ref, "opening": spoken, "matched_slot": slot,

@@ -1,11 +1,11 @@
 //! The three racks under the transport: beatgrid, effects, stems.
 //!
-//! Tempo correction and stem separation are optional panels. The unfinished
-//! effects preview is kept out of the normal console.
+//! Tempo correction, a beat echo and stem separation, each an optional
+//! panel toggled from the toolbar.
 
 use egui::{vec2, Align2, Rect, Sense, Stroke, Ui};
 
-use super::theme;
+use super::{theme, widgets, Look};
 use crate::Defalt;
 
 /* ── 5. Beatgrid ─────────────────────────────────────────────────────── */
@@ -15,18 +15,85 @@ pub fn beatgrid(app: &mut Defalt, ui: &mut Ui) {
     for deck in 0..2 {
         let rect = Rect::from_min_size(full.min + vec2(deck as f32 * (half + 8.0), 0.0), vec2(half, full.height()));
         super::plate(ui, rect);
-        let mut row = super::child(ui, rect.shrink2(vec2(10.0, 4.0)), super::left_row(), if deck == 0 { "gridA" } else { "gridB" });
-        row.spacing_mut().item_spacing.x = 10.0;
-        row.label(super::rich(if deck == 0 { "Deck A tempo" } else { "Deck B tempo" }, 12.0, theme::TEXT_DIM));
+        let mut row = super::child(ui, rect.shrink2(vec2(theme::SP_3, 4.0)), super::left_row(), if deck == 0 { "gridA" } else { "gridB" });
+        row.spacing_mut().item_spacing.x = theme::SP_2;
+        let (badge, _) = row.allocate_exact_size(vec2(22.0, 20.0), Sense::hover());
+        super::deck_badge(&row, badge, deck);
+        row.label(super::rich(if deck == 0 { "Deck A tempo" } else { "Deck B tempo" }, theme::SIZE_S, theme::TEXT_DIM));
         let bpm = app.decks[deck].record.as_ref().and_then(|r| r.bpm);
-        row.label(super::rich(&bpm.map_or("-- BPM".into(), |n| format!("{n:.1} BPM")), 13.0, theme::TEXT));
-        if super::chip(&mut row, "Half", vec2(48.0, 26.0), false, bpm.is_some()).clicked() { app.scale_tempo(deck, 0.5); }
-        if super::chip(&mut row, "Double", vec2(58.0, 26.0), false, bpm.is_some()).clicked() { app.scale_tempo(deck, 2.0); }
-        if super::chip(&mut row, "Reset", vec2(52.0, 26.0), false, bpm.is_some()).clicked() { app.reset_grid(deck); }
+        row.label(egui::RichText::new(bpm.map_or("-- BPM".into(), |n| format!("{n:.1} BPM")))
+            .font(egui::FontId::monospace(theme::SIZE_M)).color(theme::TEXT));
+        let key = |text: &str| vec2(if text == "Double" { 64.0 } else { 54.0 }, theme::CONTROL_S);
+        if super::chip(&mut row, "Half", key("Half"), false, bpm.is_some()).clicked() { app.scale_tempo(deck, 0.5); }
+        if super::chip(&mut row, "Double", key("Double"), false, bpm.is_some()).clicked() { app.scale_tempo(deck, 2.0); }
+        if super::chip(&mut row, "Reset", key("Reset"), false, bpm.is_some()).clicked() { app.reset_grid(deck); }
     }
 }
 
 /* ── 6. Effects ──────────────────────────────────────────────────────── */
+
+/// Beat divisions the echo can repeat at.
+const DIVISIONS: [(f64, &str); 6] = [
+    (0.25, "1/4"), (0.5, "1/2"), (0.75, "3/4"), (1.0, "1"), (2.0, "2"), (4.0, "4"),
+];
+
+/// One deck's beat echo: the same echo the station uses for its transition
+/// tails, played by hand.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Echo {
+    pub on: bool,
+    /// Index into `DIVISIONS`.
+    pub division: usize,
+    /// 0..1 of the echo's wet range.
+    pub mix: f32,
+    /// 0..1 of the echo's feedback range.
+    pub feedback: f32,
+    /// What the engine was last told, so a tempo change re-times the repeats
+    /// without a command every frame.
+    sent: Option<[f32; 3]>,
+    /// Post-fader send into the shared reverb, 0..1.
+    pub reverb: f32,
+    reverb_sent: Option<f32>,
+}
+
+impl Default for Echo {
+    fn default() -> Self {
+        Echo { on: false, division: 1, mix: 0.6, feedback: 0.5, sent: None, reverb: 0.0, reverb_sent: None }
+    }
+}
+
+impl Echo {
+    /// What the engine was last told, if the rack is driving this echo.
+    pub fn last_sent(&self) -> Option<[f32; 3]> {
+        self.sent
+    }
+
+    #[cfg(test)]
+    pub fn sent_for_test(command: [f32; 3]) -> Self {
+        Echo { on: true, sent: Some(command), ..Echo::default() }
+    }
+
+    /// The engine's echo was reset under the rack; send it again when used.
+    pub fn forget_sent(&mut self) {
+        self.sent = None;
+    }
+
+    /// Mix, feedback and delay seconds for the engine, at this beat length.
+    pub fn command(&self, beat: f64) -> [f32; 3] {
+        let beats = DIVISIONS[self.division.min(DIVISIONS.len() - 1)].0;
+        let seconds = (beats * beat).clamp(0.02, 1.95) as f32;
+        [if self.on { self.mix * 0.5 } else { 0.0 }, self.feedback * 0.65, seconds]
+    }
+}
+
+/// Seconds per beat on this deck, at its current pitch; half a second when
+/// there is no grid to go on.
+fn beat_seconds(app: &Defalt, deck: usize) -> f64 {
+    let period = app.decks[deck].record.as_ref().and_then(|r| r.beat_period)
+        .filter(|p| *p > 0.05).unwrap_or(0.5);
+    period / (1.0 + (app.decks[deck].pitch + app.decks[deck].bend) as f64 / 100.0)
+}
+
 pub fn effects(app: &mut Defalt, ui: &mut Ui) {
     if !app.show_fx {
         return;
@@ -34,65 +101,93 @@ pub fn effects(app: &mut Defalt, ui: &mut Ui) {
     let full = ui.max_rect();
     let (left, centre, right) = super::split_thirds(full, 104.0, 6.0);
 
-    fx_slots(ui, left, &["Echo", "Flanger", "Gate"], &["1", "", "1/8"]);
-    fx_centre(app, ui, centre);
-    fx_slots(ui, right, &["Echo", "Flanger", "Gate"], &["1", "", "1/2"]);
+    echo_rack(app, ui, 0, left);
+    fx_centre(ui, centre);
+    echo_rack(app, ui, 1, right);
 }
 
-fn fx_slots(ui: &mut Ui, rect: Rect, names: &[&str], amounts: &[&str]) {
-    let width = (rect.width() - 8.0) / names.len() as f32;
-    for (i, name) in names.iter().enumerate() {
-        let cell = Rect::from_min_size(
-            egui::pos2(rect.left() + i as f32 * (width + 4.0), rect.top()),
-            vec2(width, rect.height()),
-        );
-        super::plate(ui, cell);
-        let inner = cell.shrink(4.0);
+fn echo_rack(app: &mut Defalt, ui: &mut Ui, deck: usize, rect: Rect) {
+    super::plate(ui, rect);
+    // The station drives the echo on a deck it is carrying; two hands on one
+    // effect is a fight nobody hears the end of.
+    let station = app.airtime.on_deck(deck).is_some();
+    let live = app.engine_ready() && !station;
+    let mut echo = app.view_state.fx[deck];
 
-        let mut head = super::child(ui, Rect::from_min_size(inner.min, vec2(inner.width(), 20.0)),
-                                    super::left_row(), "rac3");
-        super::dropdown(&mut head, name, inner.width(), false);
-
-        let body = Rect::from_min_max(egui::pos2(inner.left(), inner.top() + 23.0), inner.max);
-        let mut row = super::child(ui, body, super::left_row(), "rac4");
-        row.spacing_mut().item_spacing.x = 3.0;
-
-        super::chip(&mut row, "ON", vec2(28.0, 18.0), false, false);
-        if amounts[i].is_empty() {
-            // The flanger takes a sweep rather than a beat division.
-            let (slot, response) = row.allocate_exact_size(vec2(58.0, 18.0), Sense::hover());
-            ui.painter().rect_filled(
-                Rect::from_center_size(slot.center(), vec2(slot.width(), 4.0)),
-                2.0,
-                theme::SLOT,
-            );
-            ui.painter().rect_filled(
-                Rect::from_center_size(slot.center(), vec2(11.0, 14.0)),
-                2.0,
-                theme::EDGE_LIT,
-            );
-            response.on_hover_text(super::NOT_WIRED);
-        } else {
-            super::chip(&mut row, "‹", vec2(16.0, 18.0), false, false);
-            super::chip(&mut row, amounts[i], vec2(26.0, 18.0), false, false);
-            super::chip(&mut row, "›", vec2(16.0, 18.0), false, false);
-        }
-        row.add_space(3.0);
-        for letter in ["D", "W"] {
-            super::chip(&mut row, letter, vec2(16.0, 18.0), false, false);
-        }
+    let inner = rect.shrink2(vec2(theme::SP_2, 5.0));
+    let mut row = super::child(ui, inner, super::left_row(), &format!("fx{deck}"));
+    row.spacing_mut().item_spacing.x = theme::SP_1;
+    let (badge, _) = row.allocate_exact_size(vec2(22.0, 20.0), Sense::hover());
+    super::deck_badge(&row, badge, deck);
+    row.label(super::rich("ECHO", theme::SIZE_XS, theme::TEXT_DIM));
+    let on = super::button(&mut row, "ON", vec2(34.0, theme::CONTROL_S),
+                           Look::secondary(echo.on, live).accent(theme::DECK_COLOURS[deck]));
+    let on = if station { on.on_hover_text("The station is using this deck's echo for its mix.") } else { on };
+    if on.clicked() {
+        echo.on = !echo.on;
     }
+    let step = vec2(theme::CONTROL_S, theme::CONTROL_S);
+    if super::glyph_chip(&mut row, super::Glyph::Minus, step, live && echo.division > 0)
+        .on_hover_text("Shorter repeats").clicked() {
+        echo.division -= 1;
+    }
+    let (_, name) = DIVISIONS[echo.division.min(DIVISIONS.len() - 1)];
+    row.add_sized(vec2(30.0, theme::CONTROL_S), egui::Label::new(
+        egui::RichText::new(name).font(egui::FontId::monospace(theme::SIZE_S)).color(theme::TEXT)))
+        .on_hover_text("Beats between repeats");
+    if super::glyph_chip(&mut row, super::Glyph::Plus, step, live && echo.division + 1 < DIVISIONS.len())
+        .on_hover_text("Longer repeats").clicked() {
+        echo.division += 1;
+    }
+
+    // The echo's two levels and the reverb send share whatever width is left.
+    let rest = Rect::from_min_max(egui::pos2(row.min_rect().right() + theme::SP_3, inner.top()), inner.max);
+    let third = ((rest.width() - 16.0) / 3.0).max(20.0);
+    let deck_name = if deck == 0 { "A" } else { "B" };
+    for (at, (name, value, reset, lit, what)) in [
+        ("MIX", &mut echo.mix, 0.6, echo.on, "echo mix"),
+        ("FB", &mut echo.feedback, 0.5, echo.on, "echo feedback"),
+        ("VERB", &mut echo.reverb, 0.0, true, "reverb send"),
+    ].into_iter().enumerate()
+    {
+        let cell = Rect::from_min_size(egui::pos2(rest.left() + at as f32 * (third + 8.0), rest.top()),
+                                       vec2(third, rest.height()));
+        super::label(ui, cell.left_top(), Align2::LEFT_TOP, name, theme::SIZE_XS, theme::TEXT_MUTE);
+        let slot = Rect::from_min_size(egui::pos2(cell.left(), cell.bottom() - 16.0), vec2(cell.width(), 14.0));
+        let label = format!("Deck {deck_name} {what}");
+        widgets::slim(ui, slot, egui::Id::new(("fx", deck, name)), value, reset, live, lit, &label);
+    }
+
+    if live {
+        let command = echo.command(beat_seconds(app, deck));
+        let moved = echo.sent.is_none_or(|sent| {
+            sent.iter().zip(command.iter()).any(|(a, b)| (a - b).abs() > 1e-3)
+        });
+        // Nothing is sent until the echo has been used, so opening the rack
+        // does not touch a deck.
+        if moved && (echo.on || echo.sent.is_some()) {
+            app.set_echo(deck, command);
+            echo.sent = Some(command);
+        }
+        if echo.reverb_sent.is_none_or(|sent| (sent - echo.reverb).abs() > 1e-3)
+            && (echo.reverb > 0.0 || echo.reverb_sent.is_some()) {
+            app.set_reverb_send(deck, echo.reverb);
+            echo.reverb_sent = Some(echo.reverb);
+        }
+    } else {
+        // Whoever has it now owns what it is doing.
+        echo.sent = None;
+        echo.reverb_sent = None;
+    }
+    app.view_state.fx[deck] = echo;
 }
 
-fn fx_centre(app: &mut Defalt, ui: &mut Ui, rect: Rect) {
-    let mut column = super::child(ui, rect, egui::Layout::top_down(egui::Align::Center), "rac5");
+fn fx_centre(ui: &mut Ui, rect: Rect) {
+    let mut column = super::child(ui, rect, egui::Layout::top_down(egui::Align::Center), "fxc");
     column.spacing_mut().item_spacing.y = 3.0;
-    column.label(super::rich("FX", 11.0, theme::TEXT_DIM));
-    column.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 3.0;
-        super::chip(ui, "MANUAL", vec2(48.0, 18.0), app.fx_manual, false);
-        super::chip(ui, "INSTANT", vec2(48.0, 18.0), !app.fx_manual, false);
-    });
+    column.label(super::rich("FX", theme::SIZE_S, theme::TEXT_DIM));
+    column.label(super::rich("Echo + verb", theme::SIZE_XS, theme::TEXT_MUTE))
+        .on_hover_text("Repeats timed to each deck's own beat, and a send into the shared reverb. Double-click a level to reset it.");
 }
 
 /* ── 7. Stems ────────────────────────────────────────────────────────── */
@@ -124,20 +219,26 @@ fn stem_row(app: &mut Defalt, ui: &mut Ui, deck: usize, rect: Rect) {
         let ink = if !live {
             theme::TEXT_MUTE
         } else if muted {
-            theme::PLAYHEAD
+            theme::RED
         } else {
             theme::TEXT_DIM
         };
-        super::label(ui, inner.left_top() + vec2(18.0, 1.0), Align2::LEFT_TOP, name, 9.5, ink);
+        // Clipped short of the mute cross, so a long name never runs under it.
+        super::clipped_label(ui, Rect::from_min_size(inner.left_top() + vec2(18.0, 0.0),
+                                                     vec2((inner.width() - 40.0).max(10.0), 16.0)),
+                             name, theme::SIZE_XS, ink);
         stem_glyph(ui, inner.left_top() + vec2(7.0, 6.0), index, ink);
 
         // Mute.
         let mute = Rect::from_min_size(inner.right_top() - vec2(18.0, -1.0), vec2(18.0, 15.0));
-        let hit = ui.interact(mute, egui::Id::new(("stemmute", deck, index)), Sense::click());
-        if live && hit.hovered() {
-            ui.painter().rect_filled(mute, 3.0, theme::RAISED);
+        let hit = ui.interact(mute, egui::Id::new(("stemmute", deck, index)),
+                              if live { Sense::click() } else { Sense::hover() });
+        hit.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, live, muted,
+                                                      format!("Mute {name}")));
+        if live && (hit.hovered() || hit.has_focus()) {
+            ui.painter().rect_filled(mute, theme::R_S, theme::RAISED);
         }
-        let cross = if muted { theme::PLAYHEAD } else { ink };
+        let cross = if muted { theme::RED } else { ink };
         for (a, b) in [((-3.0, -3.0), (3.0, 3.0)), ((3.0, -3.0), (-3.0, 3.0))] {
             ui.painter().line_segment(
                 [mute.center() + vec2(a.0, a.1), mute.center() + vec2(b.0, b.1)],
@@ -157,31 +258,10 @@ fn stem_row(app: &mut Defalt, ui: &mut Ui, deck: usize, rect: Rect) {
             vec2(inner.width(), 12.0),
         );
         let mut level = app.stem_gain[deck][index];
-        let response = ui.interact(slot, egui::Id::new(("stem", deck, index)), Sense::click_and_drag());
-        if live && response.dragged() {
-            let travel = slot.width().max(1.0);
-            level = (level + response.drag_delta().x / travel).clamp(0.0, 1.0);
+        let id = egui::Id::new(("stem", deck, index));
+        if widgets::slim(ui, slot, id, &mut level, 1.0, live, !muted, &format!("{name} level")).changed() {
             app.set_stem_gain(deck, index, level);
         }
-        if live && response.double_clicked() {
-            app.set_stem_gain(deck, index, 1.0);
-        }
-
-        let track = Rect::from_center_size(slot.center(), vec2(slot.width(), 5.0));
-        ui.painter().rect_filled(track, 2.5, theme::SLOT);
-        if live && !muted {
-            ui.painter().rect_filled(
-                Rect::from_min_size(track.min, vec2(track.width() * level, track.height())),
-                2.5,
-                theme::BLUE_DEEP,
-            );
-        }
-        let cap_x = track.left() + track.width() * level;
-        ui.painter().rect_filled(
-            Rect::from_center_size(egui::pos2(cap_x, track.center().y), vec2(9.0, 13.0)),
-            2.0,
-            if live { theme::CAP } else { theme::RAISED_HI },
-        );
     }
 }
 
@@ -212,8 +292,8 @@ fn stem_glyph(ui: &Ui, at: egui::Pos2, which: usize, c: egui::Color32) {
 }
 
 fn stem_centre(app: &mut Defalt, ui: &mut Ui, rect: Rect) {
-    let mut column = super::child(ui, rect.shrink2(vec2(4.0, 0.0)), egui::Layout::top_down(egui::Align::Center), "stemc");
-    column.spacing_mut().item_spacing.y = 4.0;
+    let mut column = super::child(ui, rect.shrink2(vec2(4.0, 1.0)), egui::Layout::top_down(egui::Align::Center), "stemc");
+    column.spacing_mut().item_spacing.y = theme::SP_1;
     for deck in 0..2 {
         let name = if deck == 0 { "A" } else { "B" };
         let busy = app.splitting(deck).is_some();
@@ -223,7 +303,9 @@ fn stem_centre(app: &mut Defalt, ui: &mut Ui, rect: Rect) {
         let live = !busy && !app.separated[deck] && !app.decks[deck].loading
             && app.decks[deck].record.is_some() && app.can_pull();
         let note = app.splitting(deck).map(|job| job.stage.label()).unwrap_or_else(|| "Separate drums, bass, harmony and vocals. Drag their levels or click a cross to mute.".into());
-        if super::chip(&mut column, &text, vec2(120.0, 25.0), app.separated[deck], live).on_hover_text(note).clicked() {
+        if super::button(&mut column, &text, vec2(120.0, theme::CONTROL_S),
+                         Look::secondary(app.separated[deck], live).accent(theme::DECK_COLOURS[deck]))
+            .on_hover_text(note).clicked() {
             app.begin_split(deck);
         }
     }

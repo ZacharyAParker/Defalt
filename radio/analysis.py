@@ -7,8 +7,14 @@ track at download time where a second either way costs nothing.
   tempo -- spectral flux onset envelope, then autocorrelation over a
            plausible BPM range, with octave correction so 140 does not get
            reported as 70.
-  key   -- chroma folded to twelve pitch classes, correlated against the
-           Krumhansl-Schmuckler major and minor profiles.
+  key   -- tuning-corrected, log-compressed chroma from the harmonic part
+           of the spectrum, correlated against the Krumhansl-Schmuckler
+           major and minor profiles. The runner-up is kept, because a
+           relative major/minor pair is the classic confusion.
+  bars  -- downbeats from where the kick, the harmony and the accents
+           agree, with a confidence.
+  feel  -- a perceived-energy score, a danceability hint and a small audio
+           embedding for "more like this", from the same decode.
 
 Both return a confidence. Low confidence is normal and useful: a spoken-word
 track or a free-tempo ballad genuinely has no BPM, and the transition picker
@@ -17,6 +23,7 @@ falls back to a safe crossfade rather than pretending it knows.
 from __future__ import annotations
 
 import hashlib
+import json
 import subprocess
 import os
 import tempfile
@@ -46,6 +53,10 @@ NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F",
 # Analysis is capped: three minutes is plenty to establish tempo and key, and
 # it keeps a ten-minute mix from costing ten times as much.
 MAX_SECONDS = 180
+
+# Bump when the stored descriptors change meaning; older rows are refreshed
+# lazily when prepared (ensure_features) or in bulk (reanalyse).
+FEATURES_VERSION = 1
 
 
 def peak_levels(samples: np.ndarray, sample_rate: int = SAMPLE_RATE) -> dict:
@@ -306,13 +317,11 @@ def detect_beats(spectrum: np.ndarray, bpm: float) -> dict[str, float]:
     if grid["beat_period"] <= 0:
         return blank
 
-    # Downbeat: of the four beats in a bar, whichever carries the most weight.
-    bar_scores = np.zeros(4)
-    for index, frame in enumerate(beats):
-        position = int(round(frame))
-        if position < len(onset):
-            bar_scores[index % 4] += onset[position]
-    downbeat = int(np.argmax(bar_scores))
+    phase, confidence = detect_downbeat(spectrum, beats, onset)
+    # The grid offset is the first grid beat; the tracked beat list may
+    # start later, so express the phase relative to the grid itself.
+    first = int(round((beats[0] / fps - grid["beat_offset"]) / grid["beat_period"])) if len(beats) else 0
+    downbeat = (phase + first) % 4
 
     return {
         "beat_offset": grid["beat_offset"],
@@ -320,7 +329,52 @@ def detect_beats(spectrum: np.ndarray, bpm: float) -> dict[str, float]:
         "beat_residual_ms": grid["beat_residual_ms"],
         "downbeat_offset": round(
             grid["beat_offset"] + downbeat * grid["beat_period"], 4),
+        "downbeat_confidence": confidence,
     }
+
+
+def _zscore(values: np.ndarray) -> np.ndarray:
+    spread = values.std()
+    return (values - values.mean()) / spread if spread > 1e-9 else np.zeros_like(values)
+
+
+def detect_downbeat(spectrum: np.ndarray, beats: np.ndarray,
+                    onset: np.ndarray | None = None) -> tuple[int, float]:
+    """Which beat of four starts the bar, and how sure that is (0..1).
+
+    The loudest beat is often the snare on two and four. Bars are marked
+    by the kick and by harmony: chords tend to change on the one. So each
+    beat is scored on low-frequency onset (the kick), chroma change across
+    it (the harmony) and overall accent, and the four bar positions compete.
+    Confidence is how clearly the winner beats the runner-up.
+    """
+    if len(beats) < 8 or spectrum.shape[1] < 8:
+        return 0, 0.0
+    onset = _beat_envelope(spectrum) if onset is None else onset
+    freqs = np.fft.rfftfreq(WINDOW, 1.0 / SAMPLE_RATE)[:spectrum.shape[0]]
+    low = np.log1p(spectrum[(freqs >= 30) & (freqs < 150)].sum(axis=0))
+    kick = np.maximum(np.diff(low, prepend=low[:1]), 0)
+    chroma = _chroma_frames(spectrum, step=1, harmonic=False)
+    frames = np.clip(np.rint(beats).astype(int), 0, spectrum.shape[1] - 1)
+
+    def near(signal, frame):
+        return float(signal[max(0, frame - 1):frame + 2].max()) if len(signal) else 0.0
+
+    change = np.zeros(len(frames))
+    for index in range(1, len(frames) - 1):
+        before = chroma[:, frames[index - 1]:frames[index]].mean(axis=1)
+        after = chroma[:, frames[index]:frames[index + 1]].mean(axis=1)
+        norm = np.linalg.norm(before) * np.linalg.norm(after)
+        change[index] = 1 - float(before @ after / norm) if norm > 1e-12 else 0.0
+    kicks = np.array([near(kick, f) for f in frames])
+    accents = np.array([near(onset, min(f, len(onset) - 1)) for f in frames]) if len(onset) else np.zeros(len(frames))
+    score = _zscore(kicks) + _zscore(change) + 0.5 * _zscore(accents)
+    means = np.array([score[p::4].mean() if len(score[p::4]) else -np.inf for p in range(4)])
+    order = np.argsort(means)[::-1]
+    best, second = means[order[0]], means[order[1]]
+    spread = float(means.max() - means.min())
+    confidence = float(np.clip((best - second) / (spread + 0.25), 0.0, 1.0)) if np.isfinite(second) else 0.0
+    return int(order[0]), round(confidence, 3)
 
 
 def track_beats(onset: np.ndarray, period_frames: float,
@@ -429,33 +483,82 @@ def grid_score(spectrum: np.ndarray, offset: float, period: float) -> float:
 # --------------------------------------------------------------------------
 # Key
 # --------------------------------------------------------------------------
-def _chroma(spectrum: np.ndarray) -> np.ndarray:
-    """Fold the spectrum into twelve pitch classes."""
-    bins = spectrum.shape[0]
+# Harmony lives between roughly G2 and D#8: below it the kick and the bass
+# smear across semitones at this resolution, above it cymbals and air.
+CHROMA_LOW, CHROMA_HIGH = 100.0, 5000.0
+
+
+def _median_filter(values: np.ndarray, width: int, axis: int) -> np.ndarray:
+    """A running median along one axis, in bounded chunks of memory."""
+    pad = width // 2
+    padded = np.pad(values, [(pad, pad) if a == axis else (0, 0) for a in range(values.ndim)], mode="edge")
+    out = np.empty_like(values)
+    other = 1 - axis
+    step = max(1, 2_000_000 // max(1, values.shape[axis] * width))
+    for start in range(0, values.shape[other], step):
+        block = padded[start:start + step] if other == 0 else padded[:, start:start + step]
+        windows = np.lib.stride_tricks.sliding_window_view(block, width, axis=axis)
+        filtered = np.median(windows, axis=-1)
+        if other == 0:
+            out[start:start + step] = filtered
+        else:
+            out[:, start:start + step] = filtered
+    return out
+
+
+def _chroma_frames(spectrum: np.ndarray, step: int = 2, harmonic: bool = True) -> np.ndarray:
+    """Per-frame twelve-class chroma, shape (12, frames/step).
+
+    Magnitudes are log-compressed so one loud bass note cannot outvote a
+    chord. Each bin shares its energy between neighbouring pitch classes by
+    its distance in semitones (after estimating the recording's tuning), and
+    bins too coarse to resolve a semitone count for less. With `harmonic`,
+    a median filter along time and frequency keeps sustained partials and
+    drops drum hits, a cheap harmonic/percussive separation.
+    """
+    bins, frames = spectrum.shape
     freqs = np.fft.rfftfreq(WINDOW, 1.0 / SAMPLE_RATE)[:bins]
+    usable = (freqs >= CHROMA_LOW) & (freqs <= CHROMA_HIGH)
+    if not np.any(usable) or frames == 0:
+        return np.zeros((12, 0))
+    magnitude = spectrum[usable][:, ::max(1, step)].astype(np.float32)
+    peak = float(magnitude.max())
+    if peak <= 0:
+        return np.zeros((12, magnitude.shape[1]))
+    # Gentle compression: stronger would lift overtones (a fifth above every
+    # note) level with the notes themselves and pull the key to the dominant.
+    compressed = np.log1p(5.0 * magnitude / peak)
+    if harmonic and compressed.shape[1] >= 9:
+        sustained = _median_filter(compressed, 9, axis=1)
+        percussive = _median_filter(compressed, 9, axis=0)
+        mask = sustained ** 2 / (sustained ** 2 + percussive ** 2 + 1e-9)
+        compressed = compressed * mask
+    midi = 69 + 12 * np.log2(freqs[usable] / 440.0)
+    # Tuning: the energy-weighted circular mean of each bin's offset from
+    # the nearest equal-tempered semitone, so a record mastered a little
+    # sharp does not straddle two pitch classes.
+    weights = compressed.sum(axis=1)
+    angle = 2 * np.pi * (midi - np.rint(midi))
+    tuning = float(np.angle(np.sum(weights * np.exp(1j * angle))) / (2 * np.pi)) if weights.sum() > 0 else 0.0
+    position = (midi - tuning) % 12
+    distance = np.abs(position[None, :] - np.arange(12)[:, None])
+    distance = np.minimum(distance, 12 - distance)
+    share = np.exp(-0.5 * (distance / 0.35) ** 2)
+    share *= np.minimum(1.0, (freqs[usable] * (2 ** (1 / 12) - 1)) / (SAMPLE_RATE / WINDOW))[None, :]
+    return share @ compressed
 
-    # Below C2 is mostly kick drum, above C7 is mostly cymbals; neither says
-    # anything useful about harmony.
-    usable = (freqs > 65.0) & (freqs < 2100.0)
-    if not np.any(usable):
+
+def _chroma(spectrum: np.ndarray) -> np.ndarray:
+    """Fold the spectrum into twelve pitch classes, summed over the track."""
+    frames = _chroma_frames(spectrum)
+    if not frames.size:
         return np.zeros(12)
-
-    midi = 69 + 12 * np.log2(np.maximum(freqs[usable], 1e-6) / 440.0)
-    classes = np.rint(midi).astype(int) % 12
-
-    energy = spectrum[usable].sum(axis=1)
-    chroma = np.zeros(12)
-    np.add.at(chroma, classes, energy)
+    chroma = frames.sum(axis=1)
     total = chroma.sum()
     return chroma / total if total > 0 else chroma
 
 
-def detect_key(spectrum: np.ndarray) -> tuple[int, str, float]:
-    """Return (pitch class 0-11, 'major'|'minor', confidence 0..1)."""
-    chroma = _chroma(spectrum)
-    if not np.any(chroma):
-        return (-1, "", 0.0)
-
+def _key_scores(chroma: np.ndarray) -> list[tuple[float, int, str]]:
     scores: list[tuple[float, int, str]] = []
     for tonic in range(12):
         rotated = np.roll(chroma, -tonic)
@@ -463,18 +566,39 @@ def detect_key(spectrum: np.ndarray) -> tuple[int, str, float]:
             correlation = np.corrcoef(rotated, profile)[0, 1]
             if np.isfinite(correlation):
                 scores.append((float(correlation), tonic, mode))
-
-    if not scores:
-        return (-1, "", 0.0)
     scores.sort(reverse=True)
-    best, tonic, mode = scores[0]
-    runner_up = scores[1][0] if len(scores) > 1 else 0.0
+    return scores
 
-    # Confidence is how far clear of the second-best answer it is. A track
-    # that fits two keys equally well has not really told us its key.
+
+def detect_key(spectrum: np.ndarray) -> tuple[int, str, float]:
+    """Return (pitch class 0-11, 'major'|'minor', confidence 0..1)."""
+    tonic, mode, confidence, _ = detect_key_detail(spectrum)
+    return (tonic, mode, confidence)
+
+
+def detect_key_detail(spectrum: np.ndarray) -> tuple[int, str, float, str]:
+    """(tonic, mode, confidence, runner-up Camelot code).
+
+    Confidence is how far clear of the runner-up the winner is, except that
+    a relative major/minor runner-up costs less: both share every note, and
+    either is a safe mixing neighbour on the Camelot wheel.
+    """
+    chroma = _chroma(spectrum)
+    if not np.any(chroma):
+        return (-1, "", 0.0, "")
+    scores = _key_scores(chroma)
+    if not scores:
+        return (-1, "", 0.0, "")
+    best, tonic, mode = scores[0]
+    runner_up, alt_tonic, alt_mode = scores[1] if len(scores) > 1 else (0.0, -1, "")
+    relative = (alt_mode != mode and camelot(alt_tonic, alt_mode)[:-1] == camelot(tonic, mode)[:-1])
+    # A track that fits two unrelated keys equally well has not really told
+    # us its key. A relative pair is ambiguity about the mode, not the notes.
     margin = max(0.0, best - runner_up)
+    if relative and len(scores) > 2:
+        margin = max(margin, 0.5 * max(0.0, best - scores[2][0]))
     confidence = max(0.0, min(1.0, best * 0.6 + margin * 2.0))
-    return (tonic, mode, round(confidence, 3))
+    return (tonic, mode, round(confidence, 3), camelot(alt_tonic, alt_mode))
 
 
 # --------------------------------------------------------------------------
@@ -524,14 +648,148 @@ def keys_compatible(first: str, second: str) -> bool:
 # --------------------------------------------------------------------------
 # Entry point
 # --------------------------------------------------------------------------
-def profile(path: Path) -> dict[str, Any]:
-    """Everything the transition picker needs to know about a recording."""
-    blank = {"bpm": 0.0, "bpm_confidence": 0.0, "key_tonic": -1,
-             "key_mode": "", "key_confidence": 0.0, "camelot": "",
-             "beat_offset": 0.0, "beat_period": 0.0, "beat_residual_ms": 999.0,
-             "downbeat_offset": 0.0}
+# --------------------------------------------------------------------------
+# Feel: energy, danceability, and an embedding for similarity
+# --------------------------------------------------------------------------
+EMBEDDING_SIZE = 32
 
-    samples = _decode(path)
+
+def _mfcc(spectrum: np.ndarray, count: int = 13) -> np.ndarray:
+    """Cepstral coefficients over log-spaced bands; shape (count, frames)."""
+    power = spectrum.astype(np.float64) ** 2
+    edges = _band_edges(spectrum.shape[0])
+    bands = np.empty((_MEL_BANDS, spectrum.shape[1]))
+    for index in range(_MEL_BANDS):
+        start, stop = edges[index], max(edges[index + 1], edges[index] + 1)
+        bands[index] = power[start:stop].mean(axis=0)
+    logged = np.log(bands + 1e-10)
+    n = np.arange(_MEL_BANDS)
+    basis = np.cos(np.pi / _MEL_BANDS * (n + 0.5)[None, :] * np.arange(count)[:, None])
+    return basis @ logged / _MEL_BANDS
+
+
+def features(samples: np.ndarray, spectrum: np.ndarray, *, bpm: float = 0.0,
+             bpm_confidence: float = 0.0, residual_ms: float = 999.0,
+             mode: str = "") -> dict[str, Any]:
+    """Perceived energy, a danceability hint, and a small audio embedding.
+
+    Energy here is what a listener means by it: how sustained and dense the
+    sound is (loudness relative to the record's own peaks), how much low end
+    drives it, how busy the onsets are, how bright it is, and how fast. It
+    ignores absolute level on purpose -- a quiet master of a banger is still
+    a banger, and stored LUFS mix source and normalised measurements.
+    Danceability is a steady, confident pulse in a dance tempo with weight in
+    the low end. Both are bounded 0..1 hints, not genre or mood labels.
+    """
+    blank = {"energy": None, "danceability": None, "onset_rate": None, "embedding": None}
+    if spectrum.shape[1] < 16 or len(samples) < SAMPLE_RATE:
+        return blank
+    duration = len(samples) / SAMPLE_RATE
+    # Sustain: half-second RMS against the record's own loud passages, the
+    # same measure the cue planner's structure bins use.
+    width = SAMPLE_RATE // 2
+    blocks = len(samples) // width
+    rms = np.sqrt(np.mean(samples[:blocks * width].reshape(blocks, width).astype(np.float64) ** 2, axis=1))
+    reference = max(float(np.percentile(rms, 90)), 1e-9)
+    sustain = float(np.mean(np.clip(rms / reference, 0, 1)))
+    loud = rms[rms > 1e-5]
+    dynamics = float(np.percentile(20 * np.log10(loud), 95) - np.percentile(20 * np.log10(loud), 10)) if len(loud) > 4 else 0.0
+
+    power = spectrum.astype(np.float64) ** 2
+    freqs = np.fft.rfftfreq(WINDOW, 1.0 / SAMPLE_RATE)[:spectrum.shape[0]]
+    total = power.sum(axis=0) + 1e-12
+    bass = float(np.mean(power[freqs < 150].sum(axis=0) / total))
+    centroid = float(np.mean((freqs[:, None] * power).sum(axis=0) / total))
+    cumulative = np.cumsum(power, axis=0) / total
+    rolloff = float(np.mean(freqs[np.argmax(cumulative >= 0.85, axis=0)]))
+    audible = power[(freqs > 60) & (freqs < 8000)] + 1e-12
+    flatness = float(np.mean(np.exp(np.mean(np.log(audible), axis=0)) / np.mean(audible, axis=0)))
+
+    onset = _beat_envelope(spectrum)
+    peaks = 0
+    if len(onset) > 2:
+        threshold = onset.mean() + onset.std()
+        peaks = int(np.sum((onset[1:-1] > threshold) & (onset[1:-1] >= onset[:-2]) & (onset[1:-1] > onset[2:])))
+    onset_rate = peaks / duration
+
+    pace = min(1.0, max(0.0, (bpm - 60) / 120)) if bpm > 0 else 0.4
+    energy = (0.35 * sustain + 0.2 * min(1.0, onset_rate / 6.0) + 0.15 * pace
+              + 0.15 * min(1.0, bass / 0.45) + 0.15 * min(1.0, centroid / 3000.0))
+    steadiness = max(0.0, 1.0 - residual_ms / 40.0) if bpm > 0 else 0.0
+    in_pocket = max(0.0, 1.0 - abs(bpm - 118) / 45.0) if bpm > 0 else 0.0
+    danceability = (min(1.0, bpm_confidence * 1.5) * (0.4 + 0.6 * steadiness)
+                    * (0.35 + 0.65 * in_pocket) * (0.6 + 0.4 * min(1.0, bass / 0.35)))
+
+    mfcc = _mfcc(spectrum)
+    chroma = _chroma(spectrum)
+    entropy = float(-np.sum(chroma * np.log(chroma + 1e-12)) / np.log(12)) if chroma.any() else 1.0
+    vector = [*mfcc[1:13].mean(axis=1), *mfcc[1:9].std(axis=1),
+              centroid / 1000.0, rolloff / 2000.0, flatness * 10.0, bass * 4.0,
+              onset_rate / 2.0, float(np.log2(bpm / 120.0)) * 2.0 if bpm > 0 else 0.0,
+              bpm_confidence * 2.0, dynamics / 10.0, energy * 4.0, danceability * 4.0,
+              {"major": 1.0, "minor": -1.0}.get(mode, 0.0), entropy * 4.0]
+    return {"energy": round(float(np.clip(energy, 0, 1)), 4),
+            "danceability": round(float(np.clip(danceability, 0, 1)), 4),
+            "onset_rate": round(onset_rate, 3),
+            "embedding": json.dumps([round(float(v), 4) for v in vector], separators=(",", ":"))}
+
+
+# --------------------------------------------------------------------------
+# Entry point
+# --------------------------------------------------------------------------
+_MEMO: dict[tuple, dict[str, Any]] = {}
+
+
+def resample(samples: np.ndarray, rate: int, target: int) -> np.ndarray:
+    """Mono float32 at `target` Hz by linear interpolation.
+
+    Adequate for envelopes, onsets and chroma below a few kHz; not a
+    listening-quality resampler.
+    """
+    samples = np.asarray(samples, dtype=np.float32)
+    if rate == target or not len(samples):
+        return samples
+    if rate <= 0:
+        raise ValueError("sample rate must be positive")
+    count = int(len(samples) * target / rate)
+    positions = np.arange(count, dtype=np.float64) * (rate / target)
+    return np.interp(positions, np.arange(len(samples)), samples).astype(np.float32)
+
+
+def profile(path: Path, samples: np.ndarray | None = None,
+            sample_rate: int = SAMPLE_RATE) -> dict[str, Any]:
+    """Everything the transition picker needs to know about a recording.
+
+    `samples`, when given, is the already decoded audio: mono float32 at
+    `sample_rate` Hz (default SAMPLE_RATE, 22050), from the start of the
+    file. Only the first MAX_SECONDS are used; other rates are resampled.
+    This lets one decode serve several analyses.
+
+    The most recent results are remembered by path, size and mtime: the
+    feature backfill right after a download reuses them instead of decoding
+    the same file twice.
+    """
+    blank = {"bpm": 0.0, "bpm_confidence": 0.0, "key_tonic": -1,
+             "key_mode": "", "key_confidence": 0.0, "camelot": "", "key_alt": "",
+             "beat_offset": 0.0, "beat_period": 0.0, "beat_residual_ms": 999.0,
+             "downbeat_offset": 0.0, "downbeat_confidence": 0.0,
+             "energy": None, "danceability": None, "onset_rate": None, "embedding": None,
+             "features_version": FEATURES_VERSION}
+    try:
+        stat = Path(path).stat()
+        memo_key = (str(Path(path).resolve()), stat.st_size, stat.st_mtime_ns)
+    except OSError:
+        memo_key = None
+    if memo_key and memo_key in _MEMO:
+        return dict(_MEMO[memo_key])
+
+    if samples is not None:
+        samples = resample(np.asarray(samples, dtype=np.float32)[:int(MAX_SECONDS * sample_rate)],
+                          sample_rate, SAMPLE_RATE)
+        if not np.isfinite(samples).all():
+            return blank
+    else:
+        samples = _decode(path)
     if samples is None or len(samples) < SAMPLE_RATE:
         return blank
 
@@ -540,17 +798,87 @@ def profile(path: Path) -> dict[str, Any]:
         return blank
 
     bpm, bpm_confidence = detect_tempo(spectrum)
-    tonic, mode, key_confidence = detect_key(spectrum)
+    tonic, mode, key_confidence, alternative = detect_key_detail(spectrum)
+    beats = detect_beats(spectrum, bpm)
 
-    return {
+    result = {
         "bpm": bpm,
         "bpm_confidence": round(bpm_confidence, 3),
         "key_tonic": tonic,
         "key_mode": mode,
         "key_confidence": key_confidence,
         "camelot": camelot(tonic, mode),
-        **detect_beats(spectrum, bpm),
+        "key_alt": alternative,
+        "downbeat_confidence": 0.0,
+        **beats,
+        **features(samples, spectrum, bpm=bpm, bpm_confidence=bpm_confidence,
+                   residual_ms=beats["beat_residual_ms"], mode=mode),
+        "features_version": FEATURES_VERSION,
     }
+    if memo_key:
+        if len(_MEMO) >= 8:
+            _MEMO.pop(next(iter(_MEMO)))
+        _MEMO[memo_key] = dict(result)
+    return result
+
+
+# Columns refreshed when a stored row predates FEATURES_VERSION. Tempo and the
+# beat grid are unchanged, so they are left alone; key, downbeat and feel are
+# what improved.
+_REFRESHED = ("key_tonic", "key_mode", "key_confidence", "camelot", "key_alt",
+              "downbeat_offset", "downbeat_confidence", "energy", "danceability",
+              "onset_rate", "embedding", "features_version")
+
+
+def needs_features(track: Any) -> bool:
+    from . import db
+    version = db.field(track, "features_version")
+    return not version or int(version) < FEATURES_VERSION
+
+
+def ensure_features(track: dict[str, Any]) -> dict[str, Any]:
+    """Bring one prepared track's descriptors up to date; returns the row.
+
+    Blocking (one decode), so call it from the feeder or a CLI, never while
+    holding the schedule lock. A missing file or failed decode leaves the
+    row as it was.
+    """
+    from . import db
+    if not needs_features(track) or not track.get("file") or not Path(track["file"]).is_file():
+        return track
+    measured = profile(Path(track["file"]))
+    if measured.get("features_version") != FEATURES_VERSION or measured.get("energy") is None:
+        return track
+    values = {name: measured.get(name) for name in _REFRESHED}
+    if not values.get("camelot"):
+        # A failed key read must not erase a usable earlier one.
+        for name in ("key_tonic", "key_mode", "key_confidence", "camelot", "key_alt"):
+            values.pop(name)
+    db.write(f"UPDATE tracks SET {', '.join(f'{name}=?' for name in values)} WHERE key=?",
+             (*values.values(), track["key"]))
+    return {**track, **values}
+
+
+def reanalyse(limit: int | None = None, progress=None) -> dict[str, int]:
+    """Refresh descriptors for every cached/local track that predates them.
+
+    Hook for `python -m radio.cli reanalyse`. Returns counts.
+    """
+    from . import db
+    rows = [dict(row) for row in db.query(
+        "SELECT * FROM tracks WHERE file IS NOT NULL AND blocked=0 "
+        "AND (features_version IS NULL OR features_version < ?) ORDER BY last_played DESC",
+        (FEATURES_VERSION,))]
+    done = failed = 0
+    for row in rows[:limit] if limit else rows:
+        updated = ensure_features(row)
+        if needs_features(updated):
+            failed += 1
+        else:
+            done += 1
+        if progress:
+            progress(row, not needs_features(updated))
+    return {"updated": done, "failed": failed, "pending": max(0, len(rows) - done - failed)}
 
 
 def describe(track: Any) -> str:

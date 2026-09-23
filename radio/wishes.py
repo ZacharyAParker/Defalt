@@ -13,6 +13,8 @@ wish reports progress as it goes.
 from __future__ import annotations
 
 import json
+import re
+import threading
 import time
 from typing import Any
 
@@ -148,6 +150,20 @@ Return a JSON array of the names from the list that fit the description.
 Copy names exactly as given. Return [] if none fit. Never invent a name."""
 
 
+def _direct_artists(subject: str) -> list[str]:
+    """Library artists named by the subject, matched on whole words only.
+
+    'less rap' must not match Trapt, and 'less Weezer' needs no model.
+    """
+    rows = db.query("SELECT DISTINCT artist FROM tracks")
+    names = sorted({db.primary_artist(r["artist"]) for r in rows})
+    target = db.norm(subject)
+    if not target:
+        return []
+    pattern = re.compile(r"(?<!\w)" + re.escape(target) + r"(?!\w)")
+    return [n for n in names if db.norm(n) == target or pattern.search(db.norm(n))]
+
+
 def _artists_matching(subject: str) -> list[str]:
     """Which artists in the library fit a loose description like 'rap'."""
     rows = db.query("SELECT DISTINCT artist FROM tracks")
@@ -155,9 +171,8 @@ def _artists_matching(subject: str) -> list[str]:
     if not names:
         return []
 
-    # Cheap exact/substring pass first -- no model needed for "less Weezer".
-    target = db.norm(subject)
-    direct = [n for n in names if db.norm(n) == target or target in db.norm(n)]
+    # Cheap whole-word pass first -- no model needed for "less Weezer".
+    direct = _direct_artists(subject)
     if direct:
         return direct
 
@@ -173,20 +188,23 @@ def _artists_matching(subject: str) -> list[str]:
             if isinstance(x, str) and str(x).lower() in valid]
 
 
-def apply_directive(subject: str) -> dict[str, Any]:
+def apply_directive(subject: str, artists: list[str] | None = None) -> dict[str, Any]:
     """Reduce how often something plays. Returns what was actually affected."""
     penalty = float(_cfg("directive_penalty", -3.0))
-    artists = _artists_matching(subject)
+    artists = _artists_matching(subject) if artists is None else artists
     if not artists:
         return {"artists": [], "tracks": 0}
 
+    from .compatibility import artists as credits
+    wanted = {db.norm(artist) for artist in artists}
     touched = 0
-    for artist in artists:
-        rows = db.query("SELECT key, artist FROM tracks WHERE artist LIKE ?",
-                        (f"%{artist}%",))
-        for row in rows:
+    # Exact credit match, never a LIKE pattern: a wildcard or a substring
+    # ("Rap" inside "Trapt") would turn down the wrong act.
+    for row in db.query("SELECT key, artist FROM tracks"):
+        if db.norm(db.primary_artist(row["artist"])) in wanted or credits(row["artist"]) & wanted:
             taste.bump(row["key"], row["artist"], penalty)
             touched += 1
+    for artist in artists:
         db.log_event("directive", None, None, subject=subject, artist=artist)
     return {"artists": artists, "tracks": touched}
 
@@ -254,8 +272,40 @@ def cancel(wish_id: int) -> bool:
 # ---------------------------------------------------------------------------
 # The front door
 # ---------------------------------------------------------------------------
+def _spawn(target, *args) -> None:
+    """Run slow request work off the web thread. Tests replace this."""
+    threading.Thread(target=target, args=args, daemon=True, name="request-worker").start()
+
+
+def _open_job(parsed: intent_mod.Intent, kind: str | None = None) -> int:
+    """A visible progress row for work that finishes after the reply."""
+    return db.write(
+        "INSERT INTO wishes (ts, raw, kind, subject, payload, timing, status, expires_at) "
+        "VALUES (?,?,?,?,?,?, 'preparing', ?)",
+        (time.time(), parsed.raw, kind or parsed.kind, parsed.subject or parsed.title or parsed.raw,
+         json.dumps({"job": True}), parsed.timing, time.time() + 900))
+
+
+def _close_job(job_id: int, result: dict[str, Any]) -> None:
+    payload = {"job": True, **{k: result[k] for k in ("added", "queued", "sources", "artists") if k in result}}
+    db.write("UPDATE wishes SET status=?, note=?, payload=? WHERE id=? AND status='preparing'",
+             ("done" if result.get("ok") else "failed", str(result.get("message") or "")[:400],
+              json.dumps(payload), job_id))
+
+
+def _cancelled(job_id: int | None) -> bool:
+    if not job_id:
+        return False
+    row = db.one("SELECT status FROM wishes WHERE id=?", (job_id,))
+    return not row or row["status"] == "cancelled"
+
+
 def submit(raw: str, *, rate_current: Any = None, mode: str = "request", vibe_changed=None, selection=None) -> dict[str, Any]:
     """Understand a request and act on it. Never raises.
+
+    Answers quickly: the deterministic router runs here, and anything that
+    needs the model, a catalog search or the news feeds runs as a background
+    job whose progress shows in the request list.
 
     `rate_current` is the station's thumbs-down callback, passed in so this
     module does not have to import the director and create a cycle.
@@ -270,10 +320,108 @@ def submit(raw: str, *, rate_current: Any = None, mode: str = "request", vibe_ch
     except ValueError as error:
         return {"ok": False, "message": str(error)}
     parsed = (intent_mod.Intent(kind="vibe", subject=intent_mod.clean(raw), raw=raw)
-              if mode == "vibe" else intent_mod.understand(raw))
+              if mode == "vibe" else intent_mod.route(raw))
     if selected and not parsed.error:
         parsed = intent_mod.Intent(kind="track", artist=selected["artist"], title=selected["title"],
                                    raw=raw, confidence=1, reason="selected from Spotify")
+    threshold = float(config.station.get("requests.refine_below_confidence", 0.8))
+    if (mode == "request" and not selected and not parsed.error and not parsed.negate
+            and parsed.confidence < threshold):
+        # The model's second opinion takes seconds. Say so now and finish
+        # the request in the background.
+        job = _open_job(parsed, "request")
+        _spawn(_refined_job, job, parsed, rate_current, vibe_changed)
+        return {"intent": parsed.as_dict(), "ok": True, "kind": "working", "id": job,
+                "message": "working out what you meant; it will appear in the queue when it is placed"}
+    if not parsed.reason:
+        parsed.reason = intent_mod._describe(parsed)
+    return _act(parsed, rate_current=rate_current, vibe_changed=vibe_changed, selected=selected)
+
+
+def _refined_job(job: int, parsed: intent_mod.Intent, rate_current: Any, vibe_changed: Any) -> None:
+    try:
+        refined = intent_mod._refine(parsed)
+        if not refined.reason:
+            refined.reason = intent_mod._describe(refined)
+        if _cancelled(job):
+            return
+        result = _act(refined, rate_current=rate_current, vibe_changed=vibe_changed, inline=True)
+        if result.get("ok") and result.get("kind") in ("vibe", "clear_vibe") and callable(vibe_changed):
+            vibe_changed()
+    except Exception as error:  # noqa: BLE001 - a job must always close its row
+        result = {"ok": False, "message": f"could not finish that request: {str(error)[:200]}"}
+    _close_job(job, result)
+
+
+def _bulk_job(job: int, parsed: intent_mod.Intent) -> None:
+    try:
+        result = _bulk(parsed, job)
+    except Exception as error:  # noqa: BLE001
+        result = {"ok": False, "message": f"could not find songs for {parsed.subject}: {str(error)[:200]}"}
+    _close_job(job, result)
+
+
+def _bulk(parsed: intent_mod.Intent, job: int | None = None) -> dict[str, Any]:
+    kind = parsed.kind
+    criteria = parsed.extra.get("catalog")
+    if criteria:
+        # Eras and decades resolve against real catalog recordings with
+        # release years, never a model's list.
+        from . import artist_requests
+        if _cancelled(job):
+            return {"ok": False, "message": "cancelled"}
+        message = artist_requests.catalog_request(criteria)
+        return {"ok": message.startswith("Requested"), "kind": kind, "message": message}
+    count = int(_cfg("bulk_suggest", 8))
+    pairs = suggest(kind, parsed.subject, count)
+    if not pairs:
+        return {"ok": False, "message": ("could not think of anything for that. The writer may "
+                                         "be rate limited -- try again in a minute.")}
+    if _cancelled(job):
+        return {"ok": False, "message": "cancelled"}
+    outcome = _ingest(pairs, parsed.subject, kind)
+    if not outcome["added"]:
+        return {"ok": False, "message": (f"everything it suggested for {parsed.subject} is "
+                                         f"already in rotation")}
+    return {"ok": True, "kind": kind, "added": outcome["added"], "queued": outcome["queued"],
+            "message": (f"added {len(outcome['added'])} for "
+                        f"{parsed.subject}, {outcome['queued']} up next")}
+
+
+def _topic_job(wish_id: int, subject: str) -> None:
+    from .sources import rss
+    try:
+        stories = rss.search(subject, limit=3)
+    except Exception:  # noqa: BLE001 - the hosts can still say they found nothing
+        stories = []
+    note = (f"{len(stories)} stories found" if stories
+            else "nothing in the feeds; the hosts will say so rather than make it up")
+    db.write("UPDATE wishes SET payload=?, note=? WHERE id=? AND status IN ('pending','active')",
+             (json.dumps({"stories": [s["ident"] for s in stories], "found": len(stories)}), note, wish_id))
+
+
+def _directive_job(job: int, subject: str) -> None:
+    try:
+        outcome = apply_directive(subject)
+        result = _directive_result(subject, outcome)
+    except Exception as error:  # noqa: BLE001
+        result = {"ok": False, "message": f"could not turn that down: {str(error)[:200]}"}
+    _close_job(job, result)
+
+
+def _directive_result(subject: str, outcome: dict[str, Any]) -> dict[str, Any]:
+    if not outcome["artists"]:
+        return {"ok": False, "message": (f"nothing in the library matched {subject}, so "
+                                         f"there was nothing to turn down")}
+    names = ", ".join(outcome["artists"][:4])
+    more = "" if len(outcome["artists"]) <= 4 else f" and {len(outcome['artists']) - 4} more"
+    return {"ok": True, "kind": "directive", "artists": outcome["artists"],
+            "message": f"easing off {names}{more}"}
+
+
+def _act(parsed: intent_mod.Intent, *, rate_current: Any = None, vibe_changed: Any = None,
+         selected: dict[str, Any] | None = None, inline: bool = False) -> dict[str, Any]:
+    """Carry out an understood request. `inline` runs slow work right here."""
     result: dict[str, Any] = {"intent": parsed.as_dict()}
 
     if parsed.error:
@@ -329,7 +477,7 @@ def submit(raw: str, *, rate_current: Any = None, mode: str = "request", vibe_ch
         # you clearly want it -- but do not add a second queue entry.
         already = db.one(
             "SELECT id FROM requests WHERE track_key=? AND status IN "
-            "('pending','preparing','queued')", (key,))
+            "('pending','preparing','queued','scheduled')", (key,))
         if already:
             taste.record("request", key, artist)
             result.update(ok=True, kind="track", key=key,
@@ -346,47 +494,32 @@ def submit(raw: str, *, rate_current: Any = None, mode: str = "request", vibe_ch
 
     # --- bulk: an artist, a genre, or something similar ------------------
     if kind in ("artist", "similar", "genre"):
-        count = int(_cfg("bulk_suggest", 8))
-        pairs = suggest(kind, parsed.subject, count)
-        if not pairs:
-            result.update(
-                ok=False,
-                message=("could not think of anything for that. The writer may "
-                         "be rate limited -- try again in a minute."))
+        if inline:
+            result.update(_bulk(parsed))
             return result
-
-        outcome = _ingest(pairs, parsed.subject, kind)
-        if not outcome["added"]:
-            result.update(
-                ok=False,
-                message=(f"everything it suggested for {parsed.subject} is "
-                         f"already in rotation"))
-            return result
-
-        result.update(ok=True, kind=kind, added=outcome["added"],
-                      queued=outcome["queued"],
-                      message=(f"added {len(outcome['added'])} for "
-                               f"{parsed.subject}, {outcome['queued']} up next"))
+        job = _open_job(parsed)
+        _spawn(_bulk_job, job, parsed)
+        what = ("songs from " + parsed.subject) if parsed.extra.get("catalog") else parsed.subject
+        result.update(ok=True, kind=kind, id=job, added=[], queued=0,
+                      message=f"finding {what}; they appear in the queue as they are found")
         return result
 
     # --- something for the hosts to talk about ---------------------------
     if kind == "topic":
-        from .sources import rss
-        stories = rss.search(parsed.subject, limit=3)
-        wish_id = add_wish(parsed, {"stories": [s["ident"] for s in stories],
-                                    "found": len(stories)})
-        if stories:
-            result.update(
-                ok=True, kind="topic", id=wish_id, sources=len(stories),
-                message=(f"they will cover {parsed.subject} "
-                         f"({len(stories)} stories found)"))
-        else:
-            # Kept anyway: the hosts saying they have nothing on it is a valid
-            # and honest segment, and far better than inventing coverage.
-            result.update(
-                ok=True, kind="topic", id=wish_id, sources=0,
-                message=(f"nothing in the feeds about {parsed.subject}. "
-                         f"They will say so rather than make it up."))
+        # Kept whether or not the feeds have anything: the hosts saying they
+        # have nothing on it is a valid and honest segment, and far better
+        # than inventing coverage. The source check only reports progress.
+        wish_id = add_wish(parsed, {"stories": [], "found": 0})
+        if inline:
+            _topic_job(wish_id, parsed.subject)
+            found = json.loads(db.one("SELECT payload FROM wishes WHERE id=?", (wish_id,))["payload"])["found"]
+            result.update(ok=True, kind="topic", id=wish_id, sources=found,
+                          message=(f"they will cover {parsed.subject} ({found} stories found)" if found else
+                                   f"nothing in the feeds about {parsed.subject}. They will say so rather than make it up."))
+            return result
+        _spawn(_topic_job, wish_id, parsed.subject)
+        result.update(ok=True, kind="topic", id=wish_id,
+                      message=f"they will cover {parsed.subject}; checking the feeds for sources")
         return result
 
     # --- run a specific segment ------------------------------------------
@@ -411,18 +544,16 @@ def submit(raw: str, *, rate_current: Any = None, mode: str = "request", vibe_ch
                 result.update(ok=False, message="nothing playing to mark down")
             return result
 
-        outcome = apply_directive(parsed.subject)
-        if not outcome["artists"]:
-            result.update(
-                ok=False,
-                message=(f"nothing in the library matched {parsed.subject}, so "
-                         f"there was nothing to turn down"))
+        direct = _direct_artists(parsed.subject)
+        if direct or inline:
+            result.update(_directive_result(parsed.subject, apply_directive(parsed.subject, direct or None)))
             return result
-        names = ", ".join(outcome["artists"][:4])
-        more = "" if len(outcome["artists"]) <= 4 else f" and {len(outcome['artists']) - 4} more"
-        result.update(ok=True, kind="directive",
-                      artists=outcome["artists"],
-                      message=f"easing off {names}{more}")
+        # A loose description ("less rap") needs the model to read the
+        # library's artist list. Do that off the web thread.
+        job = _open_job(parsed)
+        _spawn(_directive_job, job, parsed.subject)
+        result.update(ok=True, kind="directive", id=job,
+                      message=f"working out which artists count as {parsed.subject}")
         return result
 
     result.update(ok=False, message="not sure what that was. Try a song, an "

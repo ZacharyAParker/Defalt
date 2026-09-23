@@ -6,6 +6,7 @@
 
 use std::fs::File;
 use std::path::Path;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use symphonia::core::codecs::audio::AudioDecoderOptions;
@@ -51,8 +52,53 @@ impl Track {
     }
 }
 
+/// The rate the output device is running at, or 0 before one has opened.
+///
+/// Set by the engine whenever it opens (or reopens) a device, and read by
+/// `load`, so every decode thread converts to the right rate without anyone
+/// having to pass it along.
+static OUTPUT_RATE: AtomicU32 = AtomicU32::new(0);
+
+/// Tell the decoders what rate the device runs at. The engine calls this; the
+/// app has no reason to.
+pub fn set_output_rate(rate: u32) {
+    OUTPUT_RATE.store(rate, Ordering::Relaxed);
+}
+
+/// The rate `load` converts to, or 0 when no device is open (tests, or a
+/// console started without audio), in which case it converts nothing.
+pub fn output_rate() -> u32 {
+    OUTPUT_RATE.load(Ordering::Relaxed)
+}
+
+/// Decode a file and convert it to the output device's rate.
+///
+/// Conversion happens here, once, with a proper filter, rather than on every
+/// callback with the deck's cubic reader. The returned track's `sample_rate`
+/// is the device rate, so stems loaded the same way still match their record.
+/// With no device open the file comes back at its own rate.
 pub fn load(path: impl AsRef<Path>) -> Result<Arc<Track>, String> {
-    let path = path.as_ref();
+    load_at(path, output_rate())
+}
+
+/// Decode a file and convert it to `rate`; 0 means leave it as it is.
+pub fn load_at(path: impl AsRef<Path>, rate: u32) -> Result<Arc<Track>, String> {
+    let track = decode(path.as_ref())?;
+    if rate == 0 || rate == track.sample_rate {
+        return Ok(Arc::new(track));
+    }
+    let samples = super::resample::stereo(&track.samples, track.sample_rate, rate);
+    drop(track);
+    Ok(Arc::new(Track { samples, sample_rate: rate }))
+}
+
+/// Decode a file at its own rate, with no conversion.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn load_native(path: impl AsRef<Path>) -> Result<Arc<Track>, String> {
+    decode(path.as_ref()).map(Arc::new)
+}
+
+fn decode(path: &Path) -> Result<Track, String> {
     let file = File::open(path).map_err(|error| format!("{path:?}: {error}"))?;
     let stream = MediaSourceStream::new(Box::new(file), Default::default());
 
@@ -77,7 +123,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Arc<Track>, String> {
         .clone();
 
     let sample_rate = params.sample_rate.ok_or("unknown sample rate")?;
-    let channels = params.channels.as_ref().map_or(2, |set| set.count()).max(1);
+    let expected_frames = track.num_frames;
 
     let mut decoder = symphonia::default::get_codecs()
         .make_audio_decoder(&params, &AudioDecoderOptions::default())
@@ -96,16 +142,26 @@ pub fn load(path: impl AsRef<Path>) -> Result<Arc<Track>, String> {
             }
         })?;
 
-    // Rough guess so the common case does not reallocate its way through a
-    // five minute record.
-    let mut samples: Vec<f32> = Vec::with_capacity(sample_rate as usize * 2 * 240);
+    // Sized from the container when it says how long the record is, so a
+    // five minute record is one allocation and a two second sounder is not
+    // handed four minutes of memory. Without a length, start at half a
+    // minute and let it grow.
+    let mut samples: Vec<f32> = Vec::with_capacity(match expected_frames {
+        Some(frames) => (frames as usize).saturating_add(4096).saturating_mul(2),
+        None => sample_rate as usize * 2 * 30,
+    });
     let mut packet_buffer: Vec<f32> = Vec::new();
 
     loop {
         let packet = match format.next_packet() {
             Ok(Some(packet)) => packet,
             Ok(None) => break,
-            Err(Error::IoError(_)) => break,
+            // Some demuxers still report the end of the file as an
+            // unexpected EOF. That is the end, not a fault.
+            Err(Error::IoError(error)) if error.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            // Anything else is a read that failed part way, and playing the
+            // half that arrived as if it were the whole record is worse than
+            // saying so.
             Err(error) => return Err(format!("read failed: {error}")),
         };
         if packet.track_id != track_id {
@@ -113,6 +169,9 @@ pub fn load(path: impl AsRef<Path>) -> Result<Arc<Track>, String> {
         }
         match decoder.decode(&packet) {
             Ok(decoded) => {
+                // The buffer knows how wide it is; the header is only a
+                // claim, and a wrong claim folds the wrong samples together.
+                let channels = decoded.spec().channels().count().max(1);
                 packet_buffer.resize(decoded.samples_interleaved(), 0.0);
                 decoded.copy_to_slice_interleaved(&mut packet_buffer);
                 widen(&packet_buffer, channels, &mut samples);
@@ -128,11 +187,24 @@ pub fn load(path: impl AsRef<Path>) -> Result<Arc<Track>, String> {
     }
 
     samples.shrink_to_fit();
-    Ok(Arc::new(Track { samples, sample_rate }))
+    Ok(Track { samples, sample_rate })
 }
 
 /// Fold an interleaved buffer of any width into stereo.
 fn widen(source: &[f32], channels: usize, out: &mut Vec<f32>) {
+    let start = out.len();
+    widen_raw(source, channels, out);
+    // A corrupt frame can decode to NaN or infinity, and one of those in a
+    // filter or the reverb poisons it for good -- the whole console goes
+    // silent. Silence here instead, for that sample only.
+    for sample in out[start..].iter_mut() {
+        if !sample.is_finite() {
+            *sample = 0.0;
+        }
+    }
+}
+
+fn widen_raw(source: &[f32], channels: usize, out: &mut Vec<f32>) {
     match channels {
         1 => {
             out.reserve(source.len() * 2);
@@ -155,6 +227,16 @@ fn widen(source: &[f32], channels: usize, out: &mut Vec<f32>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_non_finite_sample_decodes_as_silence() {
+        let mut out = Vec::new();
+        widen(&[0.5, f32::NAN, f32::INFINITY, -0.25], 2, &mut out);
+        assert_eq!(out, [0.5, 0.0, 0.0, -0.25]);
+        let mut mono = Vec::new();
+        widen(&[f32::NEG_INFINITY], 1, &mut mono);
+        assert_eq!(mono, [0.0, 0.0]);
+    }
 
     /// Every record in the library, actually decoded.
     ///
@@ -248,6 +330,50 @@ mod tests {
         // 5.1: L R C LFE Ls Rs
         widen(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], 6, &mut out);
         assert_eq!(out, vec![1.0, 2.0]);
+    }
+
+    /// A 16-bit PCM WAV of a quiet ramp, written by hand.
+    fn wav(path: &std::path::Path, channels: u16, rate: u32, frames: u32) {
+        use std::io::Write;
+        let data = frames * channels as u32 * 2;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36 + data).to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&channels.to_le_bytes());
+        bytes.extend_from_slice(&rate.to_le_bytes());
+        bytes.extend_from_slice(&(rate * channels as u32 * 2).to_le_bytes());
+        bytes.extend_from_slice(&(channels * 2).to_le_bytes());
+        bytes.extend_from_slice(&16u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&data.to_le_bytes());
+        for frame in 0..frames {
+            let value = ((frame as f32 / frames as f32) * 8_000.0) as i16;
+            for _ in 0..channels { bytes.extend_from_slice(&value.to_le_bytes()); }
+        }
+        std::fs::File::create(path).unwrap().write_all(&bytes).unwrap();
+    }
+
+    #[test]
+    fn a_mono_file_decodes_to_stereo_at_its_own_rate_or_the_one_asked_for() {
+        let path = std::env::temp_dir().join(format!("defalt-decode-{}.wav", std::process::id()));
+        wav(&path, 1, 24_000, 2_400);
+        let native = load_at(&path, 0).unwrap();
+        assert_eq!(native.sample_rate, 24_000);
+        assert_eq!(native.frames(), 2_400);
+        assert_eq!(native.samples[200], native.samples[201], "mono was not duplicated");
+        let converted = load_at(&path, 48_000).unwrap();
+        assert_eq!(converted.sample_rate, 48_000);
+        assert_eq!(converted.frames(), 4_800);
+        assert!((converted.seconds() - native.seconds()).abs() < 1e-9);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_missing_file_is_an_error_not_an_empty_record() {
+        assert!(load_at("definitely/not/here.wav", 48_000).is_err());
     }
 
     #[test]

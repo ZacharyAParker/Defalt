@@ -321,12 +321,39 @@ def _looks_like_genre(subject: str) -> bool:
     return bool(words) and all(_genre_token(w) for w in words)
 
 
+def _has_columns(*names: str) -> bool:
+    """Whether the normalised lookup columns exist in this database yet."""
+    conn = db.connect()
+    cached = _COLUMNS.get(id(conn))
+    if cached is None:
+        cached = {row["name"] for row in conn.execute("PRAGMA table_info(tracks)").fetchall()}
+        _COLUMNS.clear()
+        _COLUMNS[id(conn)] = cached
+    return all(name in cached for name in names)
+
+
+_COLUMNS: dict[int, set[str]] = {}
+
+
+def _artist_rows(target: str):
+    """Candidate rows for an artist, by index when the norm column exists.
+
+    Rows whose norm column has not been filled yet are still checked, so a
+    partly migrated library never loses a match.
+    """
+    if not _has_columns("artist_norm"):
+        return db.query("SELECT DISTINCT artist FROM tracks")
+    return db.query(
+        "SELECT DISTINCT artist FROM tracks WHERE artist_norm IS NULL OR artist_norm = ? "
+        "OR (artist_norm >= ? AND artist_norm < ?)", (target, target + " ", target + " ￿"))
+
+
 def _known_artist(subject: str) -> str:
     """Match against artists already in the library. Exact-ish, not fuzzy."""
     target = db.norm(subject)
     if not target:
         return ""
-    for row in db.query("SELECT DISTINCT artist FROM tracks"):
+    for row in _artist_rows(target):
         artist = row["artist"]
         if db.norm(db.primary_artist(artist)) == target or db.norm(artist) == target:
             return db.primary_artist(artist)
@@ -347,12 +374,51 @@ def _known_title(subject: str) -> tuple[str, str]:
     target = db.norm(subject)
     if not target:
         return ("", "")
-    for row in db.query(
-            "SELECT artist, title FROM tracks WHERE blocked = 0 AND NOT ("
-            "  source = 'request' AND video_id IS NULL AND play_count = 0)"):
+    titled = getattr(db, "tracks_titled", None)
+    if titled is not None:
+        # The library's indexed lookup; the same trust rules apply to it.
+        for row in titled(subject):
+            if (db.norm(db.field(row, "title") or "") == target and not db.field(row, "blocked")
+                    and not (db.field(row, "source") == "request" and not db.field(row, "video_id")
+                             and not db.field(row, "play_count"))):
+                return (db.field(row, "artist"), db.field(row, "title"))
+        return ("", "")
+    sql = ("SELECT artist, title FROM tracks WHERE blocked = 0 AND NOT ("
+           "  source = 'request' AND video_id IS NULL AND play_count = 0)")
+    params: tuple = ()
+    if _has_columns("title_norm"):
+        sql += " AND (title_norm = ? OR title_norm IS NULL)"
+        params = (target,)
+    for row in db.query(sql, params):
         if db.norm(row["title"]) == target:
             return (row["artist"], row["title"])
     return ("", "")
+
+
+def _era_request(body: str) -> dict[str, Any] | None:
+    """Criteria for a catalog batch when the phrase names an era, else None.
+
+    The request box has no verbs to lean on ("90s r&b" is a whole request),
+    so a bare era plus genre or mood words counts too. A bare single year
+    does not: that is far more often a title.
+    """
+    from . import artist_requests, eras
+    action = artist_requests.detect_catalog(body)
+    if action:
+        return action
+    years = eras.parse(body)
+    if not years or years[0] == years[1]:
+        return None
+    rest = _clean_subject(eras.strip(body))
+    if rest and not _looks_like_genre(rest):
+        return None
+    low = rest.lower()
+    genres = [g for g in sorted(GENRE_WORDS, key=len, reverse=True)
+              if re.search(r"(?<![\w&])" + re.escape(g) + r"(?![\w&])", low)]
+    genres = [g for g in genres if not any(g != other and g in other for other in genres)][:3]
+    moods = [m for m in MOOD_WORDS if re.search(r"\b" + re.escape(m) + r"\b", low)]
+    return {"type": "catalog_request", "years": list(years), "genres": genres,
+            "count": 5, **({"description": " ".join(moods)} if moods else {})}
 
 
 def route(raw: str) -> Intent:
@@ -448,6 +514,23 @@ def route(raw: str) -> Intent:
             intent.confidence = 0.9
             intent.reason = f"{title} by {artist}"
             return intent
+
+    # --- an era: "songs from 2010-2015", "90s r&b", "some 2016 bangers" ---
+    # Checked after the library's own titles ("1979" can be a record) and
+    # before "title by artist", which would read "songs by Drake from 2016"
+    # as a song called "songs".
+    criteria = _era_request(body)
+    if criteria:
+        from . import eras
+        intent.kind = "genre"
+        scope = " ".join(criteria["genres"]) or "songs"
+        some = _PLAY_SOME.match(body)
+        intent.subject = _clean_subject(some.group("subject") if some else body)
+        intent.extra["catalog"] = criteria
+        intent.confidence = 0.95
+        intent.reason = f"real {scope} from {eras.label(criteria['years'])}" + (
+            f" by {criteria['artist']}" if criteria.get("artist") else "")
+        return intent
 
     # --- a bare segment name --------------------------------------------
     if body.strip().lower() in _SEGMENT_WORDS:

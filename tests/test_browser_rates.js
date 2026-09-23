@@ -1,8 +1,7 @@
 // Run with node tests/test_browser_rates.js. The helpers are independent of DOM/audio.
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const script = fs.readFileSync("web/static/radio.js", "utf8");
-const helpers = script.slice(script.indexOf("const clamp ="), script.indexOf("function mmss("));
+const { section } = require("./browser_harness");
+const helpers = section("web/static/radio.js", "const clamp =", "function mmss(");
 const { playbackCurve, playbackAt } = new Function(helpers + "; return {playbackCurve, playbackAt};")();
 const curve = [[0, 0.96], [10, 0.96], [30, 1]];
 const close = (actual, expected) => assert.ok(Math.abs(actual - expected) < 1e-8, `${actual} != ${expected}`);

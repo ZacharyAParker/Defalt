@@ -6,14 +6,23 @@ this serves cached audio and is not safe to expose.
 """
 from __future__ import annotations
 
+import itertools
+import json
+import math
+import mimetypes
+import os
 import re
 import secrets
+import threading
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Iterator
+from urllib.parse import urlsplit
 
 from flask import Flask, jsonify, request, send_file, Response
 
 from . import about, config, db, director, intent, library, taste, tts, vault, wishes, vibe, spotify
+from . import remote_auth
 from .sources import steam
 
 app = Flask(__name__, static_folder=str(config.ROOT / "web" / "static"))
@@ -24,9 +33,117 @@ app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 
 from .library_api import blueprint as library_blueprint
 app.register_blueprint(library_blueprint)
+from . import feedback as _feedback
+_feedback.register(app)
+from .remote_api import blueprint as remote_blueprint
+app.register_blueprint(remote_blueprint)
+
+# Self-hosted fonts. Windows' registry does not always know the type, and a
+# font served as text/plain is refused by the browser.
+mimetypes.add_type("font/woff2", ".woff2")
+
+
+@app.after_request
+def cache_versioned_static(response: Response) -> Response:
+    """Static URLs carrying ?v=<version> never change: cache them for good.
+
+    Unversioned ones keep the no-cache default above, so a plain edit to
+    radio.js is still picked up on the next load.
+    """
+    if (request.path.startswith("/static/") and "v" in request.args
+            and response.status_code in (200, 304)):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return response
 
 SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]{1,120}$")
 MEDIA_ROOTS = {"audio": library.AUDIO_DIR, "voice": tts.VOICE_DIR}
+AUDIO_TYPES = {".mp3": "audio/mpeg", ".flac": "audio/flac", ".wav": "audio/wav",
+               ".wave": "audio/wav", ".ogg": "audio/ogg", ".opus": "audio/ogg",
+               ".m4a": "audio/mp4", ".mp4": "audio/mp4", ".aac": "audio/aac",
+               ".aif": "audio/aiff", ".aiff": "audio/aiff"}
+
+
+def _log(*parts: Any) -> None:
+    if config.DEBUG:
+        print("[app]", *parts, flush=True)
+
+
+# --------------------------------------------------------------------------
+# Request protection
+# --------------------------------------------------------------------------
+# Loopback, plus the public names in REMOTE_HOSTS that a Cloudflare Tunnel
+# brings here -- and those only with a valid Cloudflare Access token (see
+# remote_auth). A loopback server is still reachable from any web page
+# the listener has open. The Host check stops DNS rebinding (a hostile name
+# resolved to 127.0.0.1); the Origin / Sec-Fetch-Site check stops a page
+# elsewhere from posting skips, requests or a shutdown. A request without an
+# Origin -- the console, curl -- is not a browser acting for another site.
+LOOPBACK_NAMES = {"127.0.0.1", "localhost", "::1"}
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+
+def _split_host(value: str) -> tuple[str, int] | None:
+    """'127.0.0.1:8090' / '[::1]:8090' / 'localhost' -> (name, port)."""
+    value = (value or "").strip().lower()
+    if value.startswith("["):
+        end = value.find("]")
+        if end == -1:
+            return None
+        name, rest = value[1:end], value[end + 1:]
+        if rest and not rest.startswith(":"):
+            return None
+        port = rest[1:]
+    else:
+        name, _, port = value.partition(":")
+        if ":" in port:
+            return None
+    if port and not port.isdigit():
+        return None
+    return name, int(port) if port else 80
+
+
+def _served_port() -> int:
+    try:
+        return int(request.environ.get("SERVER_PORT") or 0)
+    except ValueError:
+        return 0
+
+
+@app.before_request
+def guard_request():
+    host = _split_host(request.headers.get("Host", ""))
+    if host is None:
+        return jsonify(error="unexpected host"), 403
+    loopback = host[0] in LOOPBACK_NAMES and host[1] == _served_port()
+    # Anything Cloudflare delivered came from the internet, whatever Host it
+    # names; a public name in REMOTE_HOSTS always did.
+    through_cloudflare = bool(request.headers.get("Cf-Connecting-Ip") or request.headers.get("Cf-Ray"))
+    remote = remote_auth.is_remote_host(host[0]) and host[1] in (80, 443)
+    if remote or (loopback and through_cloudflare):
+        try:
+            claims = remote_auth.check(request.headers, request.cookies)
+        except remote_auth.Refused as why:
+            _log("remote request refused:", why)
+            return jsonify(error="Cloudflare Access sign-in required"), 403
+        request.environ["defalt.remote"] = remote_auth.identity(claims)
+        remote = True
+    elif not loopback:
+        return jsonify(error="unexpected host"), 403
+    if request.method in SAFE_METHODS:
+        return None
+    origin = request.headers.get("Origin")
+    if origin is not None:
+        try:
+            parts = urlsplit(origin)
+            scheme = "https" if remote else "http"
+            same = (parts.scheme == scheme and parts.netloc.lower() == request.host.lower())
+        except ValueError:
+            same = False
+        if not same:
+            return jsonify(error="cross-origin request refused"), 403
+    if request.headers.get("Sec-Fetch-Site", "").lower() == "cross-site":
+        return jsonify(error="cross-site request refused"), 403
+    return None
 
 
 @app.get("/")
@@ -77,11 +194,39 @@ def media(kind: str, name: str):
     return send_file(path, conditional=True, max_age=3600)
 
 
+@app.get("/media/track/<path:key>")
+def media_track(key: str):
+    """A library track, by key, from wherever the tracks table says it lives.
+
+    Local records sit in the listener's own folders, under any name at all,
+    so they cannot go through the name-checked cache route. Only a path the
+    catalogue already holds is ever served; the URL never names a file.
+    """
+    row = db.one("SELECT file FROM tracks WHERE key=?", (key,))
+    if row is None or not row["file"]:
+        return jsonify(error="not found"), 404
+    path = Path(row["file"])
+    if not path.is_file():
+        return jsonify(error="not found"), 404
+    return send_file(path, mimetype=AUDIO_TYPES.get(path.suffix.lower()),
+                     conditional=True, etag=True, max_age=3600)
+
+
+def schedule_payload(station: Any) -> dict[str, Any]:
+    """GET /api/schedule's body. `now` is read last, after everything else."""
+    data = station.snapshot()
+    try:
+        data["now"] = round(float(station.clock.now()), 4)
+    except (TypeError, ValueError, AttributeError):
+        pass
+    return data
+
+
 @app.get("/api/schedule")
 def schedule():
     station = director.station()
     station.heartbeat()
-    return jsonify(station.snapshot())
+    return jsonify(schedule_payload(station))
 
 
 @app.post("/api/heartbeat")
@@ -104,18 +249,45 @@ def start_decks():
 
 @app.post("/api/report")
 def report():
-    payload = request.get_json(silent=True) or {}
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        payload = {}
     kind = str(payload.get("kind") or "")
     if kind not in {"started", "played", "skipped", "replayed"}:
         return jsonify(error="unknown report kind"), 400
+    try:
+        position = _finite(payload.get("position") or 0)
+        duration = _finite(payload.get("duration") or 0)
+    except ValueError:
+        return jsonify(error="position and duration must be numbers"), 400
     director.station().report(
         kind,
         str(payload.get("key") or ""),
-        float(payload.get("position") or 0),
-        float(payload.get("duration") or 0),
+        position,
+        duration,
         str(payload.get("item_id") or ""),
     )
     return jsonify(ok=True)
+
+
+def _json_object() -> dict[str, Any]:
+    """The JSON body if it is an object. An empty body, form data or a bare
+    array reads as {} -- the console posts JSON or nothing at all."""
+    payload = request.get_json(silent=True)
+    return payload if isinstance(payload, dict) else {}
+
+
+def _finite(value: Any) -> float:
+    """A real, finite number, or ValueError. JSON can carry NaN and Infinity."""
+    if isinstance(value, (dict, list)):
+        raise ValueError("not a number")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError("not a number") from error
+    if not math.isfinite(number):
+        raise ValueError("not a finite number")
+    return number
 
 
 @app.post("/api/skip")
@@ -153,7 +325,7 @@ def request_ad():
 
 @app.post("/api/rate")
 def rate():
-    payload = request.get_json(silent=True) or {}
+    payload = _json_object()
     key = str(payload.get("key") or "")
     value = str(payload.get("value") or "")
     if not key or value not in {"up", "down"}:
@@ -179,7 +351,7 @@ def make_request():
     if not config.station.get("requests.enabled", True):
         return jsonify(error="requests are switched off in station.yaml"), 403
 
-    payload = request.get_json(silent=True) or {}
+    payload = _json_object()
     raw = str(payload.get("query") or "").strip()
 
     # The old shape still works, and skips classification entirely.
@@ -234,7 +406,10 @@ def get_queue():
     queued   downloaded and waiting. Fully reorderable.
     finding  a request still being resolved. Can be cancelled.
     """
-    station = director.station()
+    return jsonify(queue_payload(director.station()))
+
+
+def queue_payload(station: Any) -> dict[str, Any]:
     now = station.clock.now()
 
     rows: list[dict[str, Any]] = []
@@ -286,7 +461,7 @@ def get_queue():
                      ('Fetching article' if row['status'] == 'preparing' else
                       'Article failed' if row['status'] == 'failed' else 'Next unwritten host break'),
                      'source': 'article', 'can_move': False, 'can_remove': True})
-    return jsonify({"items": rows, "now": round(now, 2)})
+    return {"items": rows, "now": round(now, 2)}
 
 
 @app.post("/api/queue/<entry_id>/<action>")
@@ -335,7 +510,7 @@ def queue_action(entry_id: str, action: str):
 
 @app.post("/api/queue/clear")
 def clear_queue():
-    payload = request.get_json(silent=True) or {}
+    payload = _json_object()
     dropped = director.station().clear_lineup(
         keep_requests=bool(payload.get("keep_requests")))
     return jsonify(ok=True, dropped=dropped)
@@ -344,7 +519,7 @@ def clear_queue():
 @app.post("/api/queue/add")
 def queue_add():
     """Queue a track already in the library, by key. Used by the history list."""
-    payload = request.get_json(silent=True) or {}
+    payload = _json_object()
     key = str(payload.get("key") or "")
     if director.station().enqueue_key(key, front=bool(payload.get("next"))):
         return jsonify(ok=True)
@@ -361,7 +536,7 @@ def cancel_wish(wish_id: int):
 @app.post("/api/interpret")
 def interpret():
     """Classify without acting. Lets the box show what it understood first."""
-    payload = request.get_json(silent=True) or {}
+    payload = _json_object()
     parsed = intent.understand(str(payload.get("query") or ""))
     return jsonify(parsed.as_dict())
 
@@ -369,9 +544,13 @@ def interpret():
 # --------------------------------------------------------------------------
 # Status + tweaking
 # --------------------------------------------------------------------------
+def vibe_payload(_station: Any = None) -> dict[str, Any]:
+    return {"vibe": vibe.public()}
+
+
 @app.get("/api/vibe")
 def get_vibe():
-    return jsonify(vibe=vibe.public())
+    return jsonify(vibe_payload())
 
 
 @app.post("/api/vibe/clear")
@@ -381,29 +560,38 @@ def clear_vibe():
     return jsonify(ok=True, vibe={}, message="Vibe cleared. Returning to normal rotation after planned mixes.")
 
 
-@app.get("/api/status")
-def status():
+def status_payload(station: Any, lite: bool = False) -> dict[str, Any]:
+    """GET /api/status. `lite` leaves out what rarely changes and costs most:
+    the settings schema, the taste summary and the host roster."""
     from . import llm
-    from . import mixconfig
     from . import ads
-    station = director.station()
-    return jsonify({
+    payload = {
         "identity": config.station.get("identity", {}) or {},
         "now_playing": station.now_playing(),
         "transcript": station.transcript(),
         "ad": ads.for_station(station).public(),
-        "mix_config": mixconfig.snapshot(),
         "vibe": vibe.public(),
         "note": station.status_note,
         "llm": llm.status(),
         "steam": steam.status(),
-        "taste": taste.summary(limit=8),
-        "hosts": [
-            {"id": pid, "name": p.get("name", pid),
-             "role": p.get("role", ""), "voice": (p.get("voice") or {}).get("name")}
-            for pid, p in config.personas().items()
-        ],
-    })
+    }
+    if lite:
+        return payload
+    from . import mixconfig
+    payload["mix_config"] = mixconfig.snapshot()
+    payload["taste"] = taste.summary(limit=8)
+    payload["hosts"] = [
+        {"id": pid, "name": p.get("name", pid),
+         "role": p.get("role", ""), "voice": (p.get("voice") or {}).get("name")}
+        for pid, p in config.personas().items()
+    ]
+    return payload
+
+
+@app.get("/api/status")
+def status():
+    lite = request.args.get("lite", "").lower() in ("1", "true", "yes")
+    return jsonify(status_payload(director.station(), lite=lite))
 
 
 # Only these may be changed from the browser. Everything else is a text edit,
@@ -450,7 +638,7 @@ def set_mix_config():
 
 @app.post("/api/config")
 def set_config():
-    payload = request.get_json(silent=True) or {}
+    payload = _json_object()
     key = str(payload.get("key") or "")
     if key not in TWEAKABLE:
         return jsonify(error="that setting is only editable in station.yaml"), 400
@@ -458,6 +646,9 @@ def set_config():
     try:
         value = caster(payload.get("value"))
     except (TypeError, ValueError):
+        return jsonify(error="bad value"), 400
+    # NaN slips through min/max untouched and would be written to disk.
+    if not math.isfinite(value):
         return jsonify(error="bad value"), 400
     value = min(max(value, low), high)
     config.station.set(key, value)
@@ -467,12 +658,15 @@ def set_config():
 @app.post("/api/intro")
 def set_intro():
     """Override where a track's vocal comes in, so the hosts stop talking into it."""
-    payload = request.get_json(silent=True) or {}
+    payload = _json_object()
     key = str(payload.get("key") or "")
     if not db.one("SELECT 1 FROM tracks WHERE key=?", (key,)):
         return jsonify(error="unknown track"), 404
     raw = payload.get("seconds")
-    seconds = None if raw in (None, "") else min(max(float(raw), 0.0), 60.0)
+    try:
+        seconds = None if raw in (None, "") else min(max(_finite(raw), 0.0), 60.0)
+    except ValueError:
+        return jsonify(error="seconds must be a number"), 400
     db.write("UPDATE tracks SET intro_override=? WHERE key=?", (seconds, key))
     return jsonify(ok=True, key=key, intro_override=seconds)
 
@@ -482,7 +676,7 @@ def get_transition():
     from . import transitions
     return jsonify({
         "preset": str(config.station.get("transitions.preset", "auto")),
-        "options": ["auto", *transitions.PRESETS],
+        "options": ["auto", *transitions.PRESETS, *transitions.TECHNIQUES],
     })
 
 
@@ -490,11 +684,11 @@ def get_transition():
 def set_transition():
     """Force a transition style, or hand it back to the automatic picker."""
     from . import transitions
-    payload = request.get_json(silent=True) or {}
+    payload = _json_object()
     preset = str(payload.get("preset") or "").strip().lower()
-    if preset not in ("auto", *transitions.PRESETS):
+    if preset not in ("auto", *transitions.PRESETS, *transitions.TECHNIQUES):
         return jsonify(error=f"not a transition. Try one of: auto, "
-                             f"{', '.join(transitions.PRESETS)}"), 400
+                             f"{', '.join((*transitions.PRESETS, *transitions.TECHNIQUES))}"), 400
     config.station.set("transitions.preset", preset)
     return jsonify(ok=True, preset=preset)
 
@@ -514,6 +708,217 @@ def rebuild_vault():
     return jsonify(vault.rebuild_all())
 
 
+# --------------------------------------------------------------------------
+# Events: the polled views, pushed when they change
+# --------------------------------------------------------------------------
+# One Server-Sent Events stream in place of four polling loops. Each topic's
+# data is exactly what its GET returns. Every connection is a generator on its
+# own server thread, so connections are counted and capped. A stream ends when
+# the station shuts down, or when Werkzeug closes it after a write to a
+# vanished client fails -- within a few seconds, because the schedule is
+# re-sent that often.
+EVENT_TOPICS: dict[str, Callable[[Any], dict[str, Any]]] = {
+    "schedule": schedule_payload,
+    "queue": queue_payload,
+    "status": lambda station: status_payload(station, lite=True),
+    "vibe": vibe_payload,
+}
+EVENT_TICK = 0.5          # how often each topic is checked for a change
+SCHEDULE_REFRESH = 5.0    # `now` moves on, so the schedule goes out this often anyway
+PING_EVERY = 15.0
+MAX_EVENT_STREAMS = 8
+# A live stream is pulled every tick. One not pulled for this long belongs to
+# a request thread that is gone: on Windows, Werkzeug can die draining a reset
+# socket before it ever calls close(), so the count cannot rest on close().
+STALE_STREAM = 30.0
+_streams: dict[int, float] = {}          # stream id -> last pulled (monotonic)
+_streams_lock = threading.Lock()
+_stream_ids = itertools.count(1)
+_closing = threading.Event()   # set once, by shutdown
+
+
+def open_event_streams() -> int:
+    with _streams_lock:
+        return len(_streams)
+
+
+def _claim_stream() -> int | None:
+    now = time.monotonic()
+    with _streams_lock:
+        for ident, pulled in list(_streams.items()):
+            if now - pulled > STALE_STREAM:
+                del _streams[ident]
+        if len(_streams) >= MAX_EVENT_STREAMS:
+            return None
+        ident = next(_stream_ids)
+        _streams[ident] = now
+        return ident
+
+
+def _release_stream(ident: int) -> None:
+    with _streams_lock:
+        _streams.pop(ident, None)
+
+
+def _fingerprint(topic: str, payload: dict[str, Any]) -> str:
+    """What counts as a change. Fields that move with the clock alone do not:
+    the clients interpolate those, and resending them would be every tick."""
+    if topic in ("schedule", "queue"):
+        payload = {k: v for k, v in payload.items() if k != "now"}
+    if topic == "queue":
+        payload = {**payload, "items": [{k: v for k, v in item.items() if k != "eta"}
+                                        for item in payload.get("items") or []]}
+    if topic == "status" and isinstance(payload.get("now_playing"), dict):
+        payload = {**payload, "now_playing": {k: v for k, v in payload["now_playing"].items()
+                                              if k != "position"}}
+    return json.dumps(payload, sort_keys=True, default=str)
+
+
+class EventStream:
+    """The response body of one /api/events connection.
+
+    A class rather than a bare generator for close(): Werkzeug calls it when
+    the client goes away, including before the first chunk -- when a
+    generator's own finally would never run. The body generator holds no
+    reference back to this object, so when Werkzeug drops the response
+    without closing it, both are freed at once and the generator's finally
+    still releases the stream; the staleness check is the last resort.
+    """
+
+    def __init__(self, station: Any, topics: list[str], ident: int, *,
+                 clock: Callable[[], float] = time.monotonic,
+                 wait: Callable[[float], bool] | None = None) -> None:
+        self._ident = ident
+        self._done = False
+        self._body = _event_body(station, topics, ident, clock, wait or _closing.wait)
+
+    def __iter__(self) -> Iterator[str]:
+        return self
+
+    def __next__(self) -> str:
+        if not self._done:
+            with _streams_lock:
+                # Also re-registers a stream that was only slow, never gone.
+                _streams[self._ident] = time.monotonic()
+        try:
+            return next(self._body)
+        except StopIteration:
+            self._done = True
+            raise
+
+    def close(self) -> None:
+        self._done = True
+        try:
+            self._body.close()
+        finally:
+            _release_stream(self._ident)
+
+
+def _event_body(station: Any, topics: list[str], ident: int,
+                clock: Callable[[], float], wait: Callable[[float], bool]) -> Iterator[str]:
+    sent: dict[str, str] = {}
+    sent_at: dict[str, float] = {}
+    last_ping = clock()
+    try:
+        yield "retry: 3000\n\n"
+        while not _closing.is_set():
+            # An open stream is a listener, exactly like a schedule poll.
+            station.heartbeat()
+            now = clock()
+            chunks = []
+            for topic in topics:
+                try:
+                    payload = EVENT_TOPICS[topic](station)
+                except Exception as error:  # noqa: BLE001 - skip one tick, keep the stream
+                    _log("event topic failed", topic, repr(error))
+                    continue
+                mark = _fingerprint(topic, payload)
+                due = topic == "schedule" and now - sent_at.get(topic, -1e9) >= SCHEDULE_REFRESH
+                if mark != sent.get(topic) or due:
+                    sent[topic], sent_at[topic] = mark, now
+                    chunks.append(f"event: {topic}\ndata: {json.dumps(payload, default=str)}\n\n")
+            if now - last_ping >= PING_EVERY:
+                chunks.append(": ping\n\n")
+                last_ping = now
+            if chunks:
+                yield "".join(chunks)
+            if wait(EVENT_TICK):
+                return
+    finally:
+        _release_stream(ident)
+
+
+@app.get("/api/events")
+def events():
+    raw = request.args.get("topics", "")
+    topics = list(dict.fromkeys(t.strip() for t in raw.split(",") if t.strip())) or list(EVENT_TOPICS)
+    unknown = [t for t in topics if t not in EVENT_TOPICS]
+    if unknown:
+        return jsonify(error=f"unknown topics: {', '.join(unknown)}"), 400
+    if _closing.is_set():
+        return jsonify(error="the station is shutting down"), 503
+    ident = _claim_stream()
+    if ident is None:
+        return jsonify(error="too many event streams; poll instead"), 503
+    try:
+        body = EventStream(director.station(), topics, ident)
+    except BaseException:
+        _release_stream(ident)
+        raise
+    return Response(body, mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
+# --------------------------------------------------------------------------
+# Shutdown
+# --------------------------------------------------------------------------
+_shutdown_lock = threading.Lock()
+_shut_down = False
+
+
+def _exit_process() -> None:
+    os._exit(0)  # noqa: SLF001 - the station's own state is already put away
+
+
+def shut_down_station() -> bool:
+    """Put the station away once: session note, cache purge, clock stop.
+
+    Returns False when it had already been done (a second request, or the
+    signal handler after a request).
+    """
+    global _shut_down
+    with _shutdown_lock:
+        if _shut_down:
+            return False
+        _shut_down = True
+    _closing.set()
+    # The tunnel first: nothing should reach a station on its way down.
+    from . import remote_tunnel
+    remote_tunnel.stop()
+    director.station().shutdown()
+    return True
+
+
+@app.post("/api/shutdown")
+def shutdown():
+    """The console's way to stop the station: answer, then leave."""
+    if request.environ.get("defalt.remote") is not None:
+        # The console at home owns the station; a phone does not turn it off.
+        return jsonify(error="the station can only be shut down at home"), 403
+    first = False
+    try:
+        first = shut_down_station()
+    except Exception as error:  # noqa: BLE001 - still leave; that was the request
+        _log("shutdown failed", repr(error))
+        first = True
+    response = jsonify(ok=True)
+    if first:
+        # After the response has been written, not before: the caller is
+        # waiting on this answer to know the station went down cleanly.
+        response.call_on_close(lambda: threading.Timer(0.25, _exit_process).start())
+    return response
+
+
 @app.errorhandler(500)
 def server_error(_error: Any):
     return jsonify(error="something broke -- check the server log"), 500
@@ -523,4 +928,6 @@ def create_app() -> Flask:
     config.ensure_dirs()
     vault.ensure_scaffold()
     director.station()  # start the threads
+    from . import enrich
+    enrich.start(_closing)
     return app

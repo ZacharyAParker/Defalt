@@ -1,6 +1,6 @@
 # Privacy policy
 
-Effective September 20, 2026. Applies to Defalt 0.3.9 as distributed in this repository.
+Effective September 23, 2026. Applies to Defalt 0.4.0 as distributed in this repository.
 
 ## The short version
 
@@ -21,7 +21,10 @@ The browser player uses local storage for playback preferences such as volume an
 - Cover-art lookup sends the track artist and title to Spotify when configured, and downloads matching album artwork from Spotify's image host. YouTube's image host receives the resolved video identifier when a thumbnail is needed. Images are cached locally; the studio scene itself is bundled with the app.
 - Optional song-background lookup sends a song title and artist to Wikipedia. Matching introductory text is cached locally and may be sent to the writing provider. Disable **Look up sourced song background** in Mix settings to stop these lookups.
 - Steam receives the configured SteamID and applicable credentials when library, wishlist, or news features are used. RSS publishers and article websites receive requests for their pages or feeds.
-- The browser player loads fonts from Google Fonts. Optional model or dependency downloads contact their respective hosts.
+- The browser player's fonts are bundled with the app; it no longer contacts Google Fonts. Optional model or dependency downloads contact their respective hosts.
+- Background enrichment sends track titles and artists to Spotify's catalog search to fill in missing years, albums and genres. It only fills blank fields.
+- Optional weather sends the latitude and longitude you configure to Open-Meteo, at most every 30 minutes. It is off until a location is set.
+- Remote listening, when you configure it, carries the page, controls and the audio stream through Cloudflare's network via a Cloudflare Tunnel, and Cloudflare Access handles sign-in (including the email one-time code). Cloudflare therefore processes that traffic and your sign-in details under its own policies.
 
 Each destination can also receive network information, including your IP address, and ordinary request headers. Providers apply their own policies, retention practices, and terms. Defalt cannot promise that a provider will never retain data or use it for training. Local audio analysis does not itself upload your music files to a language model.
 
@@ -35,6 +38,8 @@ Enabled public-chart discovery fetches the selected country's Apple Music or iTu
 
 ## Retention and control
 
+**Report a bug** saves your description, station context, recent logs and, if you choose, a screenshot under `reports/` on this machine. Nothing is uploaded; secrets are scrubbed from the saved logs, but review a report before sharing it.
+
 Audio cache settings control cached audio retention; they do not erase listening history, article text, requests, logs, transcripts, or files saved elsewhere. Clearing or dismissing a request changes its queue state and is not a promise of permanent deletion. Unavailable sources can be retried after 24 hours; that waiting period does not automatically delete the stored identifier.
 
 You control local files and backups. To remove local records, close Defalt and its backend before removing the relevant database, cache, logs, or vault files. Back up anything you want to keep; removing the database also removes library metadata and preferences. Browser site-data controls remove browser-local preferences. Provider-side deletion must be handled with that provider.
@@ -45,11 +50,11 @@ Disable integrations you do not want to use and remove their credentials. Avoid 
 
 ## Local server and sharing
 
-The server binds to loopback by default and has no public-facing authentication. Keep it on your own machine. Other people or software with access to your files or local server may be able to read station data. Do not publish your credentials, database, audio cache, logs, or vault.
+The server binds to loopback by default. Its only remote path is the optional Cloudflare Tunnel described in [Remote listening](docs/REMOTE.md): the tunnel runs only while the radio is on, and the station rejects any request through it that lacks a valid Cloudflare Access token for your application. Keep that Access policy limited to yourself. Other people or software with access to your files or local server may be able to read station data. Do not publish your credentials, database, audio cache, logs, or vault.
 
 ## Updates and contact
 
 Material changes to these practices will be reflected in this document with a new effective date. The version bundled with a native executable describes that build; the repository may describe a newer release. Contact the maintainer through the Defalt repository on GitHub. Do not include credentials, private listening records, or other sensitive data in public issues.
 
 ---
-Defalt v0.3.9 · © 2026 Zachary Parker
+Defalt v0.4.0 · © 2026 Zachary Parker

@@ -13,11 +13,12 @@ has to ramp linearly between two numbers.
 from __future__ import annotations
 
 import math
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
-from . import config, playback, transitions
+from . import config, eras, playback, techniques, transitions
 
 # Web Audio cannot ramp to or through exact zero on an exponential curve, and
 # a true zero also makes de-duplication ambiguous. This is silence.
@@ -333,6 +334,70 @@ def flat_envelope(duration: float, gain: float = 1.0,
 
 
 # --------------------------------------------------------------------------
+# Playout facts
+# --------------------------------------------------------------------------
+def _finite(value: Any) -> float | None:
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
+
+
+def trim_db(track: dict[str, Any]) -> float:
+    """Gain both players add on top of the envelope, in dB.
+
+    The library owns loudness when it provides library.trim_db; this is the
+    same rule for a station without it.
+
+    Downloads are rendered at the station's target loudness with one gain,
+    so they need nothing. Local files play untouched from the listener's
+    folder, so they get the difference to the target here. Boosts stop at
+    +6 dB: without a true-peak measurement a bigger lift could clip.
+    """
+    from . import library
+    owned = getattr(library, "trim_db", None)
+    if owned is not None:
+        try:
+            value = _finite(owned(track))
+        except Exception:  # noqa: BLE001 - playout must not fail on a gain lookup
+            value = None
+        return round(value, 2) if value is not None else 0.0
+    if _finite(track.get("applied_gain_db")) is not None:
+        return 0.0  # the file on disk already carries its normalising gain
+    if track.get("source") != "local":
+        return 0.0
+    measured = _finite(track.get("source_lufs"))
+    if measured is None:
+        measured = _finite(track.get("lufs"))
+    if measured is None or measured < -70:
+        return 0.0
+    target = _finite(config.station.get("audio.target_lufs", -14.0)) or -14.0
+    return round(max(-24.0, min(6.0, target - measured)), 2)
+
+
+def playout_facts(track: dict[str, Any]) -> dict[str, Any]:
+    """Contract fields both players read from a music item's meta."""
+    facts: dict[str, Any] = {"trim_db": trim_db(track)}
+    if track.get("file"):
+        facts["file"] = str(track["file"])
+    for name in ("lufs", "beat_offset", "beat_period", "downbeat_offset", "energy"):
+        value = _finite(track.get(name))
+        if value is not None:
+            facts[name] = round(value, 5)
+    year = eras.year_of(track)
+    if year:
+        facts["year"] = year
+    return facts
+
+
+def _key_trusted(row: dict[str, Any]) -> bool:
+    confidence = _finite(row.get("key_confidence"))
+    return bool(transitions.shift_camelot(str(row.get("camelot") or ""), 0)) and (
+        row.get("key_confidence") is None or (confidence is not None and confidence >= 0.15))
+
+
+# --------------------------------------------------------------------------
 # The schedule
 # --------------------------------------------------------------------------
 class Schedule:
@@ -350,7 +415,14 @@ class Schedule:
         self._plans: dict[str, transitions.Plan] = {}
         self._rows: dict[str, dict[str, Any]] = {}
         self._last_row: dict[str, Any] | None = None
+        # Each record's length before the NEXT record's transition shortened
+        # it, so dropping that next record can restore the natural ending.
+        self._natural: dict[str, float] = {}
         self.rng = __import__("random").Random()
+        # Techniques aired before this schedule existed (read once, lazily),
+        # and the incoming items whose transition has been logged as aired.
+        self._history: list[str] | None = None
+        self._aired: set[str] = set()
 
     # -- queries ---------------------------------------------------------
     @property
@@ -365,13 +437,40 @@ class Schedule:
 
     def trim_before(self, station_time: float) -> None:
         """Drop items that have finished, so the payload stays bounded."""
+        self._log_aired(station_time)
         self.items = [i for i in self.items if i.end_at > station_time - 30]
         live = {i.id for i in self.items}
+        self._aired &= live
         self._fades = {k: v for k, v in self._fades.items() if k in live}
         self._plans = {k: v for k, v in self._plans.items() if k in live}
         self._rows = {k: v for k, v in self._rows.items() if k in live}
         self._pending_ducks = {k: v for k, v in self._pending_ducks.items()
                                if k in live}
+        self._natural = {k: v for k, v in self._natural.items() if k in live}
+
+    def drop_from(self, cut: float, now: float) -> list[Item]:
+        """Remove every item starting at or after `cut`; return what went.
+
+        The last surviving record gets its natural ending back: its length
+        was shortened for a transition into a record that no longer exists,
+        and leaving it short would cut it off into silence.
+        """
+        dropped = [i for i in self.items if i.start_at >= cut]
+        self.items = [i for i in self.items if i.start_at < cut]
+        gone = {i.id for i in dropped}
+        for mapping in (self._plans, self._fades, self._rows, self._pending_ducks, self._natural):
+            for key in gone:
+                mapping.pop(key, None)
+        surviving = sorted(self.music_items(), key=lambda i: i.start_at)
+        self._last_music = surviving[-1] if surviving else None
+        self._last_row = self._rows.get(surviving[-1].id) if surviving else None
+        tail = self._last_music
+        if tail is not None and tail.id in self._natural and tail.end_at > now:
+            # Its fade shape was computed for this natural length, so only
+            # the length itself needs restoring. Only ever lengthen.
+            tail.duration = max(tail.duration, self._natural.pop(tail.id))
+        self.cursor = max(now, self.end_at)
+        return dropped
 
     # -- placement -------------------------------------------------------
     def crossfade_for(self, outgoing: Item | None, incoming_duration: float) -> float:
@@ -434,11 +533,26 @@ class Schedule:
                     and float(residual) <= float(cfg.get("transitions.beat_max_residual_ms", 30))
                     and (confidence is None or float(confidence) >= 0.25))
         trusted_grids = previous is not None and grid_ok(out_row) and grid_ok(track)
+        key_lock = bool(cfg.get("transitions.native_key_lock", False))
+        harmony_note = ""
+        if previous is not None and not key_lock:
+            # Without key lock the outgoing deck's rate has moved its key too.
+            out_row["camelot"] = transitions.shift_camelot(
+                str(out_row.get("camelot") or ""), transitions.semitones(previous_rate))
         if trusted_grids and not dry_before:
-            rate, _ = transitions.tempo_match(out_row, track)
+            rate, why = transitions.tempo_match(out_row, track)
+            if not why and _key_trusted(out_row) and _key_trusted(track):
+                rate, harmony_note = transitions.harmonic_choice(
+                    str(out_row.get("camelot") or ""), str(track.get("camelot") or ""), rate,
+                    key_lock=key_lock,
+                    limit=float(cfg.get("transitions.tempo_match_limit", 0.06) or 0.06),
+                    tolerance=float(cfg.get("transitions.key_shift_tempo_tolerance", 0.02) or 0.0))
             rate = min(1.08, max(0.92, rate))
         duration /= rate
         effective_track["bpm"] = float(track.get("bpm") or 0) * rate
+        if not key_lock and track.get("camelot"):
+            effective_track["camelot"] = transitions.shift_camelot(
+                str(track["camelot"]), transitions.semitones(rate)) or track["camelot"]
         if effective_track.get("intro_override") is not None:
             effective_track["intro_override"] /= rate
 
@@ -463,6 +577,11 @@ class Schedule:
                 entry_locked=entry_locked, out_curve=previous_curve,
                 out_initial_rate=previous.meta.get("playback_rate", 1.0))
             plan = choice.plan
+            if harmony_note:
+                plan.reason += f"; {harmony_note}"
+            # Remember the outgoing record's own length, so removing this one
+            # later can give the previous record its full ending back.
+            self._natural.setdefault(previous.id, previous.duration)
             previous.duration = choice.out_duration
             offset, duration = choice.in_offset, choice.in_duration
             if intro is not None:
@@ -492,6 +611,7 @@ class Schedule:
         else:
             overlap = 0.0
 
+        beats_aligned = False
         if previous is None:
             start = max(self.cursor, 0.0)
             fade_in = 0.35
@@ -507,6 +627,7 @@ class Schedule:
                            and overlap - nudge >= transitions.minimum_overlap(overlap))
                 if aligned:
                     start += nudge
+                    beats_aligned = True
                 overlap = previous.end_at - start
                 plan.overlap = overlap
                 if aligned:
@@ -532,6 +653,12 @@ class Schedule:
                 mixplanner.adapt(plan, outgoing_profile, incoming_profile,
                                  source_end, offset, previous_rate, rate)
 
+        # A technique on top of the base blend, once the timing is final.
+        if plan is not None and overlap > 0:
+            self._choose_technique(plan, previous, previous_rate, previous_curve, out_row,
+                                   track, effective_track, offset, rate, start, overlap,
+                                   trusted_grids and beats_aligned)
+
         # Recover only after the overlap and a short stable hold. Recompute
         # duration by the integral so the source ends exactly on the clock.
         rate_curve = []
@@ -554,6 +681,7 @@ class Schedule:
                     envelope=[], offset=offset, meta={
                         "title": track.get("title"), "artist": track.get("artist"),
                         "key": track.get("key"),
+                        **playout_facts(track),
                         "selection_origin": dict(track.get("selection_origin") or {"by": "unknown"}),
                         "intro_sec": effective_track.get("intro_override"),
                         "playback_rate": rate,
@@ -572,12 +700,175 @@ class Schedule:
             item.meta["transition"] = plan.as_dict()
         item.meta["bpm"] = track.get("bpm") or 0
         item.meta["camelot"] = track.get("camelot") or ""
+        if effective_track.get("camelot") and effective_track["camelot"] != item.meta["camelot"]:
+            # What the listener actually hears once the pitch fader moved it.
+            item.meta["camelot_played"] = effective_track["camelot"]
 
         self.items.append(item)
         self._last_music = item
         self._last_row = dict(track)
         self.cursor = item.end_at
         return item
+
+    # -- techniques -------------------------------------------------------
+    def _recent_techniques(self, before: float) -> list[str]:
+        """Techniques of the transitions before `before`: aired history first,
+        then everything already planned on this clock, oldest first."""
+        if self._history is None:
+            self._history = techniques.history.recent(8)
+        planned = []
+        for item in sorted(self.music_items(), key=lambda i: i.start_at):
+            plan = self._plans.get(item.id)
+            if plan is not None and item.start_at < before:
+                planned.append(plan.technique or plan.preset)
+        return self._history + planned
+
+    def _choose_technique(self, plan: transitions.Plan, previous: Item, previous_rate: float,
+                          previous_curve: list, out_row: dict[str, Any], track: dict[str, Any],
+                          effective_track: dict[str, Any], offset: float, rate: float,
+                          start: float, overlap: float, grid: bool) -> None:
+        """Decide whether this boundary gets a technique, and build its shape."""
+        from . import analysis, mixplanner, structure
+        cfg = config.station
+
+        def trusted(row, name, minimum):
+            value = row.get(name)
+            return value is None or (_finite(value) is not None and _finite(value) >= minimum)
+
+        out_bpm = _finite(out_row.get("bpm")) or 0.0
+        in_bpm = (_finite(track.get("bpm")) or 0.0) * rate
+        tempo_known = (out_bpm > 0 and in_bpm > 0 and trusted(out_row, "bpm_confidence", 0.25)
+                       and trusted(track, "bpm_confidence", 0.25))
+        beat = _finite(out_row.get("beat_period"))
+        if not beat or beat <= 0:
+            beat = 60.0 / out_bpm if tempo_known else None
+        gap = transitions.tempo_distance(out_bpm, in_bpm) if tempo_known else 1.0
+        tolerance = float(cfg.get("transitions.tempo_tolerance", 0.06) or 0.06)
+
+        # Where the incoming record's first downbeat lands, on the outgoing
+        # beat grid the start was aligned to. Cut-style moves land there.
+        one = 0.0
+        downbeat = _finite(track.get("downbeat_offset"))
+        in_period = _finite(track.get("beat_period"))
+        if grid and beat and downbeat is not None and in_period and in_period > 0:
+            bar = 4 * in_period / rate
+            first = ((downbeat - offset) / rate) % bar
+            if first > bar - 0.03:
+                first -= bar
+            one = max(0.0, round(first / beat) * beat)
+            if one > overlap * 0.5:
+                one = 0.0
+
+        # The outgoing record's own head transition and tempo recovery are
+        # off limits: a lead-in effect starts after both.
+        head = self._plans.get(previous.id)
+        floor = previous.start_at + (head.overlap if head else 0.0) + 0.25
+        if previous_curve:
+            floor = max(floor, previous.start_at + previous_curve[-1][0])
+        lead_room = max(0.0, start + one - floor)
+
+        harmonic = None
+        if _key_trusted(out_row) and _key_trusted(effective_track):
+            harmonic = analysis.keys_compatible(str(out_row.get("camelot") or ""),
+                                                str(effective_track.get("camelot") or ""))
+        out_energy, in_energy = _finite(out_row.get("energy")), _finite(track.get("energy"))
+        step = in_energy - out_energy if out_energy is not None and in_energy is not None else None
+
+        out_vocal = in_vocal = None
+        out_profile = structure.profile_for(self._last_row or {})
+        in_profile = structure.profile_for(track)
+        if out_profile.get("complete") and in_profile.get("complete"):
+            source_end = previous.offset + playback.source_at(
+                previous_curve, previous.duration, previous.meta.get("playback_rate", 1.0))
+            reach = (overlap + 2 * (beat or 0.5)) * previous_rate
+            out_vocal = mixplanner._window(out_profile, max(0.0, source_end - reach), source_end, "vocal")
+            in_vocal = mixplanner._window(in_profile, offset, offset + overlap * rate, "vocal")
+
+        reach_back = 16 * (beat or 0.5) + 0.5
+        speech = any(v.kind == "voice" and v.start_at < start + overlap + 1.0
+                     and v.end_at > start + one - reach_back for v in self.items)
+        dance = [_finite(row.get("danceability")) for row in (out_row, track)]
+        vibe = cfg.get("listening_vibe", {}) or {}
+        context = techniques.Context(
+            overlap=overlap, beat=beat, grid=grid, one=one, lead_room=lead_room,
+            out_rate=previous_rate, in_rate=rate, harmonic=harmonic, energy_step=step,
+            tempo_gap=gap, tempo_known=tempo_known, matched=tempo_known and gap <= tolerance,
+            out_vocal=out_vocal, in_vocal=in_vocal,
+            stems=techniques.has_stems(self._last_row or {}) and techniques.has_stems(track),
+            speech=speech, base=plan.preset,
+            genre=f"{track.get('genre') or ''} {out_row.get('genre') or ''}".strip(),
+            danceability=min(dance) if all(d is not None for d in dance) else None,
+            hour=time.localtime().tm_hour,
+            pace=str(vibe.get("pace") or "") if isinstance(vibe, dict) else "")
+        pinned = str(cfg.get("transitions.preset", "auto") or "auto").lower() in techniques.FX
+        if techniques.creativity(context) <= 1e-3 and not pinned:
+            return
+        name, why = techniques.select(
+            context, self._recent_techniques(start),
+            techniques.seed_for(str(out_row.get("key") or ""), str(track.get("key") or "")))
+        if name == plan.preset:
+            plan.reason += f"; {why}"
+            return
+        shape = techniques.build(name, context)
+        if shape is None:
+            return
+        shape["one"] = round(one, 4)
+        plan.technique, plan.shape = name, shape
+        plan.reason += f"; {shape['note']} ({why})"
+
+    def _technique_live(self, item: Item, plan: transitions.Plan | None) -> bool:
+        """Whether this incoming item's technique airs as planned.
+
+        Placed speech wins: an effect under a host would bury the words, so
+        a break that ends up over the mix drops it back to the base blend.
+        """
+        if plan is None or not plan.technique or not plan.shape:
+            return False
+        low, high = plan.shape.get("window", (0.0, plan.overlap))
+        low, high = item.start_at + low, item.start_at + high
+        attack = float(config.station.get("ducking.attack", 0.35) or 0.35)
+        release = float(config.station.get("ducking.hold_after", 0.4) or 0.0) + float(
+            config.station.get("ducking.release", 1.2) or 1.2)
+        return not any(v.kind == "voice" and v.start_at - attack < high and v.end_at + release > low
+                       for v in self.items)
+
+    def _transition_payload(self, item: Item, previous: Item | None,
+                            plan: transitions.Plan, live: bool) -> dict[str, Any]:
+        """meta.transition for an incoming item: the preset fields as ever,
+        plus the technique's lanes and events on the station clock."""
+        payload = plan.as_dict()
+        if not live:
+            if plan.technique:
+                payload["technique"] = payload["preset"] = plan.preset
+                payload["reason"] = f"{plan.reason}; {plan.technique} dropped: a host talks over this mix"
+            return payload
+        shape = plan.shape or {}
+        out_bounds = (previous.start_at, previous.end_at) if previous else (item.start_at, item.start_at)
+        lanes, events = techniques.absolute(shape, item.start_at, out_bounds,
+                                            (item.start_at, item.end_at))
+        payload["lanes"] = lanes
+        payload["events"] = events
+        payload["switch_at"] = round(item.start_at + float(shape.get("one", 0.0) or 0.0), 4)
+        payload["flashy"] = bool(shape.get("flashy"))
+        if shape.get("requires"):
+            payload["requires"] = list(shape["requires"])
+        return payload
+
+    def _log_aired(self, station_time: float) -> None:
+        """Log each transition once it has actually been heard."""
+        music = sorted(self.music_items(), key=lambda i: i.start_at)
+        for index, item in enumerate(music):
+            transition = item.meta.get("transition")
+            if not transition or item.id in self._aired:
+                continue
+            if float(transition.get("switch_at", item.start_at)) > station_time:
+                continue
+            self._aired.add(item.id)
+            previous = music[index - 1].meta if index else {}
+            techniques.history.record(
+                str(transition.get("technique") or transition.get("preset") or ""),
+                item.meta.get("key"), title=item.meta.get("title"), artist=item.meta.get("artist"),
+                from_title=previous.get("title"), flashy=bool(transition.get("flashy")))
 
     def add_voice(self, url: str, start_at: float, duration: float,
                   gain: float = 1.0, meta: dict[str, Any] | None = None) -> Item:
@@ -642,15 +933,28 @@ class Schedule:
             head = tail = None
             head_at = tail_at = 0.0
 
+            following = music[index + 1] if index + 1 < len(music) else None
+            live_in = self._technique_live(item, plan_in)
+            live_out = following is not None and self._technique_live(following, plan_out)
             if plan_in:
-                _, incoming = transitions.render(plan_in, plan_in.overlap)
+                if live_in:
+                    # A technique's volume moves ride the ordinary envelope, so
+                    # ducking still multiplies in; its EQ and effects are lanes.
+                    incoming = transitions.Automation(gain=[list(p) for p in plan_in.shape["in_volume"]])
+                else:
+                    _, incoming = transitions.render(plan_in, plan_in.overlap)
                 head, head_at = incoming, 0.0
+                item.meta["transition"] = self._transition_payload(
+                    item, music[index - 1] if index else None, plan_in, live_in)
             item.meta.pop("echo", None)
             if plan_out:
-                outgoing, _ = transitions.render(plan_out, plan_out.overlap)
+                if live_out:
+                    outgoing = transitions.Automation(gain=[list(p) for p in plan_out.shape["out_volume"]])
+                else:
+                    outgoing, _ = transitions.render(plan_out, plan_out.overlap)
                 tail = outgoing
                 tail_at = max(0.0, item.duration - plan_out.overlap)
-                if plan_out.echo_mix > 0:
+                if plan_out.echo_mix > 0 and not live_out:
                     bpm = float(item.meta.get("bpm") or 120) * playback.rate_at(
                         item.meta.get("rate_curve"), tail_at, item.meta.get("playback_rate", 1))
                     item.meta["echo"] = {"start": tail_at + plan_out.overlap * plan_out.echo_start, "end": item.duration,

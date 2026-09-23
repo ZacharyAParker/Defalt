@@ -9,7 +9,7 @@
 //! so a drop is something you see rather than something you count bars to.
 
 use crate::engine::decode::Track;
-use crate::engine::filters::Biquad;
+use crate::engine::filters::{Crossover, HIGH_SPLIT, LOW_SPLIT};
 
 /// Mono samples per bucket at the finest level. 256 gives about 5ms of record
 /// per bucket, which is finer than any zoom level can show and cheap to
@@ -86,9 +86,11 @@ pub fn analyse(track: &Track) -> Peaks {
     let frames = track.frames();
 
     // Bands by filter rather than by FFT: one pass, no windowing, and the
-    // answer only has to be good enough to colour a few thousand pixels.
-    let mut low_pass = Biquad::low_pass(rate as f32, 250.0, 0.707);
-    let mut high_pass = Biquad::high_pass(rate as f32, 2_000.0, 0.707);
+    // answer only has to be good enough to colour a few thousand pixels. The
+    // same Linkwitz-Riley split the isolator uses, so the three bands really
+    // are three bands that sum to the record -- and the colours line up with
+    // what the EQ knobs take out.
+    let mut crossover = Crossover::new(rate as f32, LOW_SPLIT, HIGH_SPLIT);
 
     let mut buckets = Vec::with_capacity(frames / WINDOW + 1);
     let mut current = Bucket { min: 0.0, max: 0.0, low: 0.0, mid: 0.0, high: 0.0 };
@@ -100,9 +102,7 @@ pub fn analyse(track: &Track) -> Peaks {
         let right = track.samples[frame * 2 + 1];
         let mono = (left + right) * 0.5;
 
-        let low = low_pass.run(0, mono);
-        let high = high_pass.run(0, mono);
-        let mid = mono - low - high;
+        let [low, mid, high] = crossover.split(0, mono);
 
         current.min = current.min.min(mono);
         current.max = current.max.max(mono);
@@ -169,6 +169,34 @@ mod tests {
         let late = &peaks.buckets[40];
         assert!(late.high > late.low && late.high > late.mid,
                 "low {} mid {} high {}", late.low, late.mid, late.high);
+    }
+
+    #[test]
+    fn a_vocal_range_tone_reads_as_mid() {
+        // The old split subtracted two overlapping filters from the record,
+        // which left a mid band that was mostly phase error.
+        let peaks = analyse(&tone(800.0, 48_000, 1.0));
+        let late = &peaks.buckets[40];
+        assert!(late.mid > late.low * 10.0 && late.mid > late.high * 10.0,
+                "low {} mid {} high {}", late.low, late.mid, late.high);
+    }
+
+    #[test]
+    fn the_bands_carry_the_whole_record_between_them() {
+        // Complementary Linkwitz-Riley bands: at a crossover the two
+        // neighbours each carry half the amplitude, in phase, so between
+        // them they are the whole of it.
+        let rms = 0.8 / std::f32::consts::SQRT_2;
+        let at = |freq: f32| {
+            let b = analyse(&tone(freq, 48_000, 1.0)).buckets[60];
+            [b.low / rms, b.mid / rms, b.high / rms]
+        };
+        let [low, mid, high] = at(250.0);
+        assert!((low - 0.5).abs() < 0.05 && (mid - 0.5).abs() < 0.05 && high < 0.05,
+                "250 Hz split {low} / {mid} / {high}");
+        let [low, mid, high] = at(2_500.0);
+        assert!(low < 0.05 && (mid - 0.5).abs() < 0.05 && (high - 0.5).abs() < 0.05,
+                "2.5 kHz split {low} / {mid} / {high}");
     }
 
     #[test]

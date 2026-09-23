@@ -87,36 +87,40 @@ class CompatibilityTests(unittest.TestCase):
         self.assertGreater(compatibility.mix_fit(good, record("b", bpm=120, bpm_confidence=.8, lufs=-12)),
                            compatibility.mix_fit(good, record("c", bpm=150, bpm_confidence=.8, lufs=-22)))
 
-    def test_energy_direction_is_soft_and_uses_only_measured_loudness(self):
-        current = record("current", lufs=-14)
-        louder, softer = record("up", lufs=-12), record("down", lufs=-16)
+    def test_energy_direction_is_soft_and_uses_only_measured_energy(self):
+        # Perceived energy (0..1) replaced LUFS: a loudness value alone is
+        # no longer evidence (stored LUFS mixed pre/post-normalisation).
+        current = record("current", energy=.5)
+        higher, lower = record("up", energy=.6), record("down", energy=.4)
         self.settings["selection.compatibility.energy_direction"] = "build"
-        self.assertGreater(compatibility.energy_fit(current, louder), compatibility.energy_fit(current, softer))
+        self.assertGreater(compatibility.energy_fit(current, higher), compatibility.energy_fit(current, lower))
         self.settings["selection.compatibility.energy_direction"] = "ease"
-        self.assertGreater(compatibility.energy_fit(current, softer), compatibility.energy_fit(current, louder))
+        self.assertGreater(compatibility.energy_fit(current, lower), compatibility.energy_fit(current, higher))
         self.settings["selection.compatibility.energy_direction"] = "follow"
-        self.assertGreater(compatibility.energy_fit(current, current), compatibility.energy_fit(current, softer))
+        self.assertGreater(compatibility.energy_fit(current, current), compatibility.energy_fit(current, lower))
         self.settings["selection.compatibility.energy_direction"] = "surprise"
-        self.assertGreater(compatibility.energy_fit(current, record("jump", lufs=-10)),
+        self.assertGreater(compatibility.energy_fit(current, record("jump", energy=.7)),
                            compatibility.energy_fit(current, current))
         self.assertIsNone(compatibility.energy_fit(current, record("unknown", genre="Metal")))
+        self.assertIsNone(compatibility.energy_fit(record("a", lufs=-14), record("b", lufs=-8)))
 
     def test_wave_reverses_after_a_measured_run_and_unknown_history_stays_neutral(self):
         settings = {"energy_direction": "wave", "energy_arc_tracks": 3, "energy_step_lufs": 2}
-        rising = [record(str(i), lufs=value) for i, value in enumerate([-20, -18, -16, -14])]
-        falling = [record(str(i), lufs=value) for i, value in enumerate([-14, -16, -18, -20])]
-        self.assertEqual(compatibility.energy_target(rising, settings), (-2, "wave easing"))
-        self.assertEqual(compatibility.energy_target(falling, settings), (2, "wave building"))
-        self.assertEqual(compatibility.energy_target(rising[:2], settings), (2, "wave building"))
+        rising = [record(str(i), energy=value) for i, value in enumerate([.2, .3, .4, .5])]
+        falling = [record(str(i), energy=value) for i, value in enumerate([.5, .4, .3, .2])]
+        step = 2 * compatibility.ENERGY_PER_LU
+        self.assertEqual(compatibility.energy_target(rising, settings), (-step, "wave easing"))
+        self.assertEqual(compatibility.energy_target(falling, settings), (step, "wave building"))
+        self.assertEqual(compatibility.energy_target(rising[:2], settings), (step, "wave building"))
         self.assertEqual(compatibility.energy_target([record("unknown")], settings)[0], 0)
-        plateau = [record(str(i), lufs=-18) for i in range(4)]
-        self.assertEqual(compatibility.energy_target(plateau, settings)[0], 2)
+        plateau = [record(str(i), energy=.3) for i in range(4)]
+        self.assertEqual(compatibility.energy_target(plateau, settings)[0], step)
 
     def test_cached_pair_does_not_reuse_energy_direction_from_another_route(self):
         settings = {**compatibility.snapshot(), "energy_direction": "wave", "variety_strength": 0}
-        current, next_track = record("current", lufs=-14), record("next", lufs=-12)
-        rising = [record(str(i), lufs=value) for i, value in enumerate([-20, -18, -16])] + [current]
-        falling = [record(str(i), lufs=value) for i, value in enumerate([-8, -10, -12])] + [current]
+        current, next_track = record("current", energy=.5), record("next", energy=.6)
+        rising = [record(str(i), energy=value) for i, value in enumerate([.2, .3, .4])] + [current]
+        falling = [record(str(i), energy=value) for i, value in enumerate([.8, .7, .6])] + [current]
         cache = {}
         ease = compatibility.evaluate(next_track, current, rising, settings, cache)
         build = compatibility.evaluate(next_track, current, falling, settings, cache)

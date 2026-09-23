@@ -131,11 +131,25 @@ def refine(outgoing: dict, incoming: dict, plan: transitions.Plan, *,
                                    in_end - in_offset - in_full * min_play))
     exits = [(out_end, 0.0)]
     entries = [(in_offset, 0.0)]
+    minimum_end = out_offset + (out_full if mid_song else out_end - out_offset) * min_play
+    earliest_exit = max(out_end - max_early * out_rate, minimum_end)
+    phrasing = bool(cfg.get("transitions.phrase_cues", True))
     for point in out_profile.get("exits", []):
         at = _number(point.get("at"), -1)
-        minimum_end = out_offset + (out_full if mid_song else out_end - out_offset) * min_play
-        if max(out_end - max_early * out_rate, minimum_end) <= at < out_end:
-            exits.append((at, _number(point.get("score", point.get("confidence", 0.0)))))
+        if earliest_exit <= at < out_end:
+            quality = _number(point.get("score", point.get("confidence", 0.0)))
+            # An acoustic change a beat or two off the bar grid is almost
+            # always the phrase line itself, measured coarsely.
+            snapped = structure.snap_to_phrase(outgoing, at, 2 * _number(outgoing.get("beat_period"), 0.5)) \
+                if phrasing else None
+            if snapped is not None and earliest_exit <= snapped < out_end:
+                at = snapped
+            exits.append((at, quality))
+    if phrasing:
+        # Phrase lines are exits in their own right: DJs leave on an eight.
+        for at in structure.phrase_lines(outgoing, earliest_exit, out_end - 0.01, limit=4):
+            if all(abs(at - other) > 0.25 for other, _ in exits):
+                exits.append((at, 0.45))
     for point in in_profile.get("entries", []):
         at = _number(point.get("at"), -1)
         if in_offset < at <= min(in_end - 10 * in_rate, in_offset + max_skip):
@@ -145,7 +159,13 @@ def refine(outgoing: dict, incoming: dict, plan: transitions.Plan, *,
                            and _number(p.get("confidence")) >= 0.18
                            for p in in_profile.get("boundaries", []))
             if _safe_entry(in_profile, in_offset, at) or (mid_song and boundary):
-                entries.append((at, _number(point.get("score", point.get("confidence", 0.0)))))
+                quality = _number(point.get("score", point.get("confidence", 0.0)))
+                snapped = structure.snap_to_phrase(incoming, at, 2 * _number(incoming.get("beat_period"), 0.5)) \
+                    if phrasing else None
+                if (snapped is not None and in_offset < snapped <= min(in_end - 10 * in_rate, in_offset + max_skip)
+                        and _safe_entry(in_profile, in_offset, snapped)):
+                    at = snapped
+                entries.append((at, quality))
     # Bound work even for a damaged cache. Prefer strong nearby evidence.
     exits = exits[:1] + sorted(exits[1:], key=lambda p: (-p[1], -p[0]))[:5]
     entries = entries[:1] + sorted(entries[1:], key=lambda p: (-p[1], p[0]))[:3]
@@ -164,18 +184,23 @@ def refine(outgoing: dict, incoming: dict, plan: transitions.Plan, *,
             transitions.configured(template)
         templates[preset] = template
 
+    # Invariant across every cue combination: read once, not per candidate.
+    fraction = max(0.0, _number(cfg.get("crossfade.max_fraction_of_track", 0.25), 0.25))
+    phrase_weight = max(0.0, min(1.0, _number(cfg.get("transitions.phrase_weight", 0.3), 0.3))) if phrasing else 0.0
+    minimum = transitions.minimum_overlap(plan.overlap)
+    intro = incoming.get("intro_override")
+    if intro is None:
+        intro = incoming.get("intro_sec")
     best = None
     count = 0
     for end, exit_quality in exits:
         out_length = wall_at(end)
         for cue, entry_quality in entries:
             in_length = (in_end - cue) / in_rate
-            minimum = transitions.minimum_overlap(plan.overlap)
             for scale in ((1.0,) if forced else ((1.0, 0.75, 0.5, 0.25) if options["overlap_scoring"] else (1.0, 0.5))):
                 # The compatibility planner already bounded beat drift and
                 # the intro. Acoustic evidence may shorten that limit, never
                 # expand it into a blend whose drums will drift apart.
-                fraction = max(0.0, _number(cfg.get("crossfade.max_fraction_of_track", 0.25), 0.25))
                 overlap = min(plan.overlap * scale, min(out_length, in_length) * fraction)
                 effective_minimum = min(minimum, min(out_length, in_length) * fraction)
                 if mid_song and out_end - out_offset >= out_full * min_play:
@@ -183,9 +208,6 @@ def refine(outgoing: dict, incoming: dict, plan: transitions.Plan, *,
                     overlap = min(overlap, max(0.0, out_length - majority_at))
                     effective_minimum = min(effective_minimum, max(0.0, out_length - majority_at))
                 # Respect a measured/overridden vocal entry after moving a cue.
-                intro = incoming.get("intro_override")
-                if intro is None:
-                    intro = incoming.get("intro_sec")
                 if not forced and intro is not None and cue <= _number(intro):
                     overlap = min(overlap, max(minimum, (_number(intro) - cue) / in_rate))
                 elif not forced and cue > in_offset:
@@ -223,6 +245,12 @@ def refine(outgoing: dict, incoming: dict, plan: transitions.Plan, *,
                     score -= 0.5 * (out_end - end) / max(1, max_early * out_rate)
                     score -= 0.35 * (cue - in_offset) / max(1, max_skip)
                     score -= 0.6 * abs(scale - 1.0)
+                    if phrase_weight:
+                        # Start the blend on a phrase line of the outgoing
+                        # record and bring the incoming one in on its own:
+                        # the eights line up and the mix breathes with both.
+                        score += phrase_weight * (structure.phrase_alignment(outgoing, out_local)
+                                                  + structure.phrase_alignment(incoming, cue)) / 2
                     if out_energy is not None and in_energy is not None:
                         score -= abs(out_energy - in_energy) * (0.3 if preset == "slam" else 0.8)
                     if options["overlap_scoring"]:

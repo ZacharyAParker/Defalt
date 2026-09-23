@@ -160,7 +160,7 @@ class MusicMemes(unittest.TestCase):
         with patch.object(director.tts, "say", return_value={"path": "meme.wav", "duration": 4}):
             rendered = station._render([base.Line("rue", "A sourced joke", ref)])
         track = {"key": "test", "artist": "Test", "title": "Test", "duration": 120, "file": "test.wav"}
-        with patch.object(director.db, "intro_of", return_value=12):
+        with patch.object(director.db, "intro_of", return_value=12),                 patch.object(director, "audio_present", return_value=True):
             station._place(track, rendered, "dry")
         voice = next(i for i in station.schedule.items if i.kind == "voice")
         station.clock.jump(voice.start_at + 1)

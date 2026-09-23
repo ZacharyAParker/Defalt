@@ -56,7 +56,7 @@ fn the_engine_opens_a_device_and_moves_a_playhead() {
     // nuisance to whatever else is playing on this machine.
     engine.send(Command::Master { value: 0.02 }).unwrap();
 
-    let track = super::decode::load(&path).expect("could not decode the test tone");
+    let track = super::decode::load_native(&path).expect("could not decode the test tone");
     // Deliberately 44.1k against whatever the device runs at, so the
     // sample-rate conversion is exercised rather than skipped.
     assert_eq!(track.sample_rate, 44_100);
@@ -111,7 +111,7 @@ fn a_negative_scrub_rate_walks_the_record_backwards() {
     let mut engine = Engine::start().expect("no audio output");
     engine.send(Command::Master { value: 0.02 }).unwrap();
 
-    let track = super::decode::load(&path).expect("could not decode");
+    let track = super::decode::load_native(&path).expect("could not decode");
     engine.send(Command::Load { deck: 0, track }).unwrap();
     engine.send(Command::Seek { deck: 0, seconds: 2.5 }).unwrap();
     engine.send(Command::Play { deck: 0 }).unwrap();

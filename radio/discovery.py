@@ -102,13 +102,16 @@ def refresh(cancelled=lambda: False):
     """One small catalog refill, with a persistent retry interval across restarts."""
     if not enabled() or cancelled():
         return {'state': 'disabled', 'added': 0}
-    rows, anchors = profile()
-    pending = sum(unfamiliar(row) and not row['blocked'] for row in rows)
+    # Both early exits are one indexed query each. The full profile reads the
+    # whole library and every affinity, so it is only built when it is used.
+    pending = db.one("SELECT COUNT(*) AS n FROM tracks WHERE source='auto_discovery' "
+                     "AND blocked=0 AND NOT COALESCE(play_count, 0)")['n']
     if pending >= 12:
         return {'state': 'ready', 'added': 0, 'available': pending}
     latest = db.one("SELECT ts FROM events WHERE kind='discovery_attempt' ORDER BY id DESC LIMIT 1")
     if latest and time.time() - latest['ts'] < 600:
         return {'state': 'cooldown', 'added': 0, 'available': pending}
+    rows, anchors = profile()
     if not anchors:
         return {'state': 'needs_taste', 'added': 0}
     if not spotify.available():

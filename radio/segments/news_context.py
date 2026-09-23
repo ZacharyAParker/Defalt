@@ -4,7 +4,7 @@ import re
 import time
 
 from .. import config, sourceio
-from .base import Line
+from .base import Line, MAX_WORDS_PER_LINE
 
 _CACHE = {}
 
@@ -34,10 +34,17 @@ def substantial(text, title=''):
     return len(words) >= 35 and len(set(words) - headline) >= 14 and len(sentences(text)) >= 2
 
 
-def prepare(stories):
-    """Try at most two sources. Never invent detail or block playback on a page."""
+def prepare(stories, limit=2):
+    """Try at most two sources, stopping once `limit` stories are usable.
+
+    A news break airs one story, so the news writer asks for one: a second
+    article fetch would cost up to eight seconds for text nobody hears.
+    Never invent detail or block playback on a page.
+    """
     ready = []
     for original in stories[:2]:
+        if len(ready) >= limit:
+            break
         item = dict(original)
         text = clean(item.get('summary'))
         if not substantial(text, item.get('title', '')) and item.get('link'):
@@ -60,23 +67,30 @@ def prepare(stories):
     return ready
 
 
+FALLBACK_WORDS = 40
+
+
 def fallback(story, anchor, budget=28):
-    """Read complete source sentences, with attribution and no filler exchange."""
+    """Headline plus one complete source sentence, attributed. Nothing more.
+
+    This airs when the writer failed, so it is a short bulletin rather than a
+    recitation of the feed: about forty words, one line, never a cut sentence.
+    """
     source = clean(story.get('source'))[:100] or 'the report'
-    prefix = f'According to {source}, '
-    limit = max(35, min(95, int(budget * 2.3)))
-    selected = []
-    count = len(prefix.split())
+    title = clean(story.get('title')).rstrip('.!?:;, ')
+    limit = min(FALLBACK_WORDS, MAX_WORDS_PER_LINE, max(18, int(budget * 2.3)))
+    headline = f'According to {source}: {title}.' if title else f'According to {source}:'
+    heading = set(re.findall(r'\w+', title.lower()))
     for sentence in sentences(story['summary']):
-        size = len(sentence.split())
-        if count + size > limit:
-            break
-        selected.append(sentence)
-        count += size
-    text = ' '.join(selected)
-    if not substantial(text, story.get('title', '')):
-        return []
-    return [Line(anchor, prefix + text)]
+        words = set(re.findall(r'\w+', sentence.lower()))
+        # Skip a first sentence that only restates the headline.
+        if len(words - heading) < 5:
+            continue
+        text = f'{headline} {sentence}'
+        if len(text.split()) <= limit:
+            return [Line(anchor, text)]
+        break
+    return []
 
 
 def usable(lines):

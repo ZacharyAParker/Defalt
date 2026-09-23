@@ -80,6 +80,9 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS idx_events_ts   ON events (ts);
 CREATE INDEX IF NOT EXISTS idx_events_kind ON events (kind);
+-- Per-track counts (host facts) and "latest of a kind" lookups.
+CREATE INDEX IF NOT EXISTS idx_events_track ON events (track_key, kind);
+CREATE INDEX IF NOT EXISTS idx_events_kind_ts ON events (kind, ts);
 
 CREATE TABLE IF NOT EXISTS affinity (
     entity_type TEXT NOT NULL,        -- 'track' | 'artist'
@@ -105,6 +108,26 @@ CREATE TABLE IF NOT EXISTS requests (
     status    TEXT NOT NULL DEFAULT 'pending',  -- pending|queued|aired|failed
     track_key TEXT,
     note      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_requests_status ON requests (status, ts);
+
+-- Every local file the importer has read, by path. Two files that claim the
+-- same artist and title share one track row, so the row alone cannot say
+-- whether a given file is unchanged since the last scan.
+CREATE TABLE IF NOT EXISTS import_paths (
+    path     TEXT PRIMARY KEY,         -- os.path.normcase of the resolved path
+    mtime_ns INTEGER NOT NULL,
+    size     INTEGER NOT NULL,
+    key      TEXT NOT NULL,
+    seen_at  REAL NOT NULL
+);
+
+-- When a track last had its missing year/album/genre looked up, so a record
+-- the catalogue does not know is not asked about on every pass.
+CREATE TABLE IF NOT EXISTS enrichment (
+    track_key    TEXT PRIMARY KEY,
+    attempted_at REAL NOT NULL,
+    status       TEXT NOT NULL      -- filled | nothing_new | no_match | error
 );
 
 CREATE TABLE IF NOT EXISTS unavailable_sources (
@@ -147,6 +170,13 @@ CREATE TABLE IF NOT EXISTS daypart (
 """
 
 
+# Database files whose schema and migrations this process has already applied.
+# Werkzeug serves each request on a fresh thread, and every thread gets its own
+# connection; running the whole schema again for each one was pure overhead.
+_SCHEMA_READY: set[str] = set()
+_SCHEMA_LOCK = threading.Lock()
+
+
 def connect() -> sqlite3.Connection:
     """One connection per thread. The director and Flask both touch this."""
     conn = getattr(_LOCAL, "conn", None)
@@ -154,12 +184,21 @@ def connect() -> sqlite3.Connection:
         _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(_DB_PATH, timeout=15, check_same_thread=False)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout=15000")
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
-        conn.executescript(SCHEMA)
-        _migrate(conn)
-        conn.commit()
+        identity = str(Path(_DB_PATH).resolve())
+        with _SCHEMA_LOCK:
+            # The one-row check covers a file deleted and recreated under the
+            # same name (tests do this) without paying for the whole schema.
+            if identity not in _SCHEMA_READY or conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='import_paths'"
+                    ).fetchone() is None:
+                conn.executescript(SCHEMA)
+                _migrate(conn)
+                conn.commit()
+                _SCHEMA_READY.add(identity)
         _LOCAL.conn = conn
     return conn
 
@@ -178,6 +217,19 @@ _ADDED_COLUMNS = {"tracks": {
     "camelot": "TEXT",
     "beat_offset": "REAL", "beat_period": "REAL",
     "beat_residual_ms": "REAL", "downbeat_offset": "REAL",
+    # norm(title) / norm(artist), kept for indexed lookups. Filled by
+    # sync_norms(); a trigger clears them whenever title or artist changes.
+    "title_norm": "TEXT", "artist_norm": "TEXT",
+    # lufs is the level of the file that actually plays. source_lufs is what
+    # the source measured before our gain, applied_gain_db the gain we baked
+    # into the cached render (0 for a local file played as it is).
+    "source_lufs": "REAL", "applied_gain_db": "REAL", "true_peak": "REAL",
+    # Last time the prefetcher prepared this file; eviction reads it.
+    "cache_used_at": "REAL",
+    # Perceived-energy and similarity descriptors (analysis.features).
+    "energy": "REAL", "danceability": "REAL", "onset_rate": "REAL",
+    "embedding": "TEXT", "key_alt": "TEXT", "downbeat_confidence": "REAL",
+    "features_version": "INTEGER",
 }}
 
 
@@ -185,6 +237,12 @@ _ADDED_COLUMNS = {"tracks": {
 # it runs before the columns exist.
 _ADDED_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_tracks_import ON tracks (import_path)",
+    "CREATE INDEX IF NOT EXISTS idx_tracks_title_norm ON tracks (title_norm, artist_norm)",
+    "CREATE INDEX IF NOT EXISTS idx_tracks_artist_norm ON tracks (artist_norm)",
+    # Plain SQL on purpose: any client may write this table, and a trigger
+    # that called a Python function would fail in every one but ours.
+    "CREATE TRIGGER IF NOT EXISTS tracks_norm_stale AFTER UPDATE OF title, artist ON tracks "
+    "BEGIN UPDATE tracks SET title_norm=NULL, artist_norm=NULL WHERE key=NEW.key; END",
 )
 
 
@@ -197,6 +255,38 @@ def _migrate(conn: sqlite3.Connection) -> None:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
     for statement in _ADDED_INDEXES:
         conn.execute(statement)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(tracks)").fetchall()}
+    if {"file"} <= columns:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tracks_file ON tracks (file)")
+    if {"source", "lufs"} <= columns:
+        # A local file is played exactly as it is on disk, so what was
+        # measured is both its source level and its playing level. Cached
+        # downloads stored either one depending on how they were reached;
+        # those are left unknown rather than guessed.
+        conn.execute("UPDATE tracks SET source_lufs=lufs, applied_gain_db=0 "
+                     "WHERE source='local' AND lufs IS NOT NULL AND source_lufs IS NULL")
+    sync_norms(conn)
+
+
+def sync_norms(conn: sqlite3.Connection | None = None) -> int:
+    """Fill title_norm/artist_norm wherever they are missing. Cheap when none are."""
+    conn = conn or connect()
+    rows = conn.execute("SELECT key, title, artist FROM tracks "
+                        "WHERE title_norm IS NULL OR artist_norm IS NULL").fetchall()
+    if rows:
+        conn.executemany("UPDATE tracks SET title_norm=?, artist_norm=? WHERE key=?",
+                         [(norm(row[1] or ""), norm(row[2] or ""), row[0]) for row in rows])
+        conn.commit()
+    return len(rows)
+
+
+def tracks_titled(title: str, artist: str | None = None) -> list[sqlite3.Row]:
+    """Tracks whose normalised title (and artist, if given) match, via the index."""
+    sync_norms()
+    if artist is None:
+        return query("SELECT * FROM tracks WHERE title_norm=?", (norm(title),))
+    return query("SELECT * FROM tracks WHERE title_norm=? AND artist_norm=?",
+                 (norm(title), norm(artist)))
 
 
 def field(track: Any, name: str) -> Any:
@@ -318,8 +408,52 @@ def mark_seen(kind: str, ident: str) -> None:
           (kind, ident, time.time()))
 
 
-def prune_seen(days: int) -> None:
-    write("DELETE FROM seen WHERE ts < ?", (time.time() - days * 86400,))
+def prune_seen(days: int, kind: str | None = None) -> None:
+    """Forget ledger entries older than `days`, of one kind or of every kind.
+
+    The news pruner passes its own kind: its short window must not also
+    forget which ads and patch notes have already been read.
+    """
+    cutoff = time.time() - days * 86400
+    if kind is None:
+        write("DELETE FROM seen WHERE ts < ?", (cutoff,))
+    else:
+        write("DELETE FROM seen WHERE kind=? AND ts < ?", (kind, cutoff))
+
+
+# Bookkeeping events nothing reads beyond the most recent few. Listening
+# signals (played, skips, thumbs, requests...) are kept forever: taste and the
+# hosts' per-track facts count them over the whole history.
+PRUNABLE_EVENTS = ("discovery_attempt", "discovery_refill", "host_comment_prepared",
+                   "ad_prepared", "transition")
+
+
+def prune_history(days: float) -> dict[str, int]:
+    """Drop old bookkeeping rows. Conservative on purpose; see PRUNABLE_EVENTS."""
+    cutoff = time.time() - float(days) * 86400
+    conn = connect()
+    removed = {}
+    with conn:
+        marks = ",".join("?" * len(PRUNABLE_EVENTS))
+        # Keep the newest row of each kind whatever its age: cooldowns and
+        # "what did we say last time" read exactly that row.
+        removed["events"] = conn.execute(
+            f"DELETE FROM events WHERE kind IN ({marks}) AND ts < ? AND id NOT IN "
+            f"(SELECT MAX(id) FROM events WHERE kind IN ({marks}) GROUP BY kind)",
+            (*PRUNABLE_EVENTS, cutoff, *PRUNABLE_EVENTS)).rowcount
+        # last_aired(kind) decides cooldowns and whether a sign-on is a return.
+        removed["aired"] = conn.execute(
+            "DELETE FROM aired WHERE ts < ? AND id NOT IN "
+            "(SELECT MAX(id) FROM aired GROUP BY kind)", (cutoff,)).rowcount
+        removed["requests"] = conn.execute(
+            "DELETE FROM requests WHERE ts < ? AND status IN ('aired','failed','cancelled')",
+            (cutoff,)).rowcount
+        removed["wishes"] = conn.execute(
+            "DELETE FROM wishes WHERE ts < ? AND status IN ('done','failed','cancelled')",
+            (cutoff,)).rowcount
+        removed["unavailable_sources"] = conn.execute(
+            "DELETE FROM unavailable_sources WHERE retry_after < ?", (time.time(),)).rowcount
+    return removed
 
 
 def hot_cues(key: str) -> list[dict]:

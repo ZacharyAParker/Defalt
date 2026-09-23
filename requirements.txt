@@ -3,6 +3,9 @@ python-dotenv>=1,<2
 PyYAML>=6,<7
 httpx>=0.27
 edge-tts>=7,<8
+# Left floating on purpose, here and in requirements.lock: sites change under
+# it every few weeks and only a current yt-dlp keeps up. Update it with
+# `pip install -U yt-dlp` rather than pinning it.
 yt-dlp>=2026.3.3
 feedparser>=6.0.11,<7
 numpy>=1.26,<3

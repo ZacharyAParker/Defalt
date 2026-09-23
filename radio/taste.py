@@ -10,7 +10,9 @@ import json
 import math
 import random
 import re
+import threading
 import time
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -88,6 +90,19 @@ def _decayed(score: float, updated_at: float) -> float:
         return score
     elapsed_days = max(0.0, (time.time() - updated_at) / 86400.0)
     return score * (0.5 ** (elapsed_days / half_life))
+
+
+def affinity_table() -> dict[tuple[str, str], float]:
+    """Every decayed affinity score, read in one query for a selection pass."""
+    half_life = float(config.station.get("learning.half_life_days", 90) or 90)
+    now = time.time()
+    table = {}
+    for row in db.query("SELECT entity_type, entity_key, score, updated_at FROM affinity"):
+        score = row["score"]
+        if half_life > 0:
+            score *= 0.5 ** (max(0.0, (now - row["updated_at"]) / 86400.0) / half_life)
+        table[(row["entity_type"], row["entity_key"])] = score
+    return table
 
 
 def affinity(entity_type: str, entity_key: str) -> float:
@@ -168,6 +183,24 @@ def record(signal: str, track_key: str, artist: str = "",
         )
 
 
+def daypart_table(hour: int | None = None) -> tuple[dict[str, float], float]:
+    """Artist weights for the three-hour window around `hour`, and their total."""
+    hour = time.localtime().tm_hour if hour is None else hour
+    hours = [(hour - 1) % 24, hour, (hour + 1) % 24]
+    weights: dict[str, float] = {}
+    for row in db.query("SELECT artist, SUM(weight) AS w FROM daypart WHERE hour IN (?,?,?) GROUP BY artist",
+                        hours):
+        weights[row["artist"]] = row["w"] or 0.0
+    return weights, sum(weights.values())
+
+
+def _daypart_from(table: tuple[dict[str, float], float], artist_norm: str) -> float:
+    weights, total = table
+    if total <= 0:
+        return 0.5  # no data yet, stay neutral
+    return min(1.0, (weights.get(artist_norm, 0.0) / total) * 8.0)
+
+
 def daypart_fit(artist: str, hour: int | None = None) -> float:
     """0..1 -- how much this artist belongs at this hour, per your history."""
     hour = time.localtime().tm_hour if hour is None else hour
@@ -200,51 +233,119 @@ def _recent_artists(limit: int) -> set[str]:
     return {db.norm(db.primary_artist(r["artist"])) for r in rows}
 
 
+# Lyrics are large and change rarely. Selection keeps them in memory keyed by
+# the row's lyric length and metadata version, and reads only what changed.
+_LYRICS: dict[str, tuple[tuple, str]] = {}
+_LYRICS_LOCK = threading.Lock()
+_SKIP_COLUMNS = {"lyrics", "source_metadata", "import_path", "import_mtime_ns", "import_size"}
+
+
+def _columns() -> list[str]:
+    names = [row["name"] for row in db.connect().execute("PRAGMA table_info(tracks)").fetchall()]
+    return [name for name in names if name not in _SKIP_COLUMNS]
+
+
 def candidates() -> list[dict[str, Any]]:
-    rows = db.query("SELECT * FROM tracks WHERE blocked = 0")
-    return [dict(r) for r in rows]
+    """Unblocked tracks with what selection needs; lyrics come from a cache."""
+    columns = _columns()
+    rows = [dict(r) for r in db.query(
+        f"SELECT {', '.join(columns)}, length(lyrics) AS lyrics_length FROM tracks WHERE blocked = 0")]
+    stale = []
+    with _LYRICS_LOCK:
+        for row in rows:
+            stamp = (row.pop("lyrics_length"), row.get("metadata_version"))
+            cached = _LYRICS.get(row["key"])
+            if stamp[0] is None:
+                row["lyrics"] = None
+            elif cached and cached[0] == stamp:
+                row["lyrics"] = cached[1]
+            else:
+                stale.append((row, stamp))
+    for start in range(0, len(stale), 400):
+        chunk = stale[start:start + 400]
+        found = {r["key"]: r["lyrics"] for r in db.query(
+            f"SELECT key, lyrics FROM tracks WHERE key IN ({','.join('?' * len(chunk))})",
+            [row["key"] for row, _ in chunk])}
+        with _LYRICS_LOCK:
+            for row, stamp in chunk:
+                row["lyrics"] = found.get(row["key"])
+                _LYRICS[row["key"]] = (stamp, row["lyrics"])
+    if len(_LYRICS) > 2 * max(1000, len(rows)):
+        with _LYRICS_LOCK:
+            _LYRICS.clear()
+    return rows
+
+
+@lru_cache(maxsize=16384)
+def _recording_ids(title: str, artist: str, video_id: str) -> frozenset[str]:
+    title = re.sub(r"[\[(]\s*(?:feat\.?|ft\.?|with)\s+[^\])]+[\])]", "", title, flags=re.I)
+    title = db.norm(title.replace("'", "").replace("\u2019", ""))
+    artist = db.norm(db.primary_artist(artist))
+    ids = {f"song:{artist}|{title}"}
+    if video_id:
+        ids.add(f"video:{video_id}")
+    return frozenset(ids)
+
+
+@lru_cache(maxsize=16384)
+def _edition(title: str, album: str) -> tuple[bool, bool]:
+    """(clean edition, alternate take) labels, cached per title and album."""
+    track = {"title": title, "album": album}
+    return versions.clean_track(track), versions.alternate_track(track)
 
 
 def recording_ids(track):
-    title = re.sub(r"[\[(]\s*(?:feat\.?|ft\.?|with)\s+[^\])]+[\])]", "", track.get("title") or "", flags=re.I)
-    title = db.norm(title.replace("'", "").replace("\u2019", ""))
-    artist = db.norm(db.primary_artist(track.get("artist") or ""))
-    ids = {f"song:{artist}|{title}"}
-    if track.get("video_id"):
-        ids.add(f"video:{track['video_id']}")
-    return ids
+    return set(_recording_ids(track.get("title") or "", track.get("artist") or "",
+                              track.get("video_id") or ""))
 
 
 def pick_next(exclude_keys: set[str] | None = None,
               previous: dict[str, Any] | None = None,
-              history: list[dict[str, Any]] | None = None) -> dict[str, Any] | None:
+              history: list[dict[str, Any]] | None = None,
+              break_position: int | None = None) -> dict[str, Any] | None:
     """Choose the next track. Weighted sampling, not argmax -- a station that
-    always plays its single favourite song is not a station."""
+    always plays its single favourite song is not a station.
+
+    `break_position` is how many songs will have played since the last host
+    break when this one airs; the set-level energy arc builds across it.
+
+    Everything per-candidate is read up front (affinity, daypart, recording
+    identities) so a pass is a handful of queries, not several per track.
+    """
     exclude = set(exclude_keys or ())
     catalogue = candidates()
-    excluded_ids = set().union(*(recording_ids(t) for t in catalogue if t["key"] in exclude))
+    identities_of = {id(t): _recording_ids(t.get("title") or "", t.get("artist") or "",
+                                           t.get("video_id") or "") for t in catalogue}
+    excluded_ids = set().union(*(identities_of[id(t)] for t in catalogue if t["key"] in exclude))
     latest = {}
     for track in catalogue:
-        for identity in recording_ids(track):
+        for identity in identities_of[id(track)]:
             latest[identity] = max(latest.get(identity, 0), track.get("last_played") or 0)
     pool, seen = [], set()
     for track in catalogue:
-        identities = recording_ids(track)
+        identities = identities_of[id(track)]
         if track["key"] in exclude or identities & (excluded_ids | seen):
             continue
         seen.update(identities)
         pool.append({**track, "last_played": max(latest[i] for i in identities) or None})
     if config.station.get("selection.avoid_clean_versions", True):
-        pool = [t for t in pool if not versions.clean_track(t)]
+        pool = [t for t in pool if not _edition(t.get("title") or "", t.get("album") or "")[0]]
     if config.station.get("selection.prefer_original_recording", True):
-        pool = [t for t in pool if not versions.alternate_track(t)]
+        pool = [t for t in pool if not _edition(t.get("title") or "", t.get("album") or "")[1]]
     if not pool:
         return None
 
     cfg = config.station
     selection_settings = compatibility.snapshot()
+    if break_position is not None:
+        selection_settings["break_position"] = int(break_position)
     listening_vibe = vibe.for_selection()
     weights = cfg.get("selection.weights", {}) or {}
+    w_affinity, w_fresh, w_daypart, w_seed, w_explore = (
+        float(weights.get(name, default)) for name, default in (
+            ("affinity", 1.0), ("freshness", 0.6), ("daypart_fit", 0.5),
+            ("recency_seed", 0.4), ("exploration", 0.35)))
+    primary = compatibility._primary  # cached norm(primary_artist())
     separation = int(cfg.get("selection.artist_separation", 6) or 0)
     title_hours = float(cfg.get("selection.title_separation_hours", 5) or 0)
     now = time.time()
@@ -262,9 +363,7 @@ def pick_next(exclude_keys: set[str] | None = None,
                                for t in history[-separation:])
     rested = [t for t in pool if not (title_hours and t["last_played"]
                                     and now - t["last_played"] < title_hours * 3600)]
-    eligible = [t for t in rested
-                if db.norm(db.primary_artist(t["artist"])) not in blocked_artists
-                ]
+    eligible = [t for t in rested if primary(t["artist"] or "") not in blocked_artists]
     relaxed = not eligible
     if eligible or rested:
         pool = eligible or rested  # Relax artist spacing before song cooldowns.
@@ -275,14 +374,17 @@ def pick_next(exclude_keys: set[str] | None = None,
         pool = [t for t in pool if (t["last_played"] or 0) <= oldest + 1.0]
     explore = (bool(selection_settings.get("enabled", True))
                and random.random() < compatibility.setting("explore_chance", .18, settings=selection_settings))
+    affinities = affinity_table()
+    daypart = daypart_table()
+    pair_cache: dict = {}
 
     scored: list[tuple[float, dict[str, Any]]] = []
     for track in pool:
-        artist_norm = db.norm(db.primary_artist(track["artist"]))
+        artist_norm = primary(track["artist"] or "")
         last = track["last_played"] or 0
 
-        track_aff = affinity("track", track["key"])
-        artist_aff = affinity("artist", artist_norm)
+        track_aff = affinities.get(("track", track["key"]), 0.0)
+        artist_aff = affinities.get(("artist", artist_norm), 0.0)
         combined = track_aff + artist_aff * 0.5
 
         # Squash affinity into 0..1 so one beloved song can't swamp everything.
@@ -291,18 +393,18 @@ def pick_next(exclude_keys: set[str] | None = None,
         age_days = (now - last) / 86400.0 if last else 30.0
         freshness = min(1.0, age_days / 14.0)
 
-        fit = daypart_fit(track["artist"])
+        fit = _daypart_from(daypart, artist_norm)
         seed_recency = 1.0 if track["source"] == "seed" else 0.5
         noise = random.random()
 
         total = (
-            float(weights.get("affinity", 1.0)) * affinity_score
-            + float(weights.get("freshness", 0.6)) * freshness
-            + float(weights.get("daypart_fit", 0.5)) * fit
-            + float(weights.get("recency_seed", 0.4)) * seed_recency
-            + float(weights.get("exploration", 0.35)) * noise
+            w_affinity * affinity_score
+            + w_fresh * freshness
+            + w_daypart * fit
+            + w_seed * seed_recency
+            + w_explore * noise
         )
-        continuity = compatibility.evaluate(track, previous, history, selection_settings)
+        continuity = compatibility.evaluate(track, previous, history, selection_settings, pair_cache)
         if explore:
             continuity = {**continuity, "multiplier": 1.0,
                           "reason": "Exploration pick; continuity preference relaxed"}

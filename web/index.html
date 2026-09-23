@@ -6,14 +6,24 @@
 <title>Side Room</title>
 <meta name="color-scheme" content="dark">
 <meta name="description" content="Manual, assisted, automatic.">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo:ital,wght@0,400..800;1,400..700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/radio.css">
-<link rel="stylesheet" href="/static/about.css">
-<link rel="stylesheet" href="/static/studio.css">
+<!-- The home-screen app. The manifest is fetched with credentials: behind
+     Cloudflare Access an anonymous fetch would get the sign-in page. -->
+<link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
+<meta name="theme-color" content="#100e0c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Defalt">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png?v={{APP_VERSION}}">
+<!-- ?v= changes with every release, so these can be cached until the next one. -->
+<link rel="stylesheet" href="/static/fonts.css?v={{APP_VERSION}}">
+<link rel="stylesheet" href="/static/radio.css?v={{APP_VERSION}}">
+<link rel="stylesheet" href="/static/about.css?v={{APP_VERSION}}">
+<link rel="stylesheet" href="/static/studio.css?v={{APP_VERSION}}">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23100e0c'/><circle cx='16' cy='16' r='6' fill='%23ffb020'/></svg>">
-<link rel="stylesheet" href="/static/director-chat.css">
+<link rel="stylesheet" href="/static/director-chat.css?v={{APP_VERSION}}">
+<link rel="stylesheet" href="/static/feedback.css?v={{APP_VERSION}}">
+<link rel="stylesheet" href="/static/stream.css?v={{APP_VERSION}}">
 </head>
 <body>
 
@@ -112,6 +122,8 @@
         <button class="btn btn--primary" id="power" type="button">
           <span id="power-label">Start the station</span>
         </button>
+        <button class="btn btn--mode" id="mode-toggle" type="button" aria-pressed="false"
+                title="Where the sound is mixed">Mix here</button>
         <button class="btn btn--icon" id="skip" type="button" title="Next record"
                 aria-label="Skip to the next record" disabled>
           <svg class="icon" viewBox="0 0 24 24"><use href="#i-skip"/></svg>
@@ -138,6 +150,9 @@
         </div>
       </div>
       <p class="hint" id="hint">Audio starts muted until you press start — browsers require it.</p>
+      <p class="stream-note" id="stream-note" role="status" aria-live="polite"></p>
+      <!-- Stream mode plays the console's own output through this, and nothing else. -->
+      <audio id="stream-audio" preload="none" playsinline></audio>
     </section>
 
     <!-- ─── TALKBACK ───────────────────────────────────────── -->
@@ -234,6 +249,12 @@
     </button>
 
     <div class="panel__body" id="panel-body" hidden>
+      <fieldset class="remote-panel" id="remote-panel">
+        <legend>Remote listening</legend>
+        <label><input type="checkbox" id="remote-enabled"> Run the tunnel while the radio is on</label>
+        <label><input type="checkbox" id="remote-mute"> Mute this PC's speakers while someone streams</label>
+        <p class="fader__hint" id="remote-status" role="status">Checking&hellip;</p>
+      </fieldset>
       <div class="faders" id="faders"></div>
       <p class="panel__foot">
         Changes save to <code>config/overrides.yaml</code> and take effect on the next
@@ -253,6 +274,7 @@
     <button type="button" data-info-page="privacy">Privacy</button>
     <button type="button" data-info-page="terms">Terms</button>
     <button type="button" data-info-page="copyright">Copyright</button>
+    <button type="button" id="feedback-open" title="Report a bug or suggestion">Report a bug</button>
   </nav>
 </footer>
 <dialog class="info-window" id="info-window" aria-labelledby="info-title">
@@ -287,12 +309,14 @@
   </form>
   <p class="director-chat-hint">Prepared mixes finish first. Changes start with unprepared picks.</p>
 </dialog>
-<script src="/static/director-chat.js" defer></script>
-<script src="/static/about.js" defer></script>
-<script src="/static/visualizer.js" defer></script>
-<script src="/static/radio.js" defer></script>
-<script src="/static/studio-scene.js"></script>
-<script src="/static/studio-live.js"></script>
-<script src="/static/studio-ambience.js"></script>
+<script src="/static/feedback.js?v={{APP_VERSION}}" defer></script>
+<script src="/static/director-chat.js?v={{APP_VERSION}}" defer></script>
+<script src="/static/about.js?v={{APP_VERSION}}" defer></script>
+<script src="/static/visualizer.js?v={{APP_VERSION}}" defer></script>
+<script src="/static/stream.js?v={{APP_VERSION}}" defer></script>
+<script src="/static/radio.js?v={{APP_VERSION}}" defer></script>
+<script src="/static/studio-scene.js?v={{APP_VERSION}}"></script>
+<script src="/static/studio-live.js?v={{APP_VERSION}}"></script>
+<script src="/static/studio-ambience.js?v={{APP_VERSION}}"></script>
 </body>
 </html>

@@ -14,7 +14,44 @@
   visibility();
   let previous = 0, bins;
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
+  // The canvas box, kept current by a ResizeObserver: measuring it each frame
+  // with getBoundingClientRect would force a layout every time.
+  let box = null;
+  const observer = typeof window.ResizeObserver === "function"
+    ? new window.ResizeObserver(entries => { const r = entries[0].contentRect; box = {width: r.width, height: r.height}; })
+    : null;
+  let observed = null;
+  function measure(canvas) {
+    if (observer) {
+      if (observed !== canvas) { observed = canvas; box = null; observer.observe(canvas); }
+      if (box) return box;
+    }
+    const rect = canvas.getBoundingClientRect();
+    if (observer) box = {width: rect.width, height: rect.height};
+    return rect;
+  }
+  // Bass energy, 0..1, for the studio to breathe with. Worked out on its own
+  // (the visualizer may be switched off) and at most 15 times a second.
+  let low = 0, lowAt = 0, lowBins;
+  function lowBand(analyser, now = performance.now()) {
+    if (now - lowAt < 66) return low;
+    const dt = Math.min(.5, (now - lowAt) / 1000);
+    lowAt = now;
+    let value = 0;
+    if (analyser) {
+      if (!lowBins || lowBins.length !== analyser.frequencyBinCount) lowBins = new Float32Array(analyser.frequencyBinCount);
+      analyser.getFloatFrequencyData(lowBins);
+      const rate = analyser.context.sampleRate || 48000;
+      const lo = Math.max(1, Math.floor(40 * analyser.fftSize / rate)), hi = Math.min(lowBins.length, Math.ceil(160 * analyser.fftSize / rate) + 1);
+      let db = -Infinity;
+      for (let b = lo; b < hi; b++) if (Number.isFinite(lowBins[b])) db = Math.max(db, lowBins[b]);
+      value = Math.max(0, Math.min(1, (db + 60) / 50));
+    }
+    low += (value - low) * (1 - Math.exp(-dt / (value > low ? .08 : .5)));
+    return low;
+  }
   window.RadioVisualizer = {
+    lowBand,
     draw(canvas, analyser, now = performance.now()) {
       if (!toggle.checked || document.hidden) return;
       const calm = reduced.matches || document.getElementById("reduced")?.checked;
@@ -22,7 +59,7 @@
       if (now - previous < interval) return;
       const dt = Math.min(.2, (now - previous) / 1000);
       previous = now;
-      const rect = canvas.getBoundingClientRect();
+      const rect = measure(canvas);
       if (rect.width < 1 || rect.height < 1) return;
       const ratio = Math.min(2, window.devicePixelRatio || 1);
       const w = rect.width, h = rect.height;

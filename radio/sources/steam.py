@@ -12,6 +12,7 @@ from __future__ import annotations
 import html
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, wait
 from typing import Any
 
 import httpx
@@ -21,6 +22,11 @@ from .. import config, db
 API = "https://api.steampowered.com"
 STORE = "https://store.steampowered.com"
 _CACHE: dict[str, tuple[float, Any]] = {}
+# Patch lookups fetch several games' news at once, inside one time budget.
+NEWS_TTL = 1800.0
+NEWS_WORKERS = 6
+NEWS_BUDGET = 20.0
+MAX_PATCH_GAMES = 12
 
 
 def _cached(key: str, ttl: float, producer: Any) -> Any:
@@ -46,7 +52,11 @@ def _get(url: str, params: dict[str, Any] | None = None,
         return response.json()
     except (httpx.HTTPError, ValueError) as error:
         if config.DEBUG:
-            print("[steam] request failed", url, error, flush=True)
+            # Never print the error itself: its message carries the full
+            # request URL, and that includes the API key.
+            response = getattr(error, "response", None)
+            status = f" HTTP {response.status_code}" if response is not None else ""
+            print(f"[steam] request failed: {type(error).__name__}{status}", flush=True)
         return None
 
 
@@ -140,10 +150,32 @@ def _clean_body(text: str) -> str:
 
 
 def _news_for_app(appid: int, count: int = 8) -> list[dict[str, Any]]:
-    data = _get(f"{API}/ISteamNews/GetNewsForApp/v2/", {
-        "appid": appid, "count": count, "maxlength": 0,
-    })
-    return ((data or {}).get("appnews") or {}).get("newsitems") or []
+    def build() -> list[dict[str, Any]]:
+        data = _get(f"{API}/ISteamNews/GetNewsForApp/v2/", {
+            "appid": appid, "count": count, "maxlength": 0,
+        })
+        return ((data or {}).get("appnews") or {}).get("newsitems") or []
+
+    return _cached(f"news:{appid}:{count}", NEWS_TTL, build)
+
+
+def _news_many(appids: list[int]) -> dict[int, list[dict[str, Any]]]:
+    """News for several games in parallel; slow games are skipped this time."""
+    appids = list(dict.fromkeys(appids))
+    if not appids:
+        return {}
+    pool = ThreadPoolExecutor(max_workers=min(NEWS_WORKERS, len(appids)),
+                              thread_name_prefix="steam-news")
+    futures = {pool.submit(_news_for_app, appid): appid for appid in appids}
+    done, _ = wait(futures, timeout=NEWS_BUDGET)
+    pool.shutdown(wait=False, cancel_futures=True)
+    result = {}
+    for future in done:
+        try:
+            result[futures[future]] = future.result()
+        except Exception:  # noqa: BLE001
+            continue
+    return result
 
 
 def _looks_like_patch(item: dict[str, Any], keywords: list[str]) -> bool:
@@ -161,14 +193,13 @@ def latest_patch() -> dict[str, Any] | None:
     cooldown = float(cfg.get("patch_notes.per_game_cooldown_hours", 20) or 0) * 3600
     now = time.time()
 
-    for game in tracked_titles():
+    games = [game for game in tracked_titles() if game.get("appid") and not (
+        cooldown and db.is_seen("patch_game", f"{game['appid']}:{int(now // cooldown)}"))]
+    games = games[:MAX_PATCH_GAMES]
+    news = _news_many([int(game["appid"]) for game in games])
+    for game in games:
         appid = game.get("appid")
-        if not appid:
-            continue
-        if cooldown and db.is_seen("patch_game", f"{appid}:{int(now // cooldown)}"):
-            continue
-
-        for item in _news_for_app(int(appid)):
+        for item in news.get(int(appid), []):
             if accepted and item.get("feedname") not in accepted:
                 continue
             if item.get("date") and now - float(item["date"]) > max_age:

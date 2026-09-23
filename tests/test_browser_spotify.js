@@ -1,7 +1,6 @@
-const fs = require('node:fs');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
-const source = fs.readFileSync('web/static/radio.js', 'utf8');
+const {section} = require('./browser_harness');
 function element() {
   return {value: '', textContent: '', hidden: false, disabled: false, dataset: {}, handlers: {}, children: [],
     addEventListener(type, handler) { this.handlers[type] = handler; },
@@ -20,7 +19,7 @@ async function run() {
       if (path === '/api/request') posts.push(JSON.parse(options.body));
       return Promise.resolve({ok: true, message: 'queued', vibe: {}});
     }});
-  vm.runInContext(source.slice(source.indexOf('const KIND_LABEL ='), source.indexOf('const STAGE_LABEL =')), context);
+  vm.runInContext(section('web/static/radio.js', 'const KIND_LABEL =', 'const STAGE_LABEL ='), context);
   const track = {artist: 'Artist', title: '<img src=x>', duration_ms: 123000, album: 'Album', year: '2024'};
   ui.input.value = 'first'; ui.input.handlers.input(); const old = timer();
   ui.input.value = 'second'; ui.input.handlers.input(); const current = timer();

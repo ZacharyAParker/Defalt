@@ -1,8 +1,11 @@
 """Bounded, cached acoustic sections for cue selection, without a model download.
 
-These are changes in energy and bass, not named verses, choruses or verified
-downbeats. Vocal activity is available only from an already separated vocal
-stem. Scheduling reads the cache; decoding belongs to library preparation.
+These are changes in energy, bass and harmony, not named verses or choruses.
+Harmony changes come from chroma self-similarity novelty: the point where
+the chords stop resembling what came before. Vocal activity is available only
+from an already separated vocal stem. Scheduling reads the cache; decoding
+belongs to library preparation. Phrase helpers place cue candidates on the
+analysed bar grid (8 bars of 4 beats) when the track has a trusted one.
 """
 from __future__ import annotations
 
@@ -19,7 +22,8 @@ import numpy as np
 
 from . import config
 
-VERSION = 2
+VERSION = 3
+PHRASE_BEATS = 32   # eight bars of four
 SAMPLE_RATE = 4000
 STEP = 0.5
 MAX_SECONDS = 1200
@@ -111,6 +115,64 @@ def profile_for(track: Any) -> dict:
         return {}
 
 
+def phrase_grid(track: Any) -> tuple[float, float] | None:
+    """(first downbeat, phrase length) in source seconds, if the grid is trusted.
+
+    Only a steady, measured grid qualifies: a wandering one would snap cues
+    to places that are not bar lines at all.
+    """
+    try:
+        period = float(track.get("beat_period") or 0)
+        downbeat = track.get("downbeat_offset")
+        downbeat = float(downbeat if downbeat is not None else track.get("beat_offset") or 0)
+        residual = track.get("beat_residual_ms")
+        residual = float(residual) if residual is not None else 999.0
+        confidence = track.get("bpm_confidence")
+    except (TypeError, ValueError, AttributeError):
+        return None
+    if (not math.isfinite(period) or not 0.2 <= period <= 1.5 or not math.isfinite(downbeat)
+            or residual > 30.0 or (confidence is not None and float(confidence) < 0.25)):
+        return None
+    return downbeat % (period * 4), period * PHRASE_BEATS
+
+
+def phrase_alignment(track: Any, seconds: float) -> float:
+    """1 on an eight-bar phrase line, 0.5 on another bar line, else 0."""
+    grid = phrase_grid(track)
+    if grid is None or not math.isfinite(seconds):
+        return 0.0
+    start, phrase = grid
+    bar = phrase / 8
+    tolerance = bar / 16      # a quarter of a beat
+    offset = (seconds - start) % phrase
+    if min(offset, phrase - offset) <= tolerance:
+        return 1.0
+    offset = (seconds - start) % bar
+    return 0.5 if min(offset, bar - offset) <= tolerance else 0.0
+
+
+def snap_to_phrase(track: Any, seconds: float, reach: float) -> float | None:
+    """The nearest eight-bar phrase line within `reach` seconds, else None."""
+    grid = phrase_grid(track)
+    if grid is None or not math.isfinite(seconds):
+        return None
+    start, phrase = grid
+    nearest = start + round((seconds - start) / phrase) * phrase
+    return round(nearest, 4) if abs(nearest - seconds) <= reach and nearest >= 0 else None
+
+
+def phrase_lines(track: Any, low: float, high: float, limit: int = 8) -> list[float]:
+    """Eight-bar phrase lines inside [low, high], nearest to `high` first."""
+    grid = phrase_grid(track)
+    if grid is None or not high > low:
+        return []
+    start, phrase = grid
+    first = math.ceil((low - start) / phrase)
+    lines = [round(start + k * phrase, 4) for k in range(first, first + 400)
+             if start + k * phrase <= high]
+    return sorted(lines, key=lambda t: high - t)[:limit]
+
+
 def at(profile: dict, source_seconds: float) -> dict:
     """Acoustic bin at source time. Unknown/out-of-range data stays unknown."""
     if not math.isfinite(source_seconds) or source_seconds < 0:
@@ -138,7 +200,8 @@ def _decode(path: Path) -> np.ndarray | None:
         return None
 
 
-def _powers(samples: np.ndarray, sample_rate: int) -> tuple[np.ndarray, np.ndarray]:
+def _powers(samples: np.ndarray, sample_rate: int, chroma: list | None = None
+            ) -> tuple[np.ndarray, np.ndarray]:
     width = max(1, round(sample_rate * STEP))
     energy, bass = [], []
     for start in range(0, len(samples), width):
@@ -146,8 +209,45 @@ def _powers(samples: np.ndarray, sample_rate: int) -> tuple[np.ndarray, np.ndarr
         energy.append(float(np.mean(block ** 2)))
         power = np.abs(np.fft.rfft(block)) ** 2 / len(block) ** 2
         power[1:-1 if len(block) % 2 == 0 else None] *= 2
-        bass.append(float(power[np.fft.rfftfreq(len(block), 1 / sample_rate) < 250].sum()))
+        freqs = np.fft.rfftfreq(len(block), 1 / sample_rate)
+        bass.append(float(power[freqs < 250].sum()))
+        if chroma is not None:
+            chroma.append(_block_chroma(power, freqs))
     return np.asarray(energy), np.asarray(bass)
+
+
+def _block_chroma(power: np.ndarray, freqs: np.ndarray) -> np.ndarray:
+    """Twelve pitch classes for one half-second block, 110 Hz to 1.9 kHz."""
+    usable = (freqs >= 110) & (freqs <= 1900)
+    if not np.any(usable):
+        return np.zeros(12)
+    classes = np.rint(69 + 12 * np.log2(freqs[usable] / 440.0)).astype(int) % 12
+    values = np.zeros(12)
+    np.add.at(values, classes, np.sqrt(power[usable]))
+    norm = np.linalg.norm(values)
+    return values / norm if norm > 1e-12 else values
+
+
+def novelty(chroma: np.ndarray, half: int = 8) -> np.ndarray:
+    """Harmonic novelty from a chroma self-similarity matrix, 0..1 per bin.
+
+    A checkerboard kernel slid along the diagonal (Foote): high where the
+    previous `half` bins resemble each other, the next `half` resemble each
+    other, and the two blocks do not resemble each other -- a section change
+    in the chords rather than in loudness.
+    """
+    count = len(chroma)
+    result = np.zeros(count)
+    if count < 2 * half + 1:
+        return result
+    similarity = chroma @ chroma.T
+    for i in range(half, count - half):
+        before = similarity[i - half:i, i - half:i].mean()
+        after = similarity[i:i + half, i:i + half].mean()
+        across = similarity[i - half:i, i:i + half].mean()
+        result[i] = max(0.0, (before + after) / 2 - across)
+    peak = result.max()
+    return result / peak if peak > 1e-9 else result
 
 
 def analyse(samples: np.ndarray, sample_rate: int = SAMPLE_RATE,
@@ -160,7 +260,9 @@ def analyse(samples: np.ndarray, sample_rate: int = SAMPLE_RATE,
         return {}
     complete = len(samples) <= MAX_SECONDS * sample_rate
     samples = samples[:MAX_SECONDS * sample_rate]
-    energy, bass = _powers(samples, sample_rate)
+    blocks: list = []
+    energy, bass = _powers(samples, sample_rate, blocks)
+    harmony = novelty(np.asarray(blocks)) if blocks else np.zeros(len(energy))
     duration = len(samples) / sample_rate
     # Separate references retain a meaningful bass envelope for quiet tracks.
     e_ref = max(float(np.percentile(energy, 90)), 1e-8)
@@ -185,11 +287,15 @@ def analyse(samples: np.ndarray, sample_rate: int = SAMPLE_RATE,
             for i in range(len(e))]
 
     # Contrast of adjacent two-second regions identifies practical texture
-    # changes. Neither loudness changes nor bass entries prove a musical phrase.
+    # changes; chroma novelty adds changes in the chords that keep the same
+    # level. Neither proves a named section.
     contrast = np.zeros(len(e))
     for i in range(4, len(e) - 4):
-        contrast[i] = min(1.0, abs(float(e[i:i+4].mean() - e[i-4:i].mean())) * 0.7
-                          + abs(float(b[i:i+4].mean() - b[i-4:i].mean())) * 0.3)
+        texture = (abs(float(e[i:i+4].mean() - e[i-4:i].mean())) * 0.7
+                   + abs(float(b[i:i+4].mean() - b[i-4:i].mean())) * 0.3)
+        # Quiet passages have unstable chroma; weight harmony by presence.
+        chords = float(harmony[i]) * 0.35 * min(1.0, float(e[i-4:i+4].mean()) * 2)
+        contrast[i] = min(1.0, max(texture, chords) + 0.25 * min(texture, chords))
     chosen: list[int] = []
     for index in np.argsort(-contrast, kind="stable"):
         i = int(index)
@@ -198,7 +304,8 @@ def analyse(samples: np.ndarray, sample_rate: int = SAMPLE_RATE,
         if all(abs(i - old) >= 8 for old in chosen):
             chosen.append(i)
     boundaries = [{"at": round(i * STEP, 4), "confidence": round(float(contrast[i]), 4),
-                   "reason": "energy/bass change"} for i in sorted(chosen)]
+                   "reason": "harmonic change" if harmony[i] * 0.35 > contrast[i] * 0.6 and harmony[i] > 0.5
+                   else "energy/bass change"} for i in sorted(chosen)]
     # Offer coarse candidates as well as distinct boundaries: a steady drum
     # intro/outro may have no contrast boundary at all.
     indexes = set(chosen) | set(range(0, len(e), 4))
@@ -220,8 +327,14 @@ def analyse(samples: np.ndarray, sample_rate: int = SAMPLE_RATE,
             "bins": bins, "boundaries": boundaries, "entries": entries, "exits": exits}
 
 
-def profile(path: Path | str) -> dict:
+def profile(path: Path | str, samples: np.ndarray | None = None,
+            sample_rate: int = SAMPLE_RATE) -> dict:
     """Prepare one track, max 20 minutes decoded at 4 kHz, cached atomically.
+
+    `samples`, when given, is the already decoded mixture: mono float32 at
+    `sample_rate` Hz (default SAMPLE_RATE, 4000) from the start of the file,
+    so one decode can serve several analyses; other rates are resampled.
+    The path still identifies the cache entry and any vocal stem.
 
     Decoding has a 60-second timeout per source (at most mixture + vocal stem).
     Overlong tracks are marked incomplete; callers should keep normal timing.
@@ -234,7 +347,14 @@ def profile(path: Path | str) -> dict:
         cached = _cached(path, identity)
         if cached:
             return cached
-        samples = _decode(path)
+        if samples is not None:
+            from .analysis import resample
+            samples = resample(np.asarray(samples, dtype=np.float32)[:int((MAX_SECONDS + STEP) * sample_rate) + 1],
+                               sample_rate, SAMPLE_RATE)
+            if not np.isfinite(samples).all():
+                return {}
+        else:
+            samples = _decode(path)
         if samples is None:
             return {}
         vocals = _decode(vocal_path) if vocal_path else None

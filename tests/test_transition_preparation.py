@@ -18,6 +18,10 @@ class PreparationTests(unittest.TestCase):
         p = patch.object(director.taste, "record")
         self.record = p.start()
         self.addCleanup(p.stop)
+        # These records are imaginary; placement checks audio exists.
+        p = patch.object(director, "audio_present", return_value=True)
+        p.start()
+        self.addCleanup(p.stop)
         s = self.station = director.Station.__new__(director.Station)
         s.lock = threading.RLock()
         s.clock = director.Clock()

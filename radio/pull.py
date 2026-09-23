@@ -233,6 +233,9 @@ def pull(query: str, expected_ms: int = 0) -> int:
              f"The download is saved at {destination}; retry to recover it.")
         return 1
 
+    # The importer can only see the levelled file; keep where it came from.
+    db.write("UPDATE tracks SET source_lufs=?, applied_gain_db=? WHERE key=?",
+             (measured["integrated"], gain, result["key"]))
     row = db.one("SELECT * FROM tracks WHERE key=?", (result["key"],))
     if metadata:
         youtube.save(result["key"], metadata)

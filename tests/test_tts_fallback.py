@@ -12,6 +12,9 @@ class SpeechFallback(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
+        # Failures bench a model process-wide; keep tests independent.
+        tts._COOLDOWN.clear()
+        self.addCleanup(tts._COOLDOWN.clear)
         self.root = Path(self.temp.name)
         self.voice = {"engine": "openrouter", "model": "google/gemini-3.1-flash-tts-preview",
                       "openrouter_voice": "Charon", "instructions": "Dry, deadpan.",

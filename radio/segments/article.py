@@ -2,14 +2,53 @@
 import json
 import re
 import time
+import unicodedata
+from difflib import SequenceMatcher
 
-from .. import config, llm
-from .base import Line, parse, system_prompt, OPTIONAL_COMEDY_REFERENCE
+from .. import llm
+from .base import Line, parse, personas, system_prompt, OPTIONAL_COMEDY_REFERENCE
+
+# Typographic variants a model may "correct" when copying a passage.
+_PUNCTUATION = str.maketrans({'\u2018': "'", '\u2019': "'", '\u201a': "'", '\u201b': "'",
+                              '\u201c': '"', '\u201d': '"', '\u201e': '"', '\u2032': "'",
+                              '\u2010': '-', '\u2011': '-', '\u2012': '-', '\u2013': '-',
+                              '\u2014': '-', '\u2015': '-', '\u2212': '-', '\u00a0': ' ',
+                              '\u2026': '...'})
+
+
+def normalise(text):
+    text = unicodedata.normalize('NFKC', str(text or '')).translate(_PUNCTUATION).casefold()
+    return ' '.join(text.split())
+
+
+def supported(evidence, body):
+    """Exact after normalisation, or a close match over a same-length window.
+
+    Models re-type quotes, dashes and the odd word while copying a passage;
+    that is still the article's claim. A paraphrase is not.
+    """
+    evidence = normalise(evidence)
+    if len(evidence) < 15:
+        return False
+    if evidence in body:
+        return True
+    needle = evidence.split()
+    words = body.split()
+    size = len(needle)
+    if size < 3 or size > len(words):
+        return False
+    for start in range(len(words) - size + 1):
+        window = ' '.join(words[start:start + size])
+        matcher = SequenceMatcher(None, evidence, window, autojunk=False)
+        if matcher.real_quick_ratio() >= .9 and matcher.quick_ratio() >= .9 and matcher.ratio() >= .9:
+            return True
+    return False
 
 
 def write(context):
     article = context.get('article') or {}
-    hosts = list(config.personas()) or ['mav', 'rue']
+    persona_map = personas()
+    hosts = list(persona_map) or ['mav', 'rue']
     reference = {key: article.get(key, '') for key in ('title', 'source', 'url', 'published')}
     reference['kind'] = 'article'
     rules = """
@@ -40,19 +79,26 @@ Still attribute disputed or consequential claims within your lines. Avoid
 phrases like 'that's real', 'confirmed fact', or 'Google says' without source
 qualification. Never imply that you checked another source yourself.
 """
-    payload = llm.complete_json(system_prompt() + '\n' + OPTIONAL_COMEDY_REFERENCE + rules,
-        json.dumps({'today': time.strftime('%Y-%m-%d'), 'article': article}, ensure_ascii=False),
-        max_tokens=800, temperature=.1, timeout=20, purpose='article')
+    warnings = [str(w) for w in (article.get('warnings') or [])][:3]
+    if warnings:
+        # Station-side checks guide the writer; they are not read out verbatim.
+        rules += ('\nSTATION EDITORIAL WARNINGS about this article (guidance for you, '
+                  'not lines to read aloud; reflect them naturally in the lines):\n'
+                  + '\n'.join('- ' + w for w in warnings) + '\n')
+    source = {key: value for key, value in article.items() if key != 'warnings'}
+    payload = llm.complete_json(system_prompt(persona_map) + '\n' + OPTIONAL_COMEDY_REFERENCE + rules,
+        json.dumps({'today': time.strftime('%Y-%m-%d'), 'article': source}, ensure_ascii=False),
+        max_tokens=800, temperature=.1, timeout=20, purpose='article', json_object=True)
     entries = payload.get('lines', []) if isinstance(payload, dict) else []
-    body = ' '.join(str(article.get('text', '')).lower().split())
-    supported = []
+    body = normalise(article.get('text', ''))
+    kept = []
     for entry in entries[:3] if isinstance(entries, list) else []:
         if not isinstance(entry, dict):
             continue
-        evidence = ' '.join(str(entry.get('evidence', '')).lower().split())
-        if evidence == 'reaction' or (len(evidence) >= 15 and evidence in body):
-            supported.append(entry)
-    lines = parse(supported)
+        evidence = normalise(entry.get('evidence', ''))
+        if evidence == 'reaction' or supported(evidence, body):
+            kept.append(entry)
+    lines = parse(kept, persona_map)
     # Keep the broadcast a summary, even if the writer ignores the brief.
     if sum(len(line.text.split()) for line in lines) > 150:
         lines = lines[:3]
@@ -65,8 +111,6 @@ qualification. Never imply that you checked another source yourself.
                         if publisher and publisher != 'Pasted article' else
                         'This comes from the article you sent. We have not independently verified its claims.')
         lines.insert(0, Line(hosts[0], introduction))
-        if article.get('warnings'):
-            lines.insert(1, Line(hosts[-1], str(article['warnings'][0])))
     # Detect wholesale copying, rather than silently broadcasting the supplied text.
     original = ' '.join(str(article.get('text', '')).lower().split())
     spoken = ' '.join(line.text.lower() for line in lines).split()

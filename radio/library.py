@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -31,6 +32,10 @@ from typing import Any
 from . import analysis, config, db, sourceio, structure, versions
 
 AUDIO_DIR = config.CACHE_DIR / "audio"
+# Work in progress: downloads (.raw_*) and renders (.tmp_*). Never evicted as
+# cache and never served; the janitor sweeps up what a crash leaves behind.
+RAW_PREFIX = ".raw_"
+STAGING_PREFIX = ".tmp_"
 _RESOLVE_LOCK = threading.Lock()
 _INFLIGHT: dict[str, threading.Event] = {}
 
@@ -478,15 +483,34 @@ def _render(source: Path, target: Path, gain_db: float,
     # gain already ceiling-limited it should almost never engage.
     chain = f"volume={gain_db:.2f}dB,alimiter=limit=0.97:level=disabled"
 
-    result = _ffmpeg([
-        "-i", str(source), "-vn", "-map_metadata", "-1",
-        "-af", chain, "-ar", str(rate), "-ac", "2",
-        *codec, str(target),
-    ])
-    if result.returncode != 0:
-        _log("render failed", result.stderr[-500:])
-        return False
-    return target.exists() and target.stat().st_size > 1024
+    # Render beside the target and publish with one rename. A render that is
+    # killed, times out or fails leaves no half-written file under the final
+    # name for a cache check (or a deck) to mistake for the finished record.
+    # The extension stays last so ffmpeg still picks the container from it.
+    staging = target.with_name(f"{STAGING_PREFIX}{uuid.uuid4().hex[:12]}_{target.name}")
+    try:
+        try:
+            result = _ffmpeg([
+                "-i", str(source), "-vn", "-map_metadata", "-1",
+                "-af", chain, "-ar", str(rate), "-ac", "2",
+                *codec, str(staging),
+            ])
+        except subprocess.TimeoutExpired:
+            _log("render timed out", target.name)
+            return False
+        if result.returncode != 0:
+            _log("render failed", result.stderr[-500:])
+            return False
+        if not staging.is_file() or staging.stat().st_size <= 1024:
+            return False
+        try:
+            os.replace(staging, target)
+        except OSError as error:  # a reader holding the old file open (Windows)
+            _log("could not publish render", target.name, error)
+            return False
+        return True
+    finally:
+        staging.unlink(missing_ok=True)
 
 
 _FRAME = re.compile(r"t:\s*([\d.]+).*?\sS:\s*(-?[\d.]+|-inf)")
@@ -530,7 +554,29 @@ def measure(path: Path) -> dict[str, Any]:
         "integrated": _last(_INTEGRATED, -23.0),
         "true_peak": _last(_TRUE_PEAK, -1.0),
         "samples": samples,
+        "duration": _decoded_seconds(stderr),
     }
+
+
+_PROGRESS = re.compile(r"time=(\d+):(\d\d):(\d\d(?:\.\d+)?)")
+_HEADER_DURATION = re.compile(r"Duration:\s*(\d+):(\d\d):(\d\d(?:\.\d+)?)")
+
+
+def _decoded_seconds(stderr: str) -> float:
+    """How much audio the pass just decoded, from ffmpeg's own report.
+
+    The final progress line counts what was actually decoded, which is the
+    number we want; the container header is the fallback. 0.0 when neither
+    is there, and the caller probes instead.
+    """
+    for pattern in (_PROGRESS, _HEADER_DURATION):
+        found = pattern.findall(stderr or "")
+        if found:
+            hours, minutes, seconds = found[-1]
+            value = int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+            if value > 0:
+                return value
+    return 0.0
 
 
 def shape(samples: list[tuple[float, float]], duration: float) -> dict[str, float]:
@@ -562,6 +608,29 @@ def gain_for(integrated: float, true_peak: float) -> float:
     return max(-24.0, min(wanted, headroom, 24.0))
 
 
+def trim_db(track: Any) -> float:
+    """Gain a player should add so this track airs at the target loudness.
+
+    Cached downloads were rendered at the target already: 0. Local files play
+    as they are on disk, so they get the same ceiling-limited gain a render
+    would have baked in. Without a measured peak, only ever turn one down.
+    """
+    if db.field(track, "source") != "local":
+        return 0.0
+    lufs = db.field(track, "lufs")
+    if lufs is None:
+        return 0.0
+    try:
+        lufs = float(lufs)
+        peak = db.field(track, "true_peak")
+        if peak is None:
+            target = float(config.station.get("audio.target_lufs", -14.0) or -14.0)
+            return round(max(-24.0, min(0.0, target - lufs)), 2)
+        return round(gain_for(lufs, float(peak)), 2)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _sustained_crossing(samples: list[tuple[float, float]], threshold: float,
                         hold: float) -> float | None:
     """First moment loudness goes above `threshold` and stays for `hold` sec."""
@@ -587,7 +656,7 @@ def _last_crossing(samples: list[tuple[float, float]], threshold: float) -> floa
 def _probe_duration(path: Path) -> float:
     try:
         result = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+            [config.FFPROBE, "-v", "error", "-show_entries", "format=duration",
              "-of", "json", str(path)],
             capture_output=True, text=True, timeout=30,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -604,6 +673,20 @@ def _cache_path(video_id: str) -> Path:
     fmt = str(config.station.get("cache.format", "opus") or "opus")
     digest = hashlib.sha1(video_id.encode()).hexdigest()[:16]
     return AUDIO_DIR / f"{digest}.{fmt}"
+
+
+TONAL_FIELDS = ("bpm", "bpm_confidence", "key_tonic", "key_mode", "key_confidence",
+                "camelot", "beat_offset", "beat_period", "beat_residual_ms", "downbeat_offset")
+
+
+def _mark_used(key: str) -> None:
+    """Note that this file was just prepared. Eviction orders by it.
+
+    Recorded in the database rather than by touching the file: the file's
+    mtime is part of the waveform, structure and stem cache identities, and
+    bumping it would throw all three away.
+    """
+    db.write("UPDATE tracks SET cache_used_at=? WHERE key=?", (time.time(), key))
 
 
 def ensure(track: dict[str, Any]) -> dict[str, Any] | None:
@@ -630,11 +713,13 @@ def ensure(track: dict[str, Any]) -> dict[str, Any] | None:
             return None
         ready = dict(row)
         ready["structure"] = structure.profile_for(ready)
+        _mark_used(key)
         return ready
 
     try:
         ready = _ensure_locked(track)
         if ready and ready.get("file"):
+            _mark_used(key)
             # This prefetch worker is the only place that decodes for cue
             # analysis; timeline construction reads the prepared cache only.
             ready["structure"] = structure.profile(ready["file"])
@@ -742,47 +827,79 @@ def _ensure_locked(track: dict[str, Any]) -> dict[str, Any] | None:
 
     final = _cache_path(video_id)
     measured: dict[str, Any] | None = None
-    if raw and raw != final and final.exists():
-        raw.unlink(missing_ok=True)
+    gain: float | None = None
+    try:
+        if not final.exists():
+            if not raw:
+                return None
 
-    if not final.exists():
-        if not raw:
-            return None
+            # Measure the source, then apply one gain. Analysing the raw file
+            # also gets us the shape for free -- a linear gain does not move it.
+            measured = measure(raw)
+            gain = gain_for(measured["integrated"], measured["true_peak"])
+            if not _render(raw, final, gain):
+                return None
+            _log(f"normalised {measured['integrated']:.1f} LUFS "
+                 f"-> {measured['integrated'] + gain:.1f} ({gain:+.1f} dB)")
+    finally:
+        # The download is only ever a means to the render. Gone on success,
+        # failure and timeout alike, so a crash-free run leaves no staging.
+        if raw and raw != final:
+            try:
+                raw.unlink(missing_ok=True)
+            except OSError:
+                pass
 
-        # Measure the source, then apply one gain. Analysing the raw file also
-        # gets us the shape for free -- a linear gain does not move it.
-        measured = measure(raw)
-        gain = gain_for(measured["integrated"], measured["true_peak"])
-        ok = _render(raw, final, gain)
-        try:
-            raw.unlink()
-        except OSError:
-            pass
-        if not ok:
-            return None
-        _log(f"normalised {measured['integrated']:.1f} LUFS "
-             f"-> {measured['integrated'] + gain:.1f} ({gain:+.1f} dB)")
+    # The same recording this row already describes: what was measured and
+    # analysed last time still holds, and decoding it again buys nothing.
+    known = dict(existing) if existing and existing["video_id"] == video_id else {}
+    reuse_shape = measured is None and all(
+        known.get(name) is not None for name in ("duration", "intro_sec", "outro_sec", "lufs"))
+    reuse_tonal = bool(known.get("bpm"))
 
-    if measured is None:  # cache hit on the audio, but no stored shape
-        measured = measure(final)
-
-    duration = _probe_duration(final)
-    stats = shape(measured["samples"], duration)
+    if reuse_shape:
+        duration = float(known["duration"])
+        stats = {"intro_sec": known["intro_sec"], "outro_sec": known["outro_sec"]}
+        levels = {name: known.get(name) for name in
+                  ("lufs", "source_lufs", "applied_gain_db", "true_peak")}
+    else:
+        if measured is None:  # cache hit on the audio, but no stored shape
+            measured = measure(final)
+        duration = float(measured.get("duration") or 0) or _probe_duration(final)
+        stats = shape(measured["samples"], duration)
+        if gain is not None:
+            # Fresh render: lufs is what now plays, the rest is provenance.
+            levels = {"lufs": measured["integrated"] + gain,
+                      "source_lufs": measured["integrated"],
+                      "applied_gain_db": gain,
+                      "true_peak": measured["true_peak"] + gain}
+        else:
+            # Measured off the cached render itself, so it already is the
+            # playing level; where it came from is only known if we kept it.
+            levels = {"lufs": measured["integrated"],
+                      "source_lufs": known.get("source_lufs"),
+                      "applied_gain_db": known.get("applied_gain_db"),
+                      "true_peak": measured["true_peak"]}
 
     # Tempo and key, so the director can pick a transition that suits the two
     # records rather than always reaching for the same crossfade.
-    tonal = analysis.profile(final)
+    if reuse_tonal:
+        tonal = {name: known.get(name) for name in TONAL_FIELDS}
+    else:
+        tonal = analysis.profile(final)
 
     db.write(
         "UPDATE tracks SET blocked=0, file=?, duration=?, intro_sec=?, outro_sec=?, "
-        "lufs=?, bpm=?, bpm_confidence=?, key_tonic=?, key_mode=?, "
+        "lufs=?, source_lufs=?, applied_gain_db=?, true_peak=?, "
+        "bpm=?, bpm_confidence=?, key_tonic=?, key_mode=?, "
         "key_confidence=?, camelot=?, beat_offset=?, beat_period=?, "
-        "beat_residual_ms=?, downbeat_offset=? WHERE key=?",
+        "beat_residual_ms=?, downbeat_offset=?, cache_used_at=? WHERE key=?",
         (str(final), duration, stats["intro_sec"], stats["outro_sec"],
-         measured["integrated"], tonal["bpm"], tonal["bpm_confidence"],
+         levels["lufs"], levels["source_lufs"], levels["applied_gain_db"], levels["true_peak"],
+         tonal["bpm"], tonal["bpm_confidence"],
          tonal["key_tonic"], tonal["key_mode"], tonal["key_confidence"],
          tonal["camelot"], tonal["beat_offset"], tonal["beat_period"],
-         tonal["beat_residual_ms"], tonal["downbeat_offset"], key),
+         tonal["beat_residual_ms"], tonal["downbeat_offset"], time.time(), key),
     )
     _log("ready", track["artist"], "-", track["title"],
          f"{duration:.0f}s intro={stats['intro_sec']:.1f}s "
@@ -795,31 +912,65 @@ def _ensure_locked(track: dict[str, Any]) -> dict[str, Any] | None:
 # --------------------------------------------------------------------------
 # Cache housekeeping
 # --------------------------------------------------------------------------
+def _same_file_key(path: Path | str) -> str:
+    return os.path.normcase(str(Path(path).resolve()))
+
+
 def evict(protect: set[str] | None = None) -> int:
-    """Enforce the cache budget. Returns bytes freed."""
-    protect = {str(Path(p)) for p in (protect or set())}
-    protect.update(row['file'] for row in db.query(
+    """Enforce the cache budget. Returns bytes freed.
+
+    `protect` is every file the station still means to play: scheduled,
+    queued, or being built right now. Those are never deleted, whatever the
+    mode. Everything else goes least recently used first, where "used" is the
+    later of its last airing and its last preparation (file mtime when the
+    database knows neither).
+    """
+    protect = {_same_file_key(p) for p in (protect or set()) if p}
+    protect.update(_same_file_key(row['file']) for row in db.query(
         "SELECT file FROM tracks WHERE source='local' AND file IS NOT NULL"))
     mode = str(config.station.get("cache.mode", "lru") or "lru")
     max_age = float(config.station.get("cache.max_age_hours", 168) or 0) * 3600
     budget = float(config.station.get("cache.max_size_gb", 6.0) or 0) * 1024**3
+    # A file prepared moments ago may not have reached the queue yet; the
+    # feeder holds it between ensure() and enqueue. Leave it alone a while.
+    grace = float(config.station.get("cache.fresh_grace_minutes", 15) or 0) * 60
 
-    files = [p for p in AUDIO_DIR.glob("*") if p.is_file()
-             and not p.name.startswith(".raw_")]
-    files.sort(key=lambda p: p.stat().st_atime)
+    used: dict[str, float] = {}
+    for row in db.query("SELECT file, last_played, cache_used_at FROM tracks "
+                        "WHERE file IS NOT NULL"):
+        stamp = max(row["last_played"] or 0, row["cache_used_at"] or 0)
+        if stamp:
+            key = _same_file_key(row["file"])
+            used[key] = max(used.get(key, 0), float(stamp))
+
+    entries = []
+    for path in AUDIO_DIR.glob("*"):
+        if path.name.startswith((RAW_PREFIX, STAGING_PREFIX)):
+            continue
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        if not path.is_file():
+            continue
+        entries.append((max(used.get(_same_file_key(path), 0), stat.st_mtime),
+                        stat.st_size, path))
+    entries.sort(key=lambda entry: entry[0])
 
     freed = 0
     now = time.time()
-    total = sum(p.stat().st_size for p in files)
+    total = sum(size for _, size, _ in entries)
 
-    for path in files:
-        if str(path) in protect:
+    for last_used, size, path in entries:
+        if _same_file_key(path) in protect:
             continue
-        too_old = max_age and (now - path.stat().st_mtime) > max_age
+        idle = now - last_used
+        if grace and idle < grace:
+            continue
+        too_old = max_age and idle > max_age
         over_budget = budget and total > budget
         if not (too_old or over_budget or mode == "ephemeral"):
             continue
-        size = path.stat().st_size
         try:
             path.unlink()
         except OSError:
@@ -828,6 +979,22 @@ def evict(protect: set[str] | None = None) -> int:
         total -= size
         freed += size
     return freed
+
+
+def sweep_staging(max_age_hours: float = 1.0) -> int:
+    """Delete download and render leftovers a crash or kill left behind."""
+    removed = 0
+    cutoff = time.time() - max_age_hours * 3600
+    for path in AUDIO_DIR.glob("*"):
+        if not path.name.startswith((RAW_PREFIX, STAGING_PREFIX)):
+            continue
+        try:
+            if path.is_file() and path.stat().st_mtime < cutoff:
+                path.unlink()
+                removed += 1
+        except OSError:
+            continue
+    return removed
 
 
 def purge_all() -> None:

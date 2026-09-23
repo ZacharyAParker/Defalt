@@ -33,6 +33,16 @@ hosts:
   # Set false and the hosts play it straight, like a station that believes it
   # has an audience.
   self_aware: true
+  # Running bits: premises the hosts aired are offered back as optional
+  # callbacks after this many minutes, and retired after this many uses.
+  bit_callback_gap_minutes: 20
+  bit_retire_after: 3
+  bit_max_age_days: 7
+  # The first break after this long off air may acknowledge the quiet.
+  long_gap_hours: 3
+  # Chance the next break is told, as a fact it may use, that the last mix
+  # was a flashy technique (an echo out, a spinback...). Never invented.
+  transition_note_chance: 0.3
 
   humour: >
     Sound like friends in a group chat: brief, reactive, irreverent, and
@@ -104,6 +114,10 @@ transitions:
   minimum_play_fraction: 0.65
   mid_song_cues: true
   max_entry_skip_fraction: 0.25
+  # Snap cue candidates to eight-bar phrase lines on a trusted bar grid, and
+  # prefer blends that start on a phrase of both records.
+  phrase_cues: true
+  phrase_weight: 0.3
   adaptive_eq_fx: true
   overlap_scoring: true
   vocal_collision_weight: 1.0
@@ -171,6 +185,13 @@ transitions:
   # couple of semitones and obvious.
   tempo_match: true
   tempo_match_limit: 0.06
+  # Without key lock a tempo match moves the key (about 5.9% is a semitone).
+  # A compatible pair keeps its rate inside the band that holds the key; a
+  # clashing pair may take a rate up to this much off the exact tempo match
+  # when that lands the incoming record in a compatible key.
+  key_shift_tempo_tolerance: 0.02
+  # Perceived-energy rise (0..1) that makes the picker reach for "rise".
+  rise_energy_step: 0.12
 
   # How far the filter sweeps travel.
   lpf_floor_hz: 380      # lowest a low-pass closes to
@@ -180,6 +201,27 @@ transitions:
   # longer blend, mismatched tempos get a short cut.
   long_multiplier: 1.5
   short_multiplier: 0.55
+
+  # Techniques on top of the blend: echo out, loop rolls, brakes, spinbacks,
+  # echo freezes, reverb washes, stem swaps, filter rides and hard drops.
+  # See docs/TRANSITIONS.md. 0 keeps smooth radio (the presets above only),
+  # 1 reaches for an effect most of the time. Speech always wins: a mix a
+  # host talks over falls back to its plain blend.
+  creativity: 0.5
+  # Mixes before the same technique may be picked again.
+  technique_memory: 3
+  # Switch individual techniques off. Force one with `preset:` above.
+  allow_echo_out: true
+  allow_loop_roll: true
+  allow_brake: true
+  allow_spinback: true
+  allow_echo_freeze: true
+  allow_reverb_wash: true
+  allow_stem_swap: true
+  allow_acapella_intro: true
+  allow_filter_ride: true
+  allow_silence_punch: true
+  allow_drop_swap: true
 
 # ---------------------------------------------------------------------------
 # SKIPPING
@@ -258,6 +300,19 @@ tts:
   # persona and leaving the other on edge is usually the better move.
   # If a hosted call fails, the line falls back to edge rather than vanishing.
 
+  # Per-request ceiling for one line, either engine. A model that errors or
+  # times out is skipped for a few minutes, so one outage costs one timeout.
+  timeout_seconds: 25
+
+# ---------------------------------------------------------------------------
+# WEATHER  --  optional colour for the hosts, from Open-Meteo (no API key).
+# Off until both coordinates are set. Cached for thirty minutes.
+# ---------------------------------------------------------------------------
+weather:
+  latitude: null
+  longitude: null
+  units: celsius             # celsius | fahrenheit
+
 # ---------------------------------------------------------------------------
 # THE CLOCK  --  what airs and how often.
 # A real station runs on an hour clock. So does this one.
@@ -318,6 +373,13 @@ selection:
     energy_weight: 0.3
     energy_arc_tracks: 3
     energy_step_lufs: 2.0
+    # Set-level shape from analysed perceived energy (0..1): the lookahead
+    # prefers routes near the hour's level, building a little across the
+    # songs after each host break. Easing through the small hours is built
+    # in; override any hour with energy_arc_hours, e.g. {22: 0.5, 23: 0.4}.
+    energy_arc_enabled: true
+    energy_arc_weight: 0.4
+    energy_arc_break_build: 0.04
   # How many tracks the station keeps queued and downloaded ahead of itself.
   # This is also how much queue there is to reorder, so a larger number gives
   # you more to work with at the cost of more disk held at once. Tracks you
@@ -397,6 +459,25 @@ cache:
   format: m4a
   aac_bitrate: "192k"
   opus_bitrate: "160k"
+
+  # A file prepared this recently is never evicted, whatever the mode: it
+  # may be on its way into the queue.
+  fresh_grace_minutes: 15
+  # Everything else under cache/ (radio/housekeeping.py, hourly).
+  stems_max_gb: 8.0            # separations, least recently loaded go first
+  stems_max_age_days: 60
+  artwork_max_age_days: 90
+  analysis_max_age_days: 30    # waveform/structure files for audio no longer known
+  # Old bookkeeping rows (finished requests and wishes, aired log, discovery
+  # attempts). Listening history itself is never pruned.
+  history_retention_days: 180
+
+# Missing year, album and genre filled in from the Spotify catalogue, a few
+# tracks at a time. Only ever fills blanks; your own tags always win.
+enrichment:
+  enabled: true
+  batch: 12
+  interval_minutes: 5
 
 downloader:
   # yt_dlp runs locally (default). metube hands the job to your MeTube
@@ -498,3 +579,10 @@ director_backend:
   timeout_seconds: 25        # reserves time for the fallback within each request
   memory_vault: ""           # optional curated Obsidian vault; read-only
   executable: ""             # optional CLI path; otherwise discovered locally
+
+# Listening away from home (docs/REMOTE.md). Only matters when .env names a
+# REMOTE_TUNNEL and Cloudflare Access is configured; the tunnel then runs
+# while the radio does.
+remote:
+  enabled: true              # run the tunnel while the radio is on
+  mute_local: false          # silence the PC's speakers while someone streams

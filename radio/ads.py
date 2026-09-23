@@ -67,7 +67,9 @@ class AdBreaks:
                                                 recent_host_lines=list(getattr(s, "_recent_host_lines", []))[-16:])
                 context['ad_brief']=self.request.get('brief','')
                 context['ad_news_category']=self.request.get('news_category','')
-            lines = writers.game_ad(context)
+            # One persona snapshot for the whole ad, as compose() does for breaks.
+            with writers.base.session(config.personas()):
+                lines = writers.game_ad(context)
             if not lines:
                 raise ValueError("No ad material is available. Enable house ads or add a game to the watchlist.")
             voices = s._render(lines)

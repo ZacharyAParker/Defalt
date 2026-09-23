@@ -12,20 +12,29 @@ use std::sync::mpsc;
 use std::sync::Arc;
 
 mod airtime;
+mod app;
 mod assist;
+mod broadcast; // remote listening
 mod engine;
 mod pull;
+mod platform;
 mod process;
 mod keys;
 mod library;
+mod logfile;
+mod reports;
 mod peaks;
+mod shots;
 mod spotify;
 mod station;
+mod tunnel; // remote listening
 mod ui;
 
 use engine::{Command, Engine, DECKS};
 use library::Record;
 use peaks::Peaks;
+
+pub use platform::local_offset;
 
 /// A record being decoded, on its way to a deck.
 struct Loaded {
@@ -72,10 +81,15 @@ pub struct DeckState {
     pub meter: f32,
     pub scrubbing: bool,
     pub error: Option<String>,
-    /// Loop length in beats. Drawn, not yet honoured by the engine.
+    /// Auto-loop length in beats: 1, 2, 4, 8 or 16.
     pub loop_beats: u32,
-    /// Auto-gain, from the record's measured loudness. Kept apart from the
-    /// channel fader so assist can set it without moving anything you touched.
+    /// The loop the deck is in, in seconds of record, if it is in one.
+    pub loop_range: Option<(f64, f64)>,
+    /// A loop-in point set and waiting for its loop-out.
+    pub loop_in: Option<f64>,
+    /// Auto-gain, from the record's measured loudness -- or, on a record the
+    /// station put here, the station's own trim. Kept apart from the channel
+    /// fader so neither moves anything you touched.
     pub trim: f32,
     /// Four cue points, in seconds.
     pub cues: [Option<f64>; 4],
@@ -90,6 +104,8 @@ pub struct DeckState {
     pub bend: f32,
     pub reversed: bool,
     pub key_lock: bool,
+    /// Where the station has this deck's level, for the panel.
+    pub level: f32,
 }
 
 impl DeckState {
@@ -99,6 +115,7 @@ impl DeckState {
             tone: [0.5, 0.5, 0.5, 0.0],
             loop_beats: 4,
             trim: 1.0,
+            level: 1.0,
             ..Default::default()
         }
     }
@@ -112,8 +129,12 @@ pub struct Defalt {
     root: PathBuf,
     engine: Option<Engine>,
     engine_error: Option<String>,
+    /// Remote listening: the stream server and the Cloudflare tunnel.
+    pub remote: tunnel::Remote,
 
     pub records: Vec<Record>,
+    /// The library, while it is being read on its own thread.
+    library_inbox: Option<mpsc::Receiver<Result<Vec<Record>, String>>>,
     /// The loudest the radio bus was last frame.
     pub air_peak: f32,
     pub host_levels: [f32; 2],
@@ -127,9 +148,20 @@ pub struct Defalt {
     pub master: f32,
     pub bars: u32,
     pub master_peak: [f32; 2],
+    /// When the master last went over full scale (possible with the limiter
+    /// off), for the meter to hold its warning.
+    pub over_at: Option<std::time::Instant>,
     pub underruns: u64,
+    /// Commands the engine's ring had no room for.
+    pub dropped: u64,
     pub device: String,
     pub sample_rate: u32,
+    device_restarts: u64,
+    /// The master limiter, and how hard it is working (decaying, for the eye).
+    pub limiter_on: bool,
+    pub limiter_db: f32,
+    /// Hot cues and cue jumps land on the next beat.
+    pub quantize: bool,
 
     /// Which record the load buttons act on. Picking a record and choosing a
     /// deck are separate decisions.
@@ -137,8 +169,17 @@ pub struct Defalt {
     pub show_fx: bool,
     pub show_grid: bool,
     pub show_stems: bool,
-    pub fx_manual: bool,
     pub clock: String,
+    /// The minute `clock` was last written for; the string is rebuilt only
+    /// when that changes.
+    clock_minute: i64,
+    /// The deck the crate's match column is scored against, the record on
+    /// it, and the pitch it was playing at. Held until that deck stops or
+    /// changes record, so the crate does not reshuffle as the crossfader
+    /// passes the middle.
+    match_reference: Option<(usize, String, f32)>,
+    /// The panel's own caches and control state.
+    pub view_state: ui::ViewState,
 
     /// Assist: level matching on load, and the crate ordered by what mixes.
     pub assist: bool,
@@ -168,10 +209,13 @@ pub struct Defalt {
     pub station: station::Station,
     /// The station on this console's own output, rather than in a browser.
     pub airtime: airtime::Airtime,
+    /// How far speech has the music down, for the panel.
     pub music_duck: f32,
     pub transcript_follow: bool,
     pub mix_settings_open: bool,
     pub mix_settings: serde_json::Value,
+    /// The station's settings generation the open window was filled from.
+    mix_generation: u64,
     /// Which of the two things this window is showing.
     pub view: View,
     /// The duration the catalogue gave for the chosen suggestion, which is
@@ -179,6 +223,21 @@ pub struct Defalt {
     pub pull_duration_ms: Option<u64>,
 
     load_generation: [u64; DECKS],
+    /// The record each deck's load is for, so a failure can say which.
+    loading_key: [Option<String>; DECKS],
+    /// A separation that may only come from the cache (a technique's
+    /// stems), never be made.
+    split_cached_only: [bool; DECKS],
+    /// The station's trim for a record it is loading onto a deck.
+    radio_trim: [Option<f32>; DECKS],
+    /// Sequence number of the last transport command per deck. Telemetry
+    /// older than it is from before the command, and is not believed.
+    pending_seq: [u64; DECKS],
+    /// What the engine was last told, so an unchanged value is not sent
+    /// again every frame.
+    sent_gain: [Option<f32>; DECKS],
+    sent_tone: [Option<[f32; 4]>; DECKS],
+    recoveries: u64,
     inbox: mpsc::Receiver<Delivery<Loaded>>,
     outbox: mpsc::Sender<Delivery<Loaded>>,
     #[allow(clippy::type_complexity)]
@@ -191,7 +250,8 @@ pub struct Defalt {
     >,
     last_frame: std::time::Instant,
     pub frame_ms: f32,
-    /// Seconds east of UTC, read once from the platform.
+    /// Seconds east of UTC, asked again each minute so a clock change is
+    /// noticed.
     utc_offset: i64,
 
     /// Self-portraits. `DEFALT_SHOT=<png>` in the environment takes one once
@@ -205,12 +265,16 @@ pub struct Defalt {
     pose_frame: u64,
     asked_for_shot: bool,
     pub scroll_to_selection: bool,
+    pub feedback: ui::feedback::Feedback,
+    /// Every command sent, by name, for tests that have no audio device.
+    #[cfg(test)]
+    sent_names: Vec<&'static str>,
 }
 
 impl Defalt {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         ui::theme::apply(&cc.egui_ctx);
-        Self::from_root(project_root(), true)
+        Self::from_root(platform::project_root(), true)
     }
 
     fn from_root(root: PathBuf, audio: bool) -> Self {
@@ -233,25 +297,23 @@ impl Defalt {
         // scheduled in output frames, so it needs the device's rate.
         let output_rate = engine.as_ref().map_or(48_000, |engine| engine.sample_rate);
 
-        let (records, library_error) = match library::load(&root) {
-            Ok(records) => (records, None),
-            Err(error) => (Vec::new(), Some(error)),
-        };
-
         let device = engine.as_ref().map_or_else(String::new, |e| e.device.clone());
         let sample_rate = engine.as_ref().map_or(0, |e| e.sample_rate);
 
         let catalogue = spotify::Search::new(&root);
-        let root_for_station = root.clone();
+        let port = station::port_of(&root);
+        // One connection pool for everything that talks to the station.
+        let client = station::client::Client::new(port);
         let mut app = Defalt {
-            root,
             engine,
             engine_error,
-            records,
+            remote: Default::default(),
+            records: Vec::new(),
+            library_inbox: Some(library::load_in_background(&root)),
             air_peak: 0.0,
             host_levels: [0.0; 2],
-            studio: ui::studio::Studio::new(&root_for_station),
-            library_error,
+            studio: ui::studio::Studio::new(&root),
+            library_error: None,
             search: String::new(),
             sort: (ui::Column::Artist, true),
             decks: [DeckState::new(), DeckState::new()],
@@ -259,15 +321,23 @@ impl Defalt {
             master: 0.85,
             bars: 8,
             master_peak: [0.0; 2],
+            over_at: None,
             underruns: 0,
+            dropped: 0,
             device,
             sample_rate,
+            device_restarts: 0,
+            limiter_on: true,
+            limiter_db: 0.0,
+            quantize: false,
             selected: None,
             show_fx: false,
             show_grid: false,
             show_stems: false,
-            fx_manual: true,
             clock: String::new(),
+            clock_minute: i64::MIN,
+            match_reference: None,
+            view_state: ui::ViewState::default(),
             assist: true,
             active_deck: 0,
             focus_search: false,
@@ -281,17 +351,20 @@ impl Defalt {
             pulls: Vec::new(),
             pull_query: String::new(),
             catalogue,
-            airtime: airtime::Airtime::new(
-                &root_for_station,
-                station::port_of(&root_for_station),
-                output_rate,
-            ),
-            station: station::Station::new(&root_for_station),
+            airtime: airtime::Airtime::with_client(&root, client.clone(), port, output_rate),
+            station: station::Station::with_client(&root, client),
             view: View::Console,
             pull_duration_ms: None,
             inbox,
             outbox,
             load_generation: [0; DECKS],
+            loading_key: [None, None],
+            split_cached_only: [false; DECKS],
+            radio_trim: [None; DECKS],
+            pending_seq: [0; DECKS],
+            sent_gain: [None; DECKS],
+            sent_tone: [None; DECKS],
+            recoveries: 0,
             stem_inbox,
             stem_outbox,
             last_frame: std::time::Instant::now(),
@@ -305,18 +378,61 @@ impl Defalt {
             transcript_follow: true,
             mix_settings_open: false,
             mix_settings: serde_json::Value::Null,
+            mix_generation: 0,
             pose_frame: 0,
             asked_for_shot: false,
             scroll_to_selection: false,
+            feedback: Default::default(),
+            #[cfg(test)]
+            sent_names: Vec::new(),
+            root,
         };
         app.push_gains();
         app.send(Command::Master { value: app.master });
+        // The reverb's return starts at nothing, which makes every send to it
+        // silent. A modest room, audible only where something is sent.
+        app.send(Command::Reverb { size: 0.72, damping: 0.45, predelay_seconds: 0.02, level: 0.6 });
         app
     }
 
-    fn send(&mut self, command: Command) {
-        if let Some(engine) = self.engine.as_mut() {
-            let _ = engine.send(command);
+    /// Hand the engine a command. A full ring drops it; that is counted, and
+    /// logged, because a command that silently never arrived looks exactly
+    /// like a bug in whatever sent it.
+    fn send(&mut self, command: Command) -> Option<u64> {
+        let transport = match command {
+            Command::Load { deck, .. } | Command::Play { deck } | Command::Pause { deck }
+            | Command::Seek { deck, .. } | Command::PlayAt { deck, .. }
+            | Command::SeekQuantized { deck, .. } | Command::Loop { deck, .. } => Some(deck),
+            _ => None,
+        };
+        #[cfg(test)]
+        self.sent_names.push(match &command {
+            Command::Loop { range: Some(_), .. } => "loop",
+            Command::Loop { range: None, .. } => "loop off",
+            Command::Seek { .. } => "seek",
+            Command::SeekQuantized { .. } => "seek quantized",
+            Command::Grid { .. } => "grid",
+            Command::PhaseAlign { .. } => "phase",
+            Command::Detach { .. } => "detach",
+            Command::Limiter { .. } => "limiter",
+            Command::Echo { .. } => "echo",
+            _ => "other",
+        });
+        let engine = self.engine.as_mut()?;
+        match engine.send_seq(command) {
+            Ok(seq) => {
+                if let Some(deck) = transport.filter(|d| *d < DECKS) {
+                    self.pending_seq[deck] = seq;
+                }
+                Some(seq)
+            }
+            Err(error) => {
+                self.dropped += 1;
+                if self.dropped == 1 || self.dropped % 100 == 0 {
+                    logfile::log!("engine: dropped a command ({} so far): {error}", self.dropped);
+                }
+                None
+            }
         }
     }
 
@@ -329,438 +445,8 @@ impl Defalt {
         self.engine.is_some()
     }
 
-    /// Give the schedule a turn, and perform whatever it asks for.
-    ///
-    /// Autopilot hands back a plan rather than touching anything itself, and
-    /// this is where a plan becomes deck movement. Everything it writes goes
-    /// through the same fields a hand would move, which is why the panel shows
-    /// a transition happening instead of only hearing one.
-    fn tick_airtime(&mut self) {
-        // Ticking is not only for playing: the queue and the schedule are
-        // worth following whenever the station is up, even when you are
-        // listening in a browser instead.
-        let running = self.station.running();
-        if !self.airtime.on && !self.airtime.live() && !running {
-            return;
-        }
-        let frame = match self.engine.as_ref() {
-            Some(engine) => engine.telemetry.frame(),
-            None => return,
-        };
-        let status: [airtime::DeckStatus; DECKS] = std::array::from_fn(|deck| {
-            airtime::DeckStatus {
-                loaded: self.decks[deck].record.is_some() && !self.decks[deck].loading,
-                playing: self.decks[deck].playing,
-                position: self.engine.as_ref().map(|engine| engine.telemetry.position(deck)),
-                playback_rate: 1.0 + (self.decks[deck].pitch + self.decks[deck].bend) as f64 / 100.0,
-            }
-        });
-
-        let records = std::mem::take(&mut self.records);
-        let plan = self.airtime.tick(frame, &records, status, running);
-        self.records = records;
-        self.apply_airtime_plan(plan);
-    }
-
-    fn apply_airtime_plan(&mut self, plan: airtime::Plan) {
-        for deck in plan.stop {
-            self.send(Command::Pause { deck });
-            self.send(Command::Echo { deck, mix: 0.0, feedback: 0.0, seconds: 0.25 });
-            self.decks[deck].playing = false;
-            self.load_generation[deck] = self.load_generation[deck].wrapping_add(1);
-            self.decks[deck].loading = false;
-        }
-        for (deck, record) in plan.load {
-            self.decks[deck].pitch = 0.0;
-            self.decks[deck].bend = 0.0;
-            self.apply_speed(deck);
-            if !self.decks[deck].loading && self.decks[deck].record.as_ref()
-                .is_some_and(|r| r.key == record.key && r.file == record.file) {
-                self.airtime.deck_ready(deck);
-            } else {
-                self.load(deck, record);
-            }
-        }
-        for deck in 0..DECKS {
-            if let Some(enabled) = plan.key_lock[deck] {
-                if self.decks[deck].key_lock != enabled {
-                    self.decks[deck].key_lock = enabled;
-                    self.send(Command::KeyLock { deck, enabled });
-                }
-            }
-            if let Some(rate) = plan.speed[deck] {
-                self.decks[deck].pitch = ((rate - 1.0) * 100.0) as f32;
-                self.apply_speed(deck);
-            }
-        }
-        for (deck, seconds) in plan.start {
-            self.seek_audio(deck, seconds);
-            self.send(Command::Play { deck });
-            self.decks[deck].playing = true;
-        }
-        for (item_id, key) in plan.report_started {
-            self.airtime.report_started(&item_id, &key);
-        }
-
-        let mut gains_moved = false;
-        if let Some(duck) = plan.duck {
-            if self.music_duck != duck { self.music_duck = duck; gains_moved = true; }
-        }
-        for deck in 0..DECKS {
-            if let Some([mix, feedback, seconds]) = plan.echo[deck] {
-                self.send(Command::Echo { deck, mix, feedback, seconds });
-            }
-            if let Some(mut tone) = plan.tone[deck] {
-                for (band, value) in tone.iter_mut().enumerate() {
-                    if self.airtime.held.tone[deck][band] {
-                        *value = self.decks[deck].tone[band];
-                    }
-                }
-                if self.decks[deck].tone != tone {
-                    self.decks[deck].tone = tone;
-                    self.push_tone(deck);
-                }
-            }
-            if let Some(gain) = plan.gain[deck] {
-                if self.decks[deck].gain != gain {
-                    self.decks[deck].gain = gain;
-                    gains_moved = true;
-                }
-            }
-        }
-        if let Some(crossfade) = plan.crossfade {
-            if self.crossfade != crossfade {
-                self.crossfade = crossfade;
-                gains_moved = true;
-            }
-        }
-        if gains_moved {
-            self.push_gains();
-        }
-
-        for command in plan.voice {
-            self.send(command);
-        }
-        if let Some(note) = plan.note {
-            self.say(&note);
-        }
-    }
-
-    /// You reached for something the station was driving. It is yours now.
-    ///
-    /// Only that control: taking the filter mid-transition leaves the bass
-    /// swap and the crossfader running, which is the difference between a
-    /// console you can play and a switch that says auto or manual.
-    pub fn take_over(&mut self, what: Take) {
-        match what {
-            Take::Tone(deck, _) | Take::Gain(deck) => self.touch(deck),
-            Take::Crossfade => {},
-        }
-        if !self.airtime.on { return; }
-        let held = &mut self.airtime.held;
-        let already = match what {
-            Take::Tone(deck, band) => std::mem::replace(&mut held.tone[deck][band], true),
-            Take::Gain(deck) => std::mem::replace(&mut held.gain[deck], true),
-            Take::Crossfade => std::mem::replace(&mut held.crossfade, true),
-        };
-        if !already {
-            self.say("Yours. The rest is still on autopilot.");
-        }
-    }
-
-    /// Hand everything back.
-    pub fn return_to_auto(&mut self) {
-        self.airtime.held.release();
-        self.say("Back on autopilot.");
-    }
-
     pub fn engine_error(&self) -> Option<&str> {
         self.engine_error.as_deref()
-    }
-
-    pub fn start_radio(&mut self) {
-        if let Err(error) = self.station.start() {
-            self.say(&error);
-            return;
-        }
-        self.set_radio_playback(true);
-    }
-
-    pub fn stop_radio(&mut self) {
-        self.set_radio_playback(false);
-        self.station.stop();
-    }
-
-    pub fn set_radio_playback(&mut self, on: bool) {
-        if on == self.airtime.on { return; }
-        if !on {
-            for deck in 0..DECKS {
-                if self.airtime.on_deck(deck).is_some() {
-                    self.send(Command::Pause { deck });
-                    self.decks[deck].playing = false;
-                    self.load_generation[deck] = self.load_generation[deck].wrapping_add(1);
-                    self.decks[deck].loading = false;
-                }
-            }
-            self.airtime.set_on(false);
-            self.music_duck = 1.0;
-            self.send(Command::OffAir);
-            for deck in 0..DECKS {
-                self.decks[deck].gain = 1.0;
-                self.send(Command::Echo { deck, mix: 0.0, feedback: 0.0, seconds: 0.25 });
-            }
-            self.push_gains();
-            return;
-        }
-        if !self.engine_ready() {
-            self.say("Radio needs an audio output to play through the decks.");
-            return;
-        }
-        let mut order: Vec<usize> = (0..DECKS).collect();
-        order.sort_by_key(|d| (!self.decks[*d].playing, *d));
-        let tracks: Vec<_> = order.into_iter().filter_map(|deck| {
-            let state = &self.decks[deck];
-            if state.loading { return None; }
-            let record = state.record.as_ref()?;
-            // A finished record is an opening selection, not a zero-length item.
-            let offset = if state.position < state.length - 1.0 { state.position } else { 0.0 };
-            Some(serde_json::json!({"key": record.key, "deck": deck, "offset": offset}))
-        }).collect();
-        for deck in 0..DECKS {
-            self.send(Command::Pause { deck });
-            let state = &mut self.decks[deck];
-            state.playing = false;
-            state.pitch = 0.0;
-            state.bend = 0.0;
-            state.reversed = false;
-            state.scrubbing = false;
-            state.killed = [false; 3];
-            state.tone = [0.5, 0.5, 0.5, 0.0];
-            state.gain = 0.0;
-            self.apply_speed(deck);
-            self.send(Command::Scrub { deck, rate: None });
-            for stem in 0..engine::deck::STEMS {
-                self.stem_gain[deck][stem] = 1.0;
-                self.stem_muted[deck][stem] = false;
-                self.send(Command::StemGain { deck, stem, value: 1.0 });
-                self.send(Command::StemMute { deck, stem, muted: false });
-            }
-            self.push_tone(deck);
-        }
-        self.push_gains();
-        self.airtime.start_with(serde_json::json!(tracks));
-        self.say("Setting up the opening decks and their transition.");
-    }
-
-    /// Decode off the UI thread. A five minute record takes a moment, and the
-    /// console has to keep drawing while it happens.
-    pub fn load(&mut self, deck: usize, record: Record) {
-        if deck >= DECKS {
-            return;
-        }
-        self.decks[deck].loading = true;
-        self.decks[deck].error = None;
-        self.load_generation[deck] = self.load_generation[deck].wrapping_add(1);
-        let generation = self.load_generation[deck];
-        self.splits[deck] = None;
-        self.touch(deck);
-
-        let outbox = self.outbox.clone();
-        let path = record.file.clone();
-        std::thread::spawn(move || {
-            let message = match engine::decode::load(&path) {
-                Ok(track) => {
-                    let peaks = Arc::new(peaks::analyse(&track));
-                    Ok(Loaded { deck, record, track, peaks })
-                }
-                Err(error) => Err((deck, error)),
-            };
-            let _ = outbox.send((generation, message));
-        });
-    }
-
-    fn collect_loads(&mut self) {
-        while let Ok((generation, message)) = self.inbox.try_recv() {
-            let index = match &message { Ok(loaded) => loaded.deck, Err((deck, _)) => *deck };
-            if generation != self.load_generation[index] { continue; }
-            match message {
-                Ok(loaded) => {
-                    let deck = &mut self.decks[loaded.deck];
-                    deck.length = loaded.track.seconds();
-                    deck.record = Some(loaded.record);
-                    deck.peaks = Some(loaded.peaks);
-                    deck.position = 0.0;
-                    deck.playing = false;
-                    deck.loading = false;
-                    deck.error = None;
-                    deck.cues = [None; 4];
-                    deck.killed = [false; 3];
-                    deck.bend = 0.0;
-                    deck.reversed = false;
-                    deck.scrubbing = false;
-                    // Levels matched before the record comes in, which is the
-                    // whole of assist's first job.
-                    let index_for_stems = loaded.deck;
-                    deck.trim = if self.assist {
-                        assist::trim_for(deck.record.as_ref().and_then(|r| r.lufs))
-                    } else {
-                        1.0
-                    };
-                    let index = loaded.deck;
-                    deck.sample_rate = loaded.track.sample_rate;
-                    self.separated[index_for_stems] = false;
-                    self.splits[index_for_stems] = None;
-                    self.stem_gain[index_for_stems] = [1.0; engine::deck::STEMS];
-                    self.stem_muted[index_for_stems] = [false; engine::deck::STEMS];
-                    self.send(Command::Load { deck: index, track: loaded.track });
-                    self.apply_speed(index);
-                    self.push_tone(index);
-                    self.push_gains();
-                    self.airtime.deck_ready(index);
-                }
-                Err((deck, error)) => {
-                    self.decks[deck].loading = false;
-                    self.decks[deck].error = Some(error);
-                    self.airtime.deck_failed(deck);
-                }
-            }
-        }
-    }
-
-    pub fn play_pause(&mut self, deck: usize) {
-        if self.decks[deck].record.is_none() || !self.engine_ready() {
-            return;
-        }
-        self.touch(deck);
-        self.airtime.held.tempo[deck] = true;
-        let playing = !self.decks[deck].playing;
-        self.decks[deck].playing = playing;
-        self.send(if playing { Command::Play { deck } } else { Command::Pause { deck } });
-    }
-
-    pub fn cue(&mut self, deck: usize) {
-        self.touch(deck);
-        self.airtime.held.tempo[deck] = true;
-        self.decks[deck].position = 0.0;
-        self.send(Command::Seek { deck, seconds: 0.0 });
-    }
-
-    pub fn seek(&mut self, deck: usize, seconds: f64) {
-        self.airtime.held.tempo[deck] = true;
-        self.seek_audio(deck, seconds);
-    }
-
-    fn seek_audio(&mut self, deck: usize, seconds: f64) {
-        let length = self.decks[deck].length;
-        let seconds = seconds.clamp(0.0, length);
-        self.decks[deck].position = seconds;
-        self.send(Command::Seek { deck, seconds });
-    }
-
-    pub fn set_pitch(&mut self, deck: usize, percent: f32) {
-        self.touch(deck);
-        self.airtime.held.tempo[deck] = true;
-        self.decks[deck].pitch = percent;
-        self.apply_speed(deck);
-    }
-
-    pub fn reset_tempo(&mut self, deck: usize) {
-        self.decks[deck].bend = 0.0;
-        self.set_pitch(deck, 0.0);
-        self.say("Tempo reset to the record's original speed.");
-    }
-
-    pub fn toggle_key_lock(&mut self, deck: usize) {
-        self.decks[deck].key_lock = !self.decks[deck].key_lock;
-        self.airtime.held.key_lock[deck] = true;
-        self.send(Command::KeyLock { deck, enabled: self.decks[deck].key_lock });
-    }
-
-    /// The fader plus whatever a held bend is adding.
-    fn apply_speed(&mut self, deck: usize) {
-        let percent = self.decks[deck].pitch + self.decks[deck].bend;
-        self.send(Command::Speed { deck, value: 1.0 + percent as f64 / 100.0 });
-    }
-
-    pub fn push_tone(&mut self, deck: usize) {
-        let [mut low, mut mid, mut high, sweep] = self.decks[deck].tone;
-        // A kill sits on top of the knob rather than moving it, so letting go
-        // puts the band back exactly where you had it.
-        let killed = self.decks[deck].killed;
-        if killed[0] { low = 0.0; }
-        if killed[1] { mid = 0.0; }
-        if killed[2] { high = 0.0; }
-        self.send(Command::Tone { deck, low, mid, high, sweep });
-    }
-
-    /// The channel faders and the crossfader are one number per deck by the
-    /// time the engine sees them. Equal power, so the middle is not a dip.
-    pub fn push_gains(&mut self) {
-        let a = (self.crossfade * std::f32::consts::FRAC_PI_2).cos();
-        let b = ((1.0 - self.crossfade) * std::f32::consts::FRAC_PI_2).cos();
-        let curve = [a, b];
-        for deck in 0..DECKS {
-            let value = self.decks[deck].gain * self.decks[deck].trim * curve[deck] * self.music_duck;
-            self.send(Command::Gain { deck, value });
-        }
-    }
-
-    pub fn set_master(&mut self, value: f32) {
-        self.master = value;
-        self.send(Command::Master { value });
-    }
-
-    /// Tempo only, by moving this deck's pitch until it matches the other.
-    /// Octave-aware, so a record detected at half time is matched rather than
-    /// doubled into nonsense. Phase alignment wants a grid we trust on both
-    /// records and is the next piece, not this one.
-    pub fn sync(&mut self, deck: usize) -> Result<(), String> {
-        let other = 1 - deck;
-        let mine = self.decks[deck].record.as_ref().and_then(|r| r.bpm)
-            .filter(|bpm| bpm.is_finite() && *bpm > 0.0)
-            .ok_or("this deck has no detected tempo")?;
-        let target = self.decks[other].tempo()
-            .filter(|bpm| bpm.is_finite() && *bpm > 0.0)
-            .ok_or("the other deck has no detected tempo")?;
-
-        let mut ratio = target / mine;
-        if !ratio.is_finite() || ratio <= 0.0 {
-            return Err("the detected tempos cannot be matched".into());
-        }
-        while ratio > 1.35 { ratio /= 2.0; }
-        while ratio < 0.74 { ratio *= 2.0; }
-
-        let percent = ((ratio - 1.0) * 100.0) as f32;
-        if percent.abs() > 8.0 {
-            return Err(format!("{percent:.1}% is past the end of the fader"));
-        }
-        self.set_pitch(deck, percent);
-        Ok(())
-    }
-
-    /// Halve or double a detected tempo.
-    ///
-    /// The commonest analysis error there is: a record detected at double
-    /// time mixes at half speed and every sync against it is nonsense. The
-    /// beat period moves with the tempo, or the grid would drift away from
-    /// the number beside it.
-    pub fn scale_tempo(&mut self, deck: usize, factor: f64) {
-        let Some(record) = self.decks[deck].record.as_mut() else { return };
-        if let Some(bpm) = record.bpm {
-            record.bpm = Some(bpm * factor);
-        }
-        if let Some(period) = record.beat_period {
-            record.beat_period = Some(period / factor);
-        }
-    }
-
-    /// Back to what the analysis actually found.
-    pub fn reset_grid(&mut self, deck: usize) {
-        let Some(record) = self.decks[deck].record.as_ref() else { return };
-        let key = record.key.clone();
-        if let Some(original) = self.records.iter().find(|r| r.key == key).cloned() {
-            self.decks[deck].record = Some(original);
-        }
     }
 
     /// Everything the keyboard reaches. Kept together so the bindings stay a
@@ -769,439 +455,8 @@ impl Defalt {
         self.notice = Some((message.to_string(), std::time::Instant::now()));
     }
 
-    /// Start a pull, and rescan when one finishes.
-    pub fn begin_pull(&mut self) {
-        let query = self.pull_query.trim().to_string();
-        if query.is_empty() {
-            return;
-        }
-        match pull::start(&self.root, &query, self.pull_duration_ms) {
-            Ok(job) => {
-                self.pulls.insert(0, job);
-                self.pull_query.clear();
-                self.pull_duration_ms = None;
-                self.catalogue.clear();
-            }
-            Err(error) => self.say(&error),
-        }
-    }
-
-    /// Take a suggestion: its exact name goes in the box, and its length goes
-    /// to the resolver.
-    pub fn take_suggestion(&mut self, at: usize) {
-        let Some(found) = self.catalogue.showing.get(at).cloned() else { return };
-        self.pull_query = found.query();
-        self.pull_duration_ms = Some(found.duration_ms).filter(|ms| *ms > 0);
-        self.catalogue.clear();
-    }
-
-    fn poll_pulls(&mut self) {
-        let mut arrived = false;
-        for job in self.pulls.iter_mut() {
-            let was_over = job.stage.is_over();
-            job.poll();
-            if !was_over && matches!(job.stage, pull::Stage::Done { .. }) {
-                arrived = true;
-            }
-        }
-        if arrived {
-            // The importer wrote a row; the crate has to be told.
-            self.reload_library();
-            self.say("Pulled in. It is in your music folder.");
-        }
-        // Finished jobs are worth keeping on screen for a moment, not
-        // forever: the crate is where a record lives once it has arrived.
-        self.pulls.retain(|job| {
-            !job.stage.is_over() || job.started.elapsed().as_secs() < 25
-        });
-    }
-
-    /// Take the record on a deck apart, if it is not already in pieces.
-    pub fn begin_split(&mut self, deck: usize) {
-        if self.decks[deck].loading || self.splits[deck].is_some() || self.separated[deck] {
-            return;
-        }
-        let Some(record) = self.decks[deck].record.as_ref() else {
-            self.say("Load a record first.");
-            return;
-        };
-        let file = record.file.clone();
-        match pull::separate(&self.root, deck, &file) {
-            Ok(job) => self.splits[deck] = Some(job),
-            Err(error) => self.say(&error),
-        }
-    }
-
-    pub fn splitting(&self, deck: usize) -> Option<&pull::Separation> {
-        self.splits[deck].as_ref()
-    }
-
-    pub fn set_stem_gain(&mut self, deck: usize, stem: usize, value: f32) {
-        self.stem_gain[deck][stem] = value.clamp(0.0, 1.0);
-        let value = self.stem_gain[deck][stem];
-        self.send(Command::StemGain { deck, stem, value });
-    }
-
-    pub fn toggle_stem_mute(&mut self, deck: usize, stem: usize) {
-        let muted = !self.stem_muted[deck][stem];
-        self.stem_muted[deck][stem] = muted;
-        self.send(Command::StemMute { deck, stem, muted });
-    }
-
-    fn poll_splits(&mut self) {
-        for deck in 0..DECKS {
-            let Some(job) = self.splits[deck].as_mut() else { continue };
-            job.poll();
-            match job.stage.clone() {
-                pull::Split::Done { parts, .. } => {
-                    self.splits[deck] = None;
-                    self.load_parts(deck, parts);
-                }
-                pull::Split::Failed { error } => {
-                    self.splits[deck] = None;
-                    self.say(&error);
-                }
-                pull::Split::Working { .. } => {}
-            }
-        }
-    }
-
-    /// Decode the four parts off-thread, then hand them over together.
-    ///
-    /// Together, because half a separation is worse than none: three stems
-    /// playing while the fourth is still decoding is the record with a hole
-    /// in it.
-    fn load_parts(&mut self, deck: usize, parts: pull::Parts) {
-        let outbox = self.stem_outbox.clone();
-        let generation = self.load_generation[deck];
-        std::thread::spawn(move || {
-            let mut decoded = Vec::with_capacity(engine::deck::STEMS);
-            for path in parts.in_order() {
-                match engine::decode::load(path) {
-                    Ok(track) => decoded.push(track),
-                    Err(error) => {
-                        let _ = outbox.send((generation, Err((deck, error))));
-                        return;
-                    }
-                }
-            }
-            let parts: [Arc<engine::decode::Track>; engine::deck::STEMS] =
-                decoded.try_into().map_err(|_| ()).expect("four parts");
-            let _ = outbox.send((generation, Ok((deck, Box::new(parts)))));
-        });
-    }
-
-    fn collect_stems(&mut self) {
-        while let Ok((generation, message)) = self.stem_inbox.try_recv() {
-            let deck = match &message { Ok((deck, _)) | Err((deck, _)) => *deck };
-            if generation != self.load_generation[deck] || self.decks[deck].loading { continue; }
-            match message {
-                Ok((deck, parts)) => {
-                    // A deck reads its parts at the rate it reads the record,
-                    // so parts written at another rate play sharp and drift.
-                    // Separation is meant to hand back the same audio taken
-                    // apart; anything else is not that, and is refused rather
-                    // than played a semitone and a half up.
-                    let expected = self.decks[deck].sample_rate;
-                    if let Some(part) = parts.iter().find(|p| p.sample_rate != expected) {
-                        self.separated[deck] = false;
-                        self.say(&format!(
-                            "Deck {}: the parts came back at {} Hz for a {} Hz record.                              Separate it again.",
-                            label(deck), part.sample_rate, expected));
-                        continue;
-                    }
-                    self.separated[deck] = true;
-                    self.stem_gain[deck] = [1.0; engine::deck::STEMS];
-                    self.stem_muted[deck] = [false; engine::deck::STEMS];
-                    self.send(Command::Stems { deck, parts });
-                    self.say("Separated.");
-                }
-                Err((deck, error)) => {
-                    self.separated[deck] = false;
-                    self.say(&format!("Deck {}: {error}", label(deck)));
-                }
-            }
-        }
-    }
-
-    pub fn can_pull(&self) -> bool {
-        pull::python(&self.root).is_some()
-    }
-
     pub fn touch(&mut self, deck: usize) {
         self.active_deck = deck;
-    }
-
-    /// Skip by beats where there is a grid, and by a fixed slice where there
-    /// is not -- a key that does nothing on an unanalysed record reads as
-    /// broken rather than as unavailable.
-    pub fn skip(&mut self, deck: usize, beats: f64) {
-        let period = self.decks[deck]
-            .record
-            .as_ref()
-            .and_then(|r| r.beat_period)
-            .filter(|p| *p > 0.02);
-        let by = match period {
-            Some(period) => beats * period / (1.0 + self.decks[deck].pitch as f64 / 100.0),
-            None => beats.signum() * keys::SKIP_FALLBACK,
-        };
-        let to = self.decks[deck].position + by;
-        self.seek(deck, to);
-        self.touch(deck);
-    }
-
-    pub fn set_cue(&mut self, deck: usize, slot: usize) {
-        if self.decks[deck].record.is_none() || slot >= 4 {
-            return;
-        }
-        let at = self.decks[deck].position;
-        self.decks[deck].cues[slot] = Some(at);
-        self.say(&format!("Deck {} cue {} set", label(deck), slot + 1));
-        self.touch(deck);
-    }
-
-    pub fn jump_to_cue(&mut self, deck: usize, slot: usize) {
-        let Some(at) = self.decks[deck].cues.get(slot).copied().flatten() else {
-            // An unset cue is not an error, but silence would look like one.
-            self.say(&format!("Deck {} cue {} is not set", label(deck), slot + 1));
-            return;
-        };
-        self.seek(deck, at);
-        self.touch(deck);
-    }
-
-    /// Kill a band, or put it back exactly where it was.
-    pub fn toggle_kill(&mut self, deck: usize, band: usize) {
-        if band >= 3 {
-            return;
-        }
-        self.decks[deck].killed[band] = !self.decks[deck].killed[band];
-        self.push_tone(deck);
-        self.touch(deck);
-    }
-
-    pub fn set_bend(&mut self, deck: usize, percent: f32) {
-        if (self.decks[deck].bend - percent).abs() < f32::EPSILON {
-            return;
-        }
-        self.decks[deck].bend = percent;
-        self.airtime.held.tempo[deck] = true;
-        self.apply_speed(deck);
-    }
-
-    pub fn toggle_reverse(&mut self, deck: usize) {
-        if self.decks[deck].record.is_none() {
-            return;
-        }
-        self.decks[deck].reversed = !self.decks[deck].reversed;
-        self.airtime.held.tempo[deck] = true;
-        let reversed = self.decks[deck].reversed;
-        // Reverse is a scrub rate, which is the same machinery a hand on the
-        // platter uses -- there is no second way to run a record backwards.
-        let rate = reversed.then(|| -(1.0 + self.decks[deck].pitch as f64 / 100.0));
-        self.send(Command::Scrub { deck, rate });
-        self.touch(deck);
-    }
-
-    pub fn nudge_crossfade(&mut self, direction: f32) {
-        let next = (self.crossfade + direction * 0.02).clamp(0.0, 1.0);
-        self.set_crossfade(next);
-    }
-
-    pub fn set_crossfade(&mut self, value: f32) {
-        self.crossfade = value.clamp(0.0, 1.0);
-        self.push_gains();
-    }
-
-    pub fn move_selection(&mut self, by: i32) {
-        let rows = ui::filtered(self);
-        if rows.is_empty() {
-            return;
-        }
-        let at = self
-            .selected
-            .and_then(|index| rows.iter().position(|r| *r == index))
-            .map_or(0, |position| {
-                (position as i32 + by).rem_euclid(rows.len() as i32) as usize
-            });
-        self.selected = Some(rows[at]);
-        self.scroll_to_selection = true;
-    }
-
-    pub fn load_selected(&mut self, deck: usize) {
-        let Some(index) = self.selected else {
-            self.say("Nothing selected in the crate");
-            return;
-        };
-        if let Some(record) = self.records.get(index).cloned() {
-            self.load(deck, record);
-            self.touch(deck);
-        }
-    }
-
-    /// How well every record follows what is playing, for the crate.
-    ///
-    /// The reference deck is whichever one is playing; with both going it is
-    /// the one you are mixing *out of*, which is the one the next record has
-    /// to follow.
-    pub fn reference_deck(&self) -> Option<usize> {
-        let playing: Vec<usize> = (0..DECKS)
-            .filter(|d| self.decks[*d].playing && self.decks[*d].record.is_some())
-            .collect();
-        match playing.as_slice() {
-            [only] => Some(*only),
-            // Both going: the one the crossfader is favouring is the one on
-            // air, so the next record follows it.
-            [a, b] => Some(if self.crossfade <= 0.5 { *a } else { *b }),
-            _ => (0..DECKS).find(|d| self.decks[*d].record.is_some()),
-        }
-    }
-
-    pub fn fit_for(&self, index: usize) -> Option<assist::Fit> {
-        let deck = self.reference_deck()?;
-        let playing = self.decks[deck].record.as_ref()?;
-        let candidate = self.records.get(index)?;
-        if playing.key == candidate.key {
-            return None;
-        }
-        Some(assist::fit(playing, self.decks[deck].pitch, candidate))
-    }
-
-    pub fn scrub(&mut self, deck: usize, rate: Option<f64>) {
-        self.touch(deck);
-        self.airtime.held.tempo[deck] = true;
-        self.decks[deck].scrubbing = rate.is_some();
-        self.send(Command::Scrub { deck, rate });
-    }
-
-    /// Seconds of record across the beat view, from this deck's own tempo, so
-    /// one zoom setting means the same number of bars on both decks even when
-    /// they are running at different speeds.
-    pub fn window_seconds(&self, deck: usize) -> f64 {
-        let bpm = self.decks[deck].tempo().unwrap_or(120.0).max(20.0);
-        self.bars as f64 * 4.0 * (60.0 / bpm)
-    }
-
-    pub fn reload_library(&mut self) {
-        let selected_key = self.selected.and_then(|i| self.records.get(i)).map(|r| r.key.clone());
-        match library::load(&self.root) {
-            Ok(records) => {
-                self.records = records;
-                self.selected = selected_key.and_then(|key| self.records.iter().position(|r| r.key == key));
-                self.library_error = None;
-            }
-            Err(error) => self.library_error = Some(error),
-        }
-    }
-
-    fn screenshots(&mut self, ctx: &egui::Context) {
-        self.frames += 1;
-
-        // Capture the real local library without starting playback, network
-        // searches, stem separation, or a station just to take a screenshot.
-        let posing = self.shot_on_launch.is_some();
-        if posing && self.frames == 5 {
-            if std::env::var_os("DEFALT_SHOT_EMPTY").is_none() {
-                for deck in 0..self.records.len().min(2) {
-                    self.load(deck, self.records[deck].clone());
-                }
-            }
-            if std::env::var_os("DEFALT_SHOT_RADIO").is_some() { self.view = View::Radio; }
-            if let Ok(pose) = std::env::var("DEFALT_SHOT_STUDIO") {
-                self.view = View::Radio;
-                self.studio.pose(&pose);
-            }
-            if std::env::var_os("DEFALT_SHOT_SPECTRUM").is_some() {
-                self.view = View::Radio;
-                self.studio.visualizer = true;
-                self.studio.spectrum.pose();
-            }
-            if std::env::var_os("DEFALT_SHOT_CHAT").is_some() {
-                self.view = View::Radio;
-                self.airtime.chat.open = true;
-                self.airtime.chat.preview = true;
-                if let Some(path)=std::env::var_os("DEFALT_SHOT_CHAT_DRAFT") {
-                    self.airtime.chat.draft=std::fs::read_to_string(path).unwrap_or_default();
-                }
-                self.airtime.chat.state = serde_json::json!({"messages":[
-                    {"role":"user","text":"Keep this energy, but less rap."},
-                    {"role":"director","text":"For this session: mellow soul and funk. This starts with unprepared automatic picks; current songs, prepared transitions and your requests stay in place."},
-                    {"role":"user","text":"Less talking for twenty minutes."},
-                    {"role":"director","text":"Fewer automatic host breaks for 20 minutes. Already prepared speech and explicitly requested segments still play."}],
-                    "direction":{"description":"Mellow soul and funk"},"quiet_minutes":20,"busy":false});
-            }
-            if let Ok(page) = std::env::var("DEFALT_SHOT_INFO") {
-                self.info_page = ui::about::Page::from_name(&page);
-            }
-            if std::env::var_os("DEFALT_SHOT_ARTICLE").is_some() {
-                self.airtime.request_is_article = true;
-                self.airtime.article = "https://www.mindstudio.ai/blog/gemini-4-release-date-rumors".into();
-                self.view = View::Radio;
-            }
-            if let Some(path) = std::env::var_os("DEFALT_SHOT_STATUS") {
-                if let Ok(body) = std::fs::read(path).ok().and_then(|s| serde_json::from_slice(&s).ok()).ok_or(()) {
-                    let status = station::on_air_from(&body);
-                    self.mix_settings = status.mix_config.clone();
-                    self.station.health = station::Health::Live(Box::new(status));
-                    self.view = View::Radio;
-                    self.mix_settings_open = std::env::var_os("DEFALT_SHOT_SETTINGS").is_some();
-                }
-            }
-            if std::env::var_os("DEFALT_SHOT_RACKS").is_some() {
-                self.show_grid = true;
-                self.show_stems = true;
-            }
-        }
-        let settled = self.decks.iter().all(|d| !d.loading);
-        if posing && settled && self.frames > 5 && !self.posed {
-            self.posed = true;
-            self.pose_frame = self.frames;
-            for deck in 0..2 { self.seek(deck, self.decks[deck].length * 0.25); }
-            if std::env::var_os("DEFALT_SHOT_TRANSITIONS").is_some()
-                && self.decks.iter().all(|d| d.length > 16.0) {
-                let lengths = [self.decks[0].length, self.decks[1].length];
-                self.airtime.pose_transition_pair(lengths);
-                self.seek(0, lengths[0] - 12.0);
-                self.seek(1, 0.0);
-            }
-        }
-        // A missing decoder or empty library cannot hold capture open forever.
-        let ready = posing && ((self.posed && self.frames >= self.pose_frame + 12) || self.frames >= 600);
-        let launch_shot = ready && !self.asked_for_shot;
-        if launch_shot {
-            self.asked_for_shot = true;
-        }
-        let manual = ctx.input(|i| i.key_pressed(egui::Key::F12));
-        if launch_shot || manual {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
-        }
-
-        let shots: Vec<Arc<egui::ColorImage>> = ctx.input(|i| {
-            i.events
-                .iter()
-                .filter_map(|event| match event {
-                    egui::Event::Screenshot { image, .. } => Some(image.clone()),
-                    _ => None,
-                })
-                .collect()
-        });
-
-        for image in shots {
-            let path = match self.shot_on_launch.take() {
-                Some(path) => path,
-                None => {
-                    self.shots += 1;
-                    self.root.join("target").join(format!("shot-{}.png", self.shots))
-                }
-            };
-            match save_png(&image, &path) {
-                Ok(()) => println!("screenshot: {}", path.display()),
-                Err(error) => eprintln!("screenshot failed: {error}"),
-            }
-            if std::env::var_os("DEFALT_SHOT").is_some() {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
-        }
     }
 
     /// Wall clock for the toolbar, formatted without pulling in a date crate.
@@ -1210,6 +465,14 @@ impl Defalt {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
         let local = seconds as i64 + self.utc_offset;
+        if local.div_euclid(60) == self.clock_minute {
+            return;
+        }
+        // A new minute: ask the platform again, so a daylight-saving change
+        // moves the clock with it.
+        self.utc_offset = local_offset();
+        let local = seconds as i64 + self.utc_offset;
+        self.clock_minute = local.div_euclid(60);
         let minutes = (local / 60).rem_euclid(60);
         let hours24 = (local / 3600).rem_euclid(24);
         let hours = match hours24 % 12 { 0 => 12, h => h };
@@ -1219,16 +482,37 @@ impl Defalt {
 
     fn read_telemetry(&mut self, elapsed: f32) {
         let Some(engine) = self.engine.as_ref() else { return };
-        let telemetry = &engine.telemetry;
+        let telemetry = engine.telemetry.clone();
 
         self.master_peak = telemetry.peak();
+        // Measured before the final clamp, so anything past full scale is a
+        // real over -- possible only with the limiter off.
+        if self.master_peak.iter().any(|p| *p > 1.0) {
+            self.over_at = Some(std::time::Instant::now());
+        }
+        self.limiter_db = telemetry.limiter_reduction_db().max(self.limiter_db - elapsed * 12.0).max(0.0);
         self.air_peak = telemetry.air_peak();
         self.host_levels = self.airtime.host_levels(&telemetry.voice_peaks());
         self.underruns = telemetry.underruns.load(std::sync::atomic::Ordering::Relaxed);
 
+        let restarts = telemetry.device_restarts();
+        if restarts != self.device_restarts {
+            self.device_restarts = restarts;
+            let rate = telemetry.device_rate();
+            if rate > 0 {
+                self.sample_rate = rate;
+            }
+            let khz = if rate % 1000 == 0 { format!("{}", rate / 1000) } else { format!("{:.1}", rate as f64 / 1000.0) };
+            logfile::log!("audio: device changed; reconnected at {rate} Hz");
+            self.say(&format!("Audio device changed \u{2014} reconnected at {khz} kHz"));
+        }
+
         for deck in 0..DECKS {
+            // Read the acknowledgement first: it is published after the
+            // position, so a position read after it is at least that new.
+            let fresh = telemetry.applied_seq(deck) >= self.pending_seq[deck];
             let state = &mut self.decks[deck];
-            if !state.scrubbing {
+            if !state.scrubbing && fresh {
                 state.position = telemetry.position(deck);
                 state.playing = telemetry.playing(deck);
             }
@@ -1237,12 +521,14 @@ impl Defalt {
             state.meter = telemetry.deck_peak(deck).max(state.meter - elapsed * 1.9);
 
             if state.playing && !state.scrubbing {
-                // 1.8 seconds a turn, near enough to 33rpm that muscle memory
-                // transfers from a real platter.
-                state.spin += elapsed * std::f32::consts::TAU / 1.8
-                    * (1.0 + state.pitch / 100.0);
+                state.spin = advance_spin(state.spin, elapsed, state.pitch);
             }
         }
+    }
+
+    /// Whether this deck's telemetry has caught up with the last command.
+    fn telemetry_fresh(&self, deck: usize) -> bool {
+        self.engine.as_ref().is_some_and(|engine| engine.telemetry.applied_seq(deck) >= self.pending_seq[deck])
     }
 }
 
@@ -1253,6 +539,7 @@ impl eframe::App for Defalt {
         self.last_frame = now;
         self.frame_ms = self.frame_ms * 0.9 + elapsed * 1000.0 * 0.1;
 
+        self.collect_library();
         self.collect_loads();
         self.collect_stems();
         self.poll_pulls();
@@ -1260,112 +547,88 @@ impl eframe::App for Defalt {
         self.catalogue.tick();
         self.airtime.catalogue.tick();
         if self.shot_on_launch.is_none() {
-            self.station.tick();
+            self.tick_station();
+            self.remote.tick(&self.root, self.engine.as_ref().map(|e| &e.telemetry), &self.station);
             self.tick_airtime();
         }
         self.read_telemetry(elapsed);
+        self.hold_match_reference();
         self.tick_clock();
 
         // eframe skips `ui` for minimized/occluded windows. Keep scheduling,
         // station heartbeats, and completed deck loads alive without drawing.
         // Hidden windows are throttled by eframe to one logic tick per 100 ms;
-        // the audio callback continues independently at the device sample rate.
-        ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        // the audio callback continues independently at the device sample
+        // rate, and so does every transition, which the engine performs from
+        // curves sent ahead of time. The tick only has to keep up with the
+        // schedule.
+        let radio = self.airtime.on || self.airtime.live() || self.station.running();
+        ctx.request_repaint_after(std::time::Duration::from_millis(if radio { 16 } else { 100 }));
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.screenshots(ui.ctx());
+        ui::feedback::show(self, ui.ctx());
 
         ui::draw(self, ui);
 
-        // A mixer is never idle: meters fall, platters turn, waveforms move.
-        ui.ctx().request_repaint();
+        // Links clicked anywhere on the panel open through the console's own
+        // opener, which starts the browser outside the console's job --
+        // otherwise closing Defalt would close the browser with it.
+        ui.ctx().output_mut(|output| {
+            output.commands.retain(|command| match command {
+                egui::OutputCommand::OpenUrl(open) => {
+                    process::open_url(&open.url);
+                    false
+                }
+                _ => true,
+            });
+        });
+
+        // Drawn as often as something on it is moving, and no more.
+        ui.ctx().request_repaint_after(ui::repaint_after(self, ui.ctx()));
+    }
+
+    /// Put the station away properly: its session note, its cache, its
+    /// clock. Waiting here is fine; the window is already going.
+    fn on_exit(&mut self) {
+        self.remote.stop_tunnel(); // the tunnel goes first
+        self.station.stop_blocking();
     }
 }
 
-fn save_png(image: &egui::ColorImage, path: &std::path::Path) -> Result<(), String> {
-    let [width, height] = image.size;
-    let mut rgba = Vec::with_capacity(width * height * 4);
-    for pixel in &image.pixels {
-        rgba.extend_from_slice(&pixel.to_array());
-    }
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    image::save_buffer(path, &rgba, width as u32, height as u32, image::ColorType::Rgba8)
-        .map_err(|error| error.to_string())
+/// 1.8 seconds a turn, near enough to 33rpm that muscle memory transfers
+/// from a real platter. Kept as an angle inside one turn: an f32 that only
+/// ever grows runs out of precision after a few hours of play and the strobe
+/// starts to stutter.
+pub fn advance_spin(spin: f32, elapsed: f32, pitch: f32) -> f32 {
+    (spin + elapsed * std::f32::consts::TAU / 1.8 * (1.0 + pitch / 100.0))
+        .rem_euclid(std::f32::consts::TAU)
 }
 
 fn label(deck: usize) -> &'static str {
     if deck == 0 { "A" } else { "B" }
 }
 
-/// Seconds east of UTC. Windows answers this without a date library.
-#[cfg(windows)]
-fn local_offset() -> i64 {
-    use std::mem::zeroed;
-    #[allow(non_snake_case)]
-    #[repr(C)]
-    struct TimeZoneInformation {
-        Bias: i32,
-        StandardName: [u16; 32],
-        StandardDate: [u16; 8],
-        StandardBias: i32,
-        DaylightName: [u16; 32],
-        DaylightDate: [u16; 8],
-        DaylightBias: i32,
-    }
-    extern "system" {
-        fn GetTimeZoneInformation(info: *mut TimeZoneInformation) -> u32;
-    }
-    unsafe {
-        let mut info: TimeZoneInformation = zeroed();
-        let result = GetTimeZoneInformation(&mut info);
-        // 0 unknown, 1 standard, 2 daylight; the bias is minutes *west*.
-        let extra = match result {
-            2 => info.DaylightBias,
-            _ => info.StandardBias,
-        };
-        -((info.Bias + extra) as i64) * 60
-    }
-}
-
-#[cfg(not(windows))]
-fn local_offset() -> i64 {
-    0
-}
-
-/// Walk up from the executable for the project, so a debug build run from
-/// anywhere still finds the library and the station.
-fn project_root() -> PathBuf {
-    if let Ok(exe) = std::env::current_exe() {
-        let mut dir = exe.parent().map(|p| p.to_path_buf());
-        while let Some(current) = dir {
-            if current.join("radio").join("__main__.py").is_file()
-                || current.join("cache").join("station.db").is_file()
-            {
-                return current;
-            }
-            dir = current.parent().map(|p| p.to_path_buf());
-        }
-    }
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-}
-
 fn main() -> eframe::Result<()> {
+    // Before anything is started, so everything started is contained.
+    process::contain_self();
+    logfile::init(&platform::project_root());
     let shot = std::env::var_os("DEFALT_SHOT").is_some();
     let size = std::env::var("DEFALT_SHOT_SIZE").ok().and_then(|size| {
         let (w, h) = size.split_once('x')?;
         Some([w.parse::<f32>().ok()?, h.parse::<f32>().ok()?])
-    }).filter(|size| shot && size.iter().all(|v| v.is_finite() && *v >= 720. && *v <= 4096.))
-        .unwrap_or(if std::env::var_os("DEFALT_SHOT_COMPACT").is_some() { [1180., 720.] } else { [1440., 900.] });
+    }).filter(|size| shot && size.iter().all(|v| v.is_finite() && *v >= 640. && *v <= 4096.))
+        .unwrap_or(if std::env::var_os("DEFALT_SHOT_COMPACT").is_some() { [1024., 640.] } else { [1440., 900.] });
     let viewport = egui::ViewportBuilder::default()
         .with_title("Defalt")
         .with_inner_size(size)
         .with_maximized(!shot || std::env::var_os("DEFALT_SHOT_MAXIMIZED").is_some())
-        .with_min_inner_size([1180.0, 720.0])
+        // Fits a 1080p screen at 150% scaling with the taskbar showing; the
+        // bands give up height before anything clips.
+        .with_min_inner_size([1024.0, 640.0])
         .with_decorations(false)
-        .with_icon(Arc::new(window_icon().unwrap_or_default()));
+        .with_icon(Arc::new(platform::window_icon().unwrap_or_default()));
 
     eframe::run_native(
         "Defalt",
@@ -1374,26 +637,14 @@ fn main() -> eframe::Result<()> {
     )
 }
 
-/// The window icon.
-///
-/// Decoded rather than drawn: the artwork is a real asset now, and the image
-/// crate is already here for screenshots, so this costs nothing new. The
-/// executable gets the same icon stamped into its resource table by build.rs,
-/// which is what Explorer and the taskbar read -- neither asks the running
-/// process what it would like to look like.
-fn window_icon() -> Option<egui::IconData> {
-    let bytes = include_bytes!("../icons/icon.png");
-    let image = image::load_from_memory(bytes).ok()?.into_rgba8();
-    let (width, height) = image.dimensions();
-    Some(egui::IconData { rgba: image.into_raw(), width, height })
-}
-
 #[cfg(test)]
 mod regressions {
     use super::*;
 
     fn app() -> Defalt {
-        Defalt::from_root(std::env::temp_dir().join("defalt-no-fixture"), false)
+        let mut app = Defalt::from_root(std::env::temp_dir().join("defalt-no-fixture"), false);
+        app.wait_for_library();
+        app
     }
 
     fn loaded(deck: usize, key: &str) -> Loaded {
@@ -1470,6 +721,19 @@ mod regressions {
     }
 
     #[test]
+    fn a_decoder_that_panics_is_a_failed_load_not_a_deck_loading_for_ever() {
+        let mut app = app();
+        app.start_load(0, Record { file: PathBuf::from("\u{0}not a path"), ..loaded(0, "x").record });
+        let began = std::time::Instant::now();
+        while app.decks[0].loading && began.elapsed().as_secs() < 10 {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            app.collect_loads();
+        }
+        assert!(!app.decks[0].loading);
+        assert!(app.decks[0].error.is_some());
+    }
+
+    #[test]
     fn old_stems_cannot_attach_to_a_replacement_track() {
         let mut app = app();
         app.load_generation[0] = 2;
@@ -1522,7 +786,6 @@ mod regressions {
         }
     }
 
-
     #[test]
     fn radio_reuses_preloaded_audio_and_preserves_individually_held_eq() {
         let mut app = app();
@@ -1531,12 +794,90 @@ mod regressions {
         app.decks[0].tone = [0.25, 0.5, 0.5, 0.0];
         app.airtime.held.tone[0][0] = true;
         let mut plan = airtime::Plan::default();
-        plan.load.push((0, record));
+        plan.load.push((0, record, 0.0));
         plan.tone[0] = Some([0.5, 0.1, 0.5, -0.4]);
         app.apply_airtime_plan(plan);
         assert!(!app.decks[0].loading, "preloaded record was needlessly decoded again");
         assert_eq!(app.load_generation[0], 0);
         assert_eq!(app.decks[0].tone, [0.25, 0.1, 0.5, -0.4]);
+    }
+
+    #[test]
+    fn the_stations_trim_replaces_assist_rather_than_stacking_on_it() {
+        let mut app = app();
+        let mut record = loaded(0, "loud").record;
+        record.lufs = Some(-8.0);
+        let mut plan = airtime::Plan::default();
+        plan.load.push((0, record.clone(), -6.0));
+        app.apply_airtime_plan(plan);
+        let generation = app.load_generation[0];
+        app.outbox.send((generation, Ok(Loaded { record, ..loaded(0, "loud") }))).unwrap();
+        app.collect_loads();
+        assert!((app.decks[0].trim - 10f32.powf(-6.0 / 20.0)).abs() < 1e-4,
+                "trim was {} rather than the station's -6 dB", app.decks[0].trim);
+        // Loaded by hand, assist measures it itself.
+        let mut record = loaded(0, "loud").record;
+        record.lufs = Some(-8.0);
+        app.load(0, record.clone());
+        let generation = app.load_generation[0];
+        app.outbox.send((generation, Ok(Loaded { record, ..loaded(0, "loud") }))).unwrap();
+        app.collect_loads();
+        assert!((app.decks[0].trim - assist::trim_for(Some(-8.0))).abs() < 1e-4);
+    }
+
+    #[test]
+    fn the_platter_angle_stays_inside_one_turn_after_hours_of_play() {
+        let mut spin = 0.0f32;
+        // Four hours at 60 frames a second, a little fast.
+        for _ in 0..(4 * 3600 * 60) {
+            spin = advance_spin(spin, 1.0 / 60.0, 3.0);
+        }
+        assert!((0.0..std::f32::consts::TAU).contains(&spin), "{spin}");
+        // And a frame still turns it by a frame's worth.
+        let next = advance_spin(spin, 1.0 / 60.0, 0.0);
+        let moved = (next - spin).rem_euclid(std::f32::consts::TAU);
+        assert!((moved - std::f32::consts::TAU / 1.8 / 60.0).abs() < 1e-4, "{moved}");
+    }
+
+    #[test]
+    fn the_match_reference_holds_through_a_mix() {
+        let mut app = app();
+        app.decks[0].record = Some(loaded(0, "outgoing").record);
+        app.decks[1].record = Some(loaded(1, "incoming").record);
+        app.decks[0].playing = true;
+        app.hold_match_reference();
+        assert_eq!(app.reference_deck(), Some(0));
+        // Both running, and the crossfader passes the middle: still A.
+        app.decks[1].playing = true;
+        app.crossfade = 0.9;
+        app.hold_match_reference();
+        assert_eq!(app.reference_deck(), Some(0), "the crate reshuffled mid-mix");
+        // A small tempo ride does not move the scoring tempo; a real one does.
+        app.decks[0].pitch = 0.4;
+        app.hold_match_reference();
+        assert_eq!(app.match_reference_key().unwrap().2, 0);
+        app.decks[0].pitch = 2.0;
+        app.hold_match_reference();
+        assert_eq!(app.match_reference_key().unwrap().2, 20);
+        // Once A stops, B is what the next record follows.
+        app.decks[0].playing = false;
+        app.hold_match_reference();
+        assert_eq!(app.reference_deck(), Some(1));
+    }
+
+    #[test]
+    fn a_tabbed_to_control_leaves_the_keyboard_working() {
+        let mut app = app();
+        app.decks[0].record = Some(loaded(0, "a").record);
+        let ctx = egui::Context::default();
+        // A knob has focus, not a text field.
+        ctx.memory_mut(|m| m.request_focus(egui::Id::new("some-knob")));
+        let press = |key| egui::Event::Key {
+            key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::ALT,
+        };
+        let input = egui::RawInput { events: vec![press(egui::Key::W)], ..Default::default() };
+        ctx.run_ui(input, |ui| keys::handle(&mut app, ui.ctx())).drop_without_applying_deltas();
+        assert!(app.decks[0].cues[0].is_some(), "Alt+W did nothing with a control focused");
     }
 
     #[test]
@@ -1549,5 +890,113 @@ mod regressions {
         assert_eq!(app.decks[0].pitch, 0.0);
         assert_eq!(app.decks[0].bend, 0.0);
         assert_eq!(app.decks[0].position, 42.0);
+    }
+
+    #[test]
+    fn the_keyboard_crossfader_is_yours_even_on_autopilot() {
+        let mut app = app();
+        app.airtime.set_on(true);
+        app.nudge_crossfade(1.0);
+        assert!(app.airtime.held.crossfade, "the next autopilot tick would undo the key");
+        app.toggle_kill(1, 0);
+        assert!(app.airtime.held.tone[1][0], "a kill was overwritten by the station's EQ");
+    }
+
+    #[test]
+    fn an_auto_loop_lands_on_the_grid_and_halves_and_doubles() {
+        let mut app = app();
+        app.decks[0].record = Some(Record { beat_offset: Some(0.1), ..loaded(0, "a").record });
+        app.decks[0].length = 60.0;
+        app.decks[0].position = 10.33;
+        app.auto_loop(0, 4);
+        let (start, end) = app.decks[0].loop_range.expect("no loop");
+        assert!((start - 10.1).abs() < 1e-9, "the loop did not start on a beat: {start}");
+        assert!((end - start - 2.0).abs() < 1e-9, "four beats at 120 is two seconds: {}", end - start);
+        app.halve_loop(0);
+        let (_, end) = app.decks[0].loop_range.unwrap();
+        assert!((end - 10.1 - 1.0).abs() < 1e-9);
+        assert_eq!(app.decks[0].loop_beats, 2);
+        app.double_loop(0);
+        app.double_loop(0);
+        assert_eq!(app.decks[0].loop_beats, 8);
+        app.toggle_loop(0);
+        assert!(app.decks[0].loop_range.is_none(), "the toggle did not exit the loop");
+    }
+
+    #[test]
+    fn a_manual_loop_is_in_then_out_and_quantize_snaps_both() {
+        let mut app = app();
+        app.decks[0].record = Some(loaded(0, "a").record);
+        app.decks[0].length = 60.0;
+        app.quantize = true;
+        app.decks[0].position = 4.1;
+        app.set_loop_in(0);
+        app.decks[0].position = 5.9;
+        app.set_loop_out(0);
+        assert_eq!(app.decks[0].loop_range, Some((4.0, 6.0)));
+    }
+
+    #[test]
+    fn quantize_makes_a_playing_cue_jump_wait_for_the_beat() {
+        let mut app = app();
+        app.decks[0].record = Some(loaded(0, "a").record);
+        app.decks[0].length = 60.0;
+        app.decks[0].cues[0] = Some(8.0);
+        app.decks[0].playing = true;
+        app.jump_to_cue(0, 0);
+        assert_eq!(app.sent_names.last(), Some(&"seek"));
+        app.toggle_quantize();
+        app.jump_to_cue(0, 0);
+        assert_eq!(app.sent_names.last(), Some(&"seek quantized"));
+        app.sent_names.clear();
+        app.auto_loop(0, 4);
+        assert!(app.sent_names.contains(&"loop"));
+        app.exit_loop(0);
+        assert_eq!(app.sent_names.last(), Some(&"loop off"));
+    }
+
+    #[test]
+    fn sync_and_phase_give_the_engine_both_grids() {
+        let mut app = app();
+        app.decks[0].record = Some(loaded(0, "a").record);
+        app.decks[1].record = Some(loaded(1, "b").record);
+        app.sync(0).unwrap();
+        assert_eq!(app.sent_names.iter().filter(|n| **n == "grid").count(), 2);
+        assert!(app.phase_sync(0).is_err(), "phase with stopped decks");
+        app.decks[0].playing = true;
+        app.decks[1].playing = true;
+        app.phase_sync(0).unwrap();
+        assert_eq!(app.sent_names.last(), Some(&"phase"));
+        app.toggle_limiter();
+        assert_eq!(app.sent_names.last(), Some(&"limiter"));
+        assert!(!app.limiter_on);
+    }
+
+    #[test]
+    fn off_air_makes_the_rack_send_its_echo_again() {
+        let mut app = app();
+        app.view_state.fx[1] = ui::racks::Echo::sent_for_test([0.3, 0.3, 0.5]);
+        let mut plan = airtime::Plan::default();
+        plan.voice.push(Command::OffAir);
+        app.apply_airtime_plan(plan);
+        assert!(app.view_state.fx[1].last_sent().is_none(), "the rack still thinks its echo is on the deck");
+    }
+
+    #[test]
+    fn a_finished_freeze_is_let_down_rather_than_left_ringing() {
+        let mut app = app();
+        app.sent_names.clear();
+        app.restore_lane(0, engine::Lane::EchoFeedback);
+        assert!(app.sent_names.contains(&"echo"), "the echo was left as the transition had it");
+    }
+
+    #[test]
+    fn a_manual_load_takes_a_deck_back_from_the_station() {
+        let mut app = app();
+        app.airtime.set_on(true);
+        app.airtime.pose_transition_pair([100.0, 100.0]);
+        assert!(app.airtime.on_deck(1).is_some());
+        app.load(1, loaded(1, "mine").record);
+        assert!(app.airtime.on_deck(1).is_none(), "the station still thinks it has the deck");
     }
 }

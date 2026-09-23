@@ -161,9 +161,15 @@ def influence(scored):
         strength = max(0., min(1., value)) if math.isfinite(value) else .3
     except (ValueError, TypeError):
         strength = .3
+    # One boost per recording, keyed once per pass rather than per track.
+    ranked = {}
+    for item in chart:
+        key = db.track_key(item['artist'], item['title'])
+        if key not in ranked or item['rank'] < ranked[key]['rank']:
+            ranked[key] = item
     result = []
     for weight, track in scored:
-        evidence = match(track, chart)
+        evidence = ranked.get(db.track_key(track.get('artist'), track.get('title'))) if ranked else None
         if evidence and strength:
             multiplier = 1 + strength * (1 - (evidence['rank'] - 1) / 50)
             selection = {**track.get('selection', {}), 'trend': evidence,

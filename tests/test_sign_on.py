@@ -59,11 +59,23 @@ class HouseStyle(unittest.TestCase):
 
     def test_they_are_meaner_about_themselves_than_about_him(self):
         # The instruction that keeps self-deprecation funny rather than
-        # turning it into a station that insults its only listener.
+        # turning it into a station that insults its only listener -- when
+        # the listener asked for gentle teasing.
         self.assertIn(
             "meaner about themselves",
-            self.humour_with(humour="", self_aware=True),
+            self.humour_with(humour="", self_aware=True, roast_level="gentle"),
         )
+
+    def test_self_awareness_does_not_contradict_requested_roasts(self):
+        # With sharp (the default) or savage roasts on, "gentler with him than
+        # with themselves" would fight the roast rules in the same brief.
+        for level in (None, "sharp", "savage"):
+            hosts = {"humour": "", "self_aware": True}
+            if level:
+                hosts["roast_level"] = level
+            text = self.humour_with(**hosts)
+            self.assertNotIn("meaner about themselves", text)
+            self.assertIn("as hard on themselves", text)
 
     def test_they_still_do_the_show(self):
         # Self-aware is not the same as refusing to be a radio station.
