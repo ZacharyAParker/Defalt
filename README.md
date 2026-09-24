@@ -12,7 +12,7 @@ the console is Rust with egui and cpal. the radio brain is Python. it all runs
 locally on Windows, and the only way in from outside is your own tunnel if you
 set one up
 
-current release is **0.4.1**. [patch notes](CHANGELOG.md) ·
+current release is **0.4.2**. [patch notes](CHANGELOG.md) ·
 [privacy](PRIVACY.md) · [terms](TERMS.md) · [copyright](COPYRIGHT.md). those
 same pages open from the app footer without stopping the music
 
@@ -180,4 +180,4 @@ the browser studio uses WebP sprites cut from the desktop art in
 third-party audio code and its licenses are in [vendor/README.md](vendor/README.md)
 
 ---
-Defalt v0.4.1 · © 2026 Zachary Parker
+Defalt v0.4.2 · © 2026 Zachary Parker

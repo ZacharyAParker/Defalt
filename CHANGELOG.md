@@ -1,5 +1,9 @@
 # Patch notes
 
+## 0.4.2 — September 23, 2026
+
+- korean, japanese, chinese, thai, russian and other non english lyrics and titles actually show up in the console now instead of empty boxes
+
 ## 0.4.1 — September 23, 2026
 
 - the console got a djay style glow up. graphite panels, deck A is cyan and deck B is violet everywhere, real fonts, turntables that actually look like turntables, a green play and an amber CUE, and cue pads that match their markers on the waveform
@@ -172,4 +176,4 @@ Artwork is fetched and cached in the background. Studio animation does not contr
 Earlier development builds used version 0.1.0. The 0.2.0 notes collect the current release changes; they are not a claim that every feature was first written on the release date.
 
 ---
-Defalt v0.4.1 · © 2026 Zachary Parker
+Defalt v0.4.2 · © 2026 Zachary Parker

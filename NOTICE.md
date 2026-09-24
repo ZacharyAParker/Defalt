@@ -103,4 +103,4 @@ and deletion limits. See the [terms](TERMS.md), [copyright notice](COPYRIGHT.md)
 and [patch notes](CHANGELOG.md) for the rest of the release information.
 
 ---
-Defalt v0.4.1 · © 2026 Zachary Parker
+Defalt v0.4.2 · © 2026 Zachary Parker

@@ -195,11 +195,49 @@ pub fn fonts() -> FontDefinitions {
     let chain = |first: &str, rest: &[String]| {
         std::iter::once(first.to_string()).chain(rest.iter().cloned()).collect::<Vec<_>>()
     };
+    // Then whatever the system has for other scripts, so a Korean or
+    // Japanese lyric or title reads instead of turning into boxes. Loaded
+    // from the Windows font folder at startup rather than bundled.
+    let scripts = system_scripts(&mut fonts);
+    let proportional: Vec<String> = proportional.into_iter().chain(scripts.iter().cloned()).collect();
+    let monospace: Vec<String> = monospace.into_iter().chain(scripts.iter().cloned()).collect();
     fonts.families.insert(FontFamily::Proportional, chain("archivo", &proportional));
     fonts.families.insert(FontFamily::Monospace, chain("plex", &monospace));
     fonts.families.insert(FontFamily::Name(DISPLAY_FAMILY.into()), chain("archivo-title", &proportional));
     fonts.families.insert(FontFamily::Name(READOUT_FAMILY.into()), chain("plex-medium", &monospace));
     fonts
+}
+
+/// System fonts for scripts ours don't cover, in fallback order: Korean,
+/// then Microsoft YaHei for Chinese (it carries traditional characters and
+/// Japanese kana too, so separate Japanese and traditional fonts would only
+/// cost memory), Thai, Indic, Ethiopic and friends, then Segoe UI for
+/// Cyrillic, Greek, Hebrew and Arabic, and Segoe UI Symbol last. Missing
+/// files are skipped, so this is harmless off Windows or on a stripped
+/// install.
+const SYSTEM_SCRIPTS: &[(&str, &str)] = &[
+    ("malgun", "malgun.ttf"),
+    ("yahei", "msyh.ttc"),
+    ("leelawadee", "LeelawUI.ttf"),
+    ("nirmala", "Nirmala.ttc"),
+    ("ebrima", "ebrima.ttf"),
+    ("segoe-ui", "segoeui.ttf"),
+    ("segoe-symbol", "seguisym.ttf"),
+];
+
+fn system_scripts(fonts: &mut FontDefinitions) -> Vec<String> {
+    let folder = std::env::var_os("WINDIR")
+        .map(|dir| std::path::PathBuf::from(dir).join("Fonts"))
+        .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Windows\Fonts"));
+    let mut names = Vec::new();
+    for (name, file) in SYSTEM_SCRIPTS {
+        if let Ok(bytes) = std::fs::read(folder.join(file)) {
+            // A .ttc holds several faces; the first is the regular one.
+            fonts.font_data.insert((*name).into(), Arc::new(FontData::from_owned(bytes)));
+            names.push((*name).to_string());
+        }
+    }
+    names
 }
 
 pub fn apply(ctx: &Context) {
@@ -422,5 +460,24 @@ mod tests {
                 assert!(galley.size().x > 20.0);
             }
         }).drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn lyrics_in_other_scripts_have_glyphs_when_the_system_has_the_fonts() {
+        let folder = std::path::PathBuf::from(
+            std::env::var_os("WINDIR").unwrap_or_else(|| r"C:\Windows".into())).join("Fonts");
+        let ctx = Context::default();
+        apply(&ctx);
+        ctx.run_ui(egui::RawInput::default(), |_| {}).drop_without_applying_deltas();
+        for (file, sample) in [("malgun.ttf", "빠르게 먹어"), ("msyh.ttc", "ありがとう"),
+                               ("msyh.ttc", "你好"), ("segoeui.ttf", "Привет")] {
+            if !folder.join(file).exists() {
+                continue;
+            }
+            for font in [FontId::proportional(SIZE_M), FontId::monospace(SIZE_S), display(SIZE_L)] {
+                assert!(ctx.fonts_mut(|f| f.has_glyphs(&font, sample)),
+                        "{sample} should render in {font:?}");
+            }
+        }
     }
 }
