@@ -10,7 +10,7 @@ import math
 from dataclasses import dataclass, replace
 from typing import Any
 
-from . import config, playback, structure, transitions
+from . import config, lyric_sections, playback, structure, transitions
 
 
 @dataclass
@@ -31,6 +31,14 @@ def _number(value, fallback=0.0):
         return fallback
 
 
+def profile(track: Any) -> dict:
+    """The cached acoustic profile, with the synced lyrics as its vocal
+    evidence when the track has them. Lyrics never invent a profile."""
+    found = structure.profile_for(track)
+    spans = lyric_sections.lyric_map(track).get("vocal_spans")
+    return lyric_sections.overlay_vocals(found, spans) if found and spans else found
+
+
 def _window(profile, start, end, field):
     """Mean local evidence; missing samples never imply silence/no vocals."""
     values = [structure.at(profile, start + (end - start) * i / 8).get(field)
@@ -40,9 +48,13 @@ def _window(profile, start, end, field):
     return sum(values) / len(values) if len(values) >= 5 else None
 
 
-def _safe_entry(profile, offset, cue):
+def _safe_entry(profile, offset, cue, spans=None):
     if cue <= offset + 0.01:
         return True
+    if spans:
+        # Synced lyrics say exactly where the first words are: skipping up
+        # to them loses no lyric. A beat of slack for a pickup.
+        return not any(float(a) < cue - 0.25 and float(b) > offset for a, b in spans)
     # Never skip an opening lyric on a spectral guess. Known instrumental
     # lead-ins or actual near-silence are the only automatic entry skips.
     vocal = _window(profile, offset, cue, "vocal")
@@ -104,7 +116,7 @@ def refine(outgoing: dict, incoming: dict, plan: transitions.Plan, *,
     cfg = config.station
     if not cfg.get("transitions.smart_cues", True):
         return baseline
-    out_profile, in_profile = structure.profile_for(outgoing), structure.profile_for(incoming)
+    out_profile, in_profile = profile(outgoing), profile(incoming)
     if (not out_profile or not in_profile
             or not out_profile.get("complete") or not in_profile.get("complete")):
         return baseline
@@ -134,6 +146,11 @@ def refine(outgoing: dict, incoming: dict, plan: transitions.Plan, *,
     minimum_end = out_offset + (out_full if mid_song else out_end - out_offset) * min_play
     earliest_exit = max(out_end - max_early * out_rate, minimum_end)
     phrasing = bool(cfg.get("transitions.phrase_cues", True))
+    out_sections = lyric_sections.lyric_map(outgoing).get("sections") or []
+    in_sections = lyric_sections.lyric_map(incoming).get("sections") or []
+    section_weight = max(0.0, min(1.0, _number(cfg.get("transitions.section_weight", 0.4), 0.4)))
+    if not section_weight:
+        out_sections = in_sections = []
     for point in out_profile.get("exits", []):
         at = _number(point.get("at"), -1)
         if earliest_exit <= at < out_end:
@@ -150,20 +167,29 @@ def refine(outgoing: dict, incoming: dict, plan: transitions.Plan, *,
         for at in structure.phrase_lines(outgoing, earliest_exit, out_end - 0.01, limit=4):
             if all(abs(at - other) > 0.25 for other, _ in exits):
                 exits.append((at, 0.45))
-    for point in in_profile.get("entries", []):
+    # Leaving after the last chorus, or on the outro: the fade starts there,
+    # so the record ends one planned overlap later.
+    for line in lyric_sections.exit_points(out_sections):
+        at = line + plan.overlap * out_rate
+        if earliest_exit <= at < out_end and all(abs(at - other) > 0.25 for other, _ in exits):
+            exits.append((at, 0.5))
+    lyric_entries = [{"at": at, "score": 0.5} for at in lyric_sections.entry_points(in_sections)]
+    in_spans = lyric_sections.lyric_map(incoming).get("vocal_spans") or []
+    for point in in_profile.get("entries", []) + lyric_entries:
         at = _number(point.get("at"), -1)
         if in_offset < at <= min(in_end - 10 * in_rate, in_offset + max_skip):
             # A deeper cue may omit an earlier verse, but it must be a real
             # acoustic boundary. Do not mistake a loud bin for a chorus label.
             boundary = any(abs(_number(p.get("at"), -10) - at) <= 0.5
                            and _number(p.get("confidence")) >= 0.18
-                           for p in in_profile.get("boundaries", []))
-            if _safe_entry(in_profile, in_offset, at) or (mid_song and boundary):
+                           for p in in_profile.get("boundaries", [])) or any(
+                abs(s["start"] - at) <= 0.5 for s in in_sections)
+            if _safe_entry(in_profile, in_offset, at, in_spans) or (mid_song and boundary):
                 quality = _number(point.get("score", point.get("confidence", 0.0)))
                 snapped = structure.snap_to_phrase(incoming, at, 2 * _number(incoming.get("beat_period"), 0.5)) \
                     if phrasing else None
                 if (snapped is not None and in_offset < snapped <= min(in_end - 10 * in_rate, in_offset + max_skip)
-                        and _safe_entry(in_profile, in_offset, snapped)):
+                        and _safe_entry(in_profile, in_offset, snapped, in_spans)):
                     at = snapped
                 entries.append((at, quality))
     # Bound work even for a damaged cache. Prefer strong nearby evidence.
@@ -191,6 +217,8 @@ def refine(outgoing: dict, incoming: dict, plan: transitions.Plan, *,
     intro = incoming.get("intro_override")
     if intro is None:
         intro = incoming.get("intro_sec")
+    out_beat = _number(outgoing.get("beat_period"), 0.5) or 0.5
+    in_beat = _number(incoming.get("beat_period"), 0.5) or 0.5
     best = None
     count = 0
     for end, exit_quality in exits:
@@ -251,6 +279,12 @@ def refine(outgoing: dict, incoming: dict, plan: transitions.Plan, *,
                         # the eights line up and the mix breathes with both.
                         score += phrase_weight * (structure.phrase_alignment(outgoing, out_local)
                                                   + structure.phrase_alignment(incoming, cue)) / 2
+                    if out_sections or in_sections:
+                        # Verse and chorus from the synced lyrics: never fade
+                        # out mid-chorus, and come in where a section starts.
+                        score += section_weight * (
+                            lyric_sections.exit_score(out_sections, out_local, out_beat)
+                            + (lyric_sections.entry_score(in_sections, cue, in_beat) if cue > in_offset + 0.01 else 0.0))
                     if out_energy is not None and in_energy is not None:
                         score -= abs(out_energy - in_energy) * (0.3 if preset == "slam" else 0.8)
                     if options["overlap_scoring"]:
@@ -287,6 +321,7 @@ def refine(outgoing: dict, incoming: dict, plan: transitions.Plan, *,
                         + ("; checked overlap dynamics" if options["overlap_scoring"] else "")
                         + ("; earlier structural exit" if best.out_duration < out_duration - 0.01 else "")
                         + ("; structural entry cue" if best.in_offset > in_offset + 0.01 else "")
+                        + ("; lyric sections" if out_sections or in_sections else "")
                         + f"; {plan.reason}")
     return best
 

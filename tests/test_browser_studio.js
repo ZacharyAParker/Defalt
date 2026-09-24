@@ -1,5 +1,6 @@
-// The browser studio: optimized sprites that match the scene layout, partial
-// loading, bitmap sizing, region repaints, pacing and the music-driven room.
+// The browser studio: optimized sprites and one frame atlas that match the
+// scene layout, partial loading, bitmap sizing, region repaints, pacing, rain
+// that keeps falling off air, lip sync from the voice, and the music-driven room.
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
@@ -29,7 +30,10 @@ function recorder() {
   return ctx;
 }
 
-function scene({fail = () => false, running = false} = {}) {
+const dir = path.join(root, 'web/static/studio-v2/web');
+const framesJson = fs.readFileSync(path.join(dir, 'frames.json'), 'utf8');
+
+function scene({fail = () => false, running = false, noFrames = false} = {}) {
   let now = 0, resize = null;
   const requested = [];
   const main = recorder();
@@ -37,9 +41,9 @@ function scene({fail = () => false, running = false} = {}) {
   const elements = {
     'studio-scene': canvas, 'studio-status': element(), 'cat-life': element(),
     reduced: element(), 'rain-enabled': element(), 'lights-enabled': element(), 'cat-enabled': element(),
+    'lightning-enabled': element(),
   };
-  elements['cat-life'].dataset.pose = 'sleep';
-  for (const id of ['rain-enabled', 'lights-enabled', 'cat-enabled']) elements[id].checked = true;
+  for (const id of ['rain-enabled', 'lights-enabled', 'cat-enabled', 'lightning-enabled']) elements[id].checked = true;
   class Image {
     set src(url) {
       requested.push(url);
@@ -52,6 +56,7 @@ function scene({fail = () => false, running = false} = {}) {
   const context = vm.createContext({
     window, Image, Promise, console: {warn() {}, error() {}},
     performance: {now: () => now},
+    fetch: async (url) => { requested.push(url); return noFrames ? {ok: false} : {ok: true, json: async () => JSON.parse(framesJson)}; },
     ResizeObserver: class { constructor(fn) { resize = fn; } observe() {} },
     document: {
       hidden: false, currentScript: {src: 'http://127.0.0.1:8090/static/studio-scene.js?v=9.9.9'},
@@ -59,11 +64,13 @@ function scene({fail = () => false, running = false} = {}) {
       createElement: () => ({width: 0, height: 0, getContext: () => recorder()}),
     },
   });
+  vm.runInContext(read('web/static/studio-motion.js'), context);
   vm.runInContext(read('web/static/studio-scene.js'), context);
   const settle = () => new Promise((resolve) => setImmediate(resolve));
-  const frame = (ms, activity = {mav: false, rue: false}, energy = 0) => {
+  const quiet = {levels: [0, 0], tones: [0, 0]};
+  const frame = (ms, voice = quiet, energy = 0) => {
     main.calls.length = 0; now += ms;
-    window.StudioScene.update(ms / 1000, activity, energy, running);
+    window.StudioScene.update(ms / 1000, {mav: false, rue: false}, energy, running, voice);
     return [...main.calls];
   };
   return {window, canvas, elements, requested, settle, frame, main,
@@ -72,8 +79,8 @@ function scene({fail = () => false, running = false} = {}) {
 
 (async () => {
   // ── The optimized art exists, is small, and matches the scene's layout ──
-  const dir = path.join(root, 'web/static/studio-v2/web');
   const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'sprites.json'), 'utf8'));
+  const frames = JSON.parse(framesJson);
   const probe = scene();
   const layout = JSON.parse(JSON.stringify(probe.window.StudioScene.layout));
   let total = 0;
@@ -85,25 +92,30 @@ function scene({fail = () => false, running = false} = {}) {
     total += fs.statSync(file).size;
   }
   assert.ok(total < 1.5e6, `studio art is ${(total / 1e6).toFixed(2)} MB`);
+  assert.deepEqual(frames.atlas, manifest.atlas.size, 'frames.json is about this atlas');
   for (const host of layout.hosts) {
-    assert.deepEqual(manifest[`${host.name}-mouth`].rect, host.mouth, `${host.name} mouth crop matches the scene`);
-    host.eyes.forEach((eye, i) => assert.deepEqual(manifest[`${host.name}-eye-${i}`].rect, eye));
     for (const [sprite, rect] of [[host.name, host.at], [`${host.name}-phones`, host.phones]]) {
       assert.deepEqual(manifest[sprite].size, rect.slice(2), `${sprite} is drawn at its own size`);
     }
-    const [w, h] = manifest[`${host.name}-mouth`].size;
-    assert.ok(w >= host.mouth[2] && h >= host.mouth[3], 'face patches are at least scene-size (about 2x drawn)');
+    const faces = frames.faces[host.name];
+    assert.equal(faces.mouths.length, 5); assert.equal(faces.lids.length, 2); assert.equal(faces.looks.length, 2);
+    for (const item of [...faces.mouths, ...faces.lids, ...faces.looks]) {
+      assert.ok(item, `${host.name} has every face frame`);
+      const [x, y, w, h] = item.at;
+      assert.ok(x > host.at[0] && y + h < host.neck, `${host.name}'s face frame sits on the face, above the neck`);
+      assert.ok(w < 200 && h < 130, 'a face frame is a patch, not a head');
+    }
   }
-  for (const pose of ['sleep', 'awake', 'yawn', 'groom']) {
-    assert.deepEqual(manifest[`cat-${pose}`].rect, layout.cat);
-    assert.deepEqual(manifest[`cat-${pose}`].size, [layout.cat[2] * 2, layout.cat[3] * 2]);
-  }
+  const [aw, ah] = frames.atlas;
+  const within = (item) => item.src[0] >= 0 && item.src[1] >= 0 && item.src[0] + item.src[2] <= aw && item.src[1] + item.src[3] <= ah;
+  assert.deepEqual(frames.cat.map((c) => c.name), [...probe.window.StudioMotion.CAT_FRAMES], 'the atlas has every cat frame, in order');
+  assert.ok(frames.cat.every(within) && frames.lights.every((l) => within(l.lit) && within(l.dim)));
 
   // ── Versioned URLs; one missing layer does not blank the studio ──
   const s = scene({fail: (name) => name === 'black-mug'});
-  await s.settle();
-  assert.equal(s.requested.length, layout.sprites.length);
-  assert.ok(s.requested.every((url) => /^\/static\/studio-v2\/web\/[\w-]+\.webp\?v=9\.9\.9$/.test(url)), s.requested[0]);
+  await s.settle(); await s.settle();
+  assert.equal(s.requested.length, layout.sprites.length + 1);
+  assert.ok(s.requested.every((url) => /^\/static\/studio-v2\/web\/[\w-]+\.(webp|json)\?v=9\.9\.9$/.test(url)), s.requested[0]);
   assert.equal(s.canvas.dataset.ready, 'true', 'drawn with the layers that loaded');
   assert.equal(s.elements['studio-status'].textContent, '');
 
@@ -113,44 +125,69 @@ function scene({fail = () => false, running = false} = {}) {
   assert.equal(s.canvas.width, 600); assert.equal(s.canvas.height, 400);
   const scaled = s.main.calls.find((call) => call[0] === 'setTransform');
   assert.ok(Math.abs(scaled[1] - 600 / 1728) < 1e-9, 'drawn in scene space, scaled to the bitmap');
+  s.resize(1728);
 
   // ── Reduced motion: only what changes is repainted ──
   s.elements.reduced.checked = true;
-  s.frame(200);                                                  // settles after the toggle
+  s.frame(200);
   assert.equal(s.frame(200).length, 0, 'an unchanged studio draws nothing');
-  const talk = s.frame(10, {mav: true, rue: false});
+  const talk = s.frame(300, {levels: [0.2, 0], tones: [0.05, 0]});
   const regions = talk.filter((call) => call[0] === 'rect');
   assert.equal(regions.length, 1, 'one region repainted when Mav starts talking');
   const [, x, y, w, h] = regions[0];
   assert.ok(x <= 585 && y <= 463 && x + w >= 674 && y + h >= 514, 'the region covers his mouth');
   assert.ok(w * h < 1728 * 1152 * 0.5, 'and is not the whole scene');
   assert.ok(!talk.some((call) => call[0] === 'stroke'), 'no rain with reduced motion');
+  assert.equal(s.canvas.dataset.speaking, 'mav');
+  s.frame(400);
 
-  // ── Pacing, rain that holds still off air, and a room that hears the bass ──
+  // ── Rain that falls off air too, at a lower rate; about 30 fps on air ──
   s.elements.reduced.checked = false;
   s.frame(200);
-  const rainAt = (calls) => JSON.stringify([...new Set(calls.filter((call) => call[0] === 'moveTo').map(String))]);
-  const stopped = [0, 1, 2, 3, 4, 5].map(() => rainAt(s.frame(200))).filter((rain) => rain !== '[]');
-  assert.ok(stopped.length >= 2, 'the city lights keep the window repainting');
-  assert.ok(stopped.every((rain) => rain === stopped[0]), 'rain holds still while the station is off');
-  assert.equal(s.frame(50).length, 0, 'about 8 fps while stopped');
+  const rainAt = (calls) => JSON.stringify(calls.filter((call) => call[0] === 'moveTo').slice(0, 40));
+  const off1 = rainAt(s.frame(100)), off2 = rainAt(s.frame(100));
+  assert.notEqual(off1, '[]'); assert.notEqual(off1, off2, 'rain keeps falling while the station is off');
+  assert.equal(s.frame(40).length, 0, 'about 12 fps while stopped');
   s.setRunning(true);
   s.frame(200);
-  const moving1 = rainAt(s.frame(100)), moving2 = rainAt(s.frame(100));
-  assert.notEqual(moving1, moving2, 'rain falls while on air');
-  assert.equal(s.frame(30).length, 0, 'about 15 fps on air');
-  const quiet = s.frame(100, undefined, 0), loud = s.frame(100, undefined, 1);
-  const alpha = (calls) => Number(/,([\d.]+)\)$/.exec(calls.find((call) => call[0] === '=strokeStyle')[1])[1]);
-  const drops = (calls) => calls.filter((call) => call[0] === 'stroke').length;
-  assert.ok(alpha(loud) > alpha(quiet), `rain is a little heavier with the bass (${alpha(quiet)} -> ${alpha(loud)})`);
-  assert.ok(drops(loud) > drops(quiet));
-  assert.ok(alpha(loud) <= 0.3, 'but only a little');
+  assert.ok(s.frame(34).length > 0, 'about 30 fps on air');
+  assert.equal(s.frame(10).length, 0, 'but no faster');
+  // The far layer's heads: the second stroke style the rain sets.
+  const alpha = (calls) => calls.filter((call) => call[0] === '=strokeStyle' && /173,192,220/.test(call[1]))
+    .map((call) => Number(/,([\d.]+)\)$/.exec(call[1])[1]))[1];
+  const quiet = alpha(s.frame(100, undefined, 0));
+  for (let i = 0; i < 40; i++) s.frame(50, undefined, 1);
+  const loud = alpha(s.frame(100, undefined, 1));
+  assert.ok(loud > quiet, `rain is a little heavier with the bass (${quiet} -> ${loud})`);
+  assert.ok(loud <= 0.45, 'but only a little');
+  const rain = s.window.StudioScene.life.rain, count = rain.drops.length;
+  s.frame(100, undefined, 0); s.frame(100, undefined, 1);
+  assert.equal(rain.drops.length, count, 'the bass never adds or removes drops');
+
+  // ── The sign lights with the station, and is dark without it ──
+  const signs = s.window.StudioScene.life.sign;
+  assert.equal(signs.level, 1, 'lit on air');
+  s.setRunning(false);
+  for (let i = 0; i < 10; i++) s.frame(100);
+  assert.equal(signs.level, 0, 'dark off air');
+
+  // ── The cat answers the buttons ──
+  s.window.StudioScene.catPoke();
+  assert.equal(s.window.StudioScene.catClip(), 'perk');
+  s.frame(100);
+  assert.equal(s.canvas.dataset.pose, 'perk');
+
+  // ── No frames manifest: the room still draws, nothing throws ──
+  const bare = scene({noFrames: true});
+  await bare.settle(); await bare.settle();
+  assert.equal(bare.canvas.dataset.ready, 'true');
+  bare.frame(200, {levels: [0.2, 0.2], tones: [0.05, 0.05]});
 
   // ── Nothing loads: say so, never throw ──
-  const none = scene({fail: () => true});
-  await none.settle();
+  const none = scene({fail: () => true, noFrames: true});
+  await none.settle(); await none.settle();
   assert.match(none.elements['studio-status'].textContent, /Studio artwork unavailable/);
   assert.equal(none.window.StudioScene.ready, false);
   none.frame(200);
-  console.log('Browser studio: sprites match the layout, partial loading, bitmap sizing, region repaints, pacing and music response passed.');
+  console.log('Browser studio: sprites and atlas match the layout, partial loading, bitmap sizing, region repaints, pacing, rain, sign, cat and music response passed.');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

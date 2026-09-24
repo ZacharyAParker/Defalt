@@ -22,6 +22,7 @@ FIELDS = [
     ("transitions.allow_silence_punch", "Silence before the drop", True, None),
     ("transitions.allow_drop_swap", "Drop swap on the downbeat", True, None),
     ("hosts.transition_note_chance", "Hosts mention a flashy transition", 0.3, [0.0, 1.0]),
+    ("hosts.lyric_quote_chance", "Hosts quote one short lyric line", 0.08, [0.0, 0.5]),
     ("crossfade.duration", "Base overlap (seconds)", 6.0, [0.5, 20.0]),
     ("transitions.minimum_blend_seconds", "Shortest automatic blend (seconds)", 3.0, [0.5, 12.0]),
     ("transitions.long_multiplier", "Compatible tracks: length multiplier", 1.5, [1.0, 2.5]),
@@ -43,6 +44,8 @@ FIELDS = [
     ("transitions.energy_dip_weight", "Avoid empty spots during a mix", 0.6, [0.0, 2.0]),
     ("transitions.bass_collision_weight", "Avoid competing basslines", 0.5, [0.0, 2.0]),
     ("transitions.prepare_tracks_ahead", "Minimum songs planned ahead", 1, [1, 3]),
+    ("lyrics.enabled", "Synced lyrics from LRCLIB (sends artist, title, album, length)", True, None),
+    ("transitions.section_weight", "Mix on verse/chorus lines from synced lyrics", 0.4, [0.0, 1.0]),
     ("skip.lead_in", "Skip: seconds before the transition", 10.0, [2.0, 30.0]),
     ("selection.avoid_music_videos", "Use audio recordings instead of music videos", True, None),
     ("selection.discovery_enabled", "Discover unfamiliar music related to your taste", True, None),
@@ -123,9 +126,15 @@ PRESENTATION = {
         "echo_out", "loop_roll", "brake", "spinback", "echo_freeze", "reverb_wash", "stem_swap",
         "acapella_intro", "filter_ride", "silence_punch", "drop_swap")},
     "hosts.transition_note_chance": {"group": "Hosts and speech", "unit": "percent"},
+    "hosts.lyric_quote_chance": {"group": "Hosts and speech", "unit": "percent"},
+    "lyrics.enabled": {"group": "Musical timing and playback"},
+    "transitions.section_weight": {"group": "Musical timing and playback", "unit": "percent"},
 }
 
-BASE = {key: default for key, _, default, _ in FIELDS if not key.startswith("selection.")}
+# A starting style is about how the mix sounds. It never turns a lookup
+# you switched off back on.
+BASE = {key: default for key, _, default, _ in FIELDS
+        if not key.startswith(("selection.", "lyrics."))}
 PROFILES = {
     "Smooth DJ": dict(BASE),
     "Clean radio": {**BASE, "crossfade.duration": 3.0, "transitions.tempo_match": False,

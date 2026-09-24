@@ -114,6 +114,13 @@ pub struct Playout {
     gain_state: f32,
     pub peak: f32,
     pub channel_peaks: [f32; CHANNELS],
+    /// Per channel since the last read: the sum of squares of the mono
+    /// signal, the same of its sample-to-sample change, and how many samples.
+    /// Enough for the booth to tell a vowel from a hiss.
+    pub channel_energy: [f32; CHANNELS],
+    pub channel_change: [f32; CHANNELS],
+    pub channel_samples: [u32; CHANNELS],
+    channel_last: [f32; CHANNELS],
 }
 
 impl Default for Playout {
@@ -125,6 +132,10 @@ impl Default for Playout {
             gain_state: 1.0,
             peak: 0.0,
             channel_peaks: [0.0; CHANNELS],
+            channel_energy: [0.0; CHANNELS],
+            channel_change: [0.0; CHANNELS],
+            channel_samples: [0; CHANNELS],
+            channel_last: [0.0; CHANNELS],
         }
     }
 }
@@ -220,6 +231,12 @@ impl Playout {
                 pair[1] += right;
                 peak = peak.max(left.abs()).max(right.abs());
                 self.channel_peaks[channel_index] = self.channel_peaks[channel_index].max(left.abs()).max(right.abs());
+                let mono = 0.5 * (left + right);
+                let change = mono - self.channel_last[channel_index];
+                self.channel_last[channel_index] = mono;
+                self.channel_energy[channel_index] += mono * mono;
+                self.channel_change[channel_index] += change * change;
+                self.channel_samples[channel_index] += 1;
             }
 
             if finished {
@@ -359,6 +376,9 @@ mod tests {
         assert!((playout.channel_peaks[0] - 0.25).abs() < 1e-5);
         assert!((playout.channel_peaks[1] - 0.25).abs() < 1e-5);
         assert_eq!(playout.channel_peaks[2], 0.0);
+        assert_eq!(playout.channel_samples[0], 32);
+        assert!((playout.channel_energy[0] / 32. - 0.0625).abs() < 1e-4, "{}", playout.channel_energy[0]);
+        assert_eq!(playout.channel_samples[2], 0);
     }
 
     #[test]

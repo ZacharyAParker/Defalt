@@ -53,6 +53,12 @@ pub fn draw(app: &mut Defalt, ui: &mut Ui) {
     {
         app.toggle_quantize();
     }
+    if toggle(&mut left, "Lyrics", !app.view_state.hide_lyrics)
+        .on_hover_text("The line being sung under each deck's title, when the station has synced lyrics for it")
+        .clicked()
+    {
+        app.view_state.hide_lyrics = !app.view_state.hide_lyrics;
+    }
 
     // Wordmark, dead centre of the window rather than of the leftover space,
     // in the display face and spaced out, as a maker's name on a faceplate.
@@ -215,7 +221,7 @@ fn limiter(app: &mut Defalt, ui: &mut Ui) {
     ui.painter().circle_filled(dot, 3.0, if live { lamp } else { theme::TEXT_MUTE });
     ui.painter().text(egui::pos2(rect.left() + 20.0, rect.center().y), Align2::LEFT_CENTER, &text,
                       egui::FontId::monospace(theme::SIZE_XS), if working { theme::TEXT_BRIGHT } else { ink });
-    let response = response.on_hover_text(if app.limiter_on {
+    let response = super::hint(response, if app.limiter_on {
         "Master limiter: gain reduction in dB. Click to turn it off."
     } else {
         "The limiter is off, so the master can clip. Click to turn it on."

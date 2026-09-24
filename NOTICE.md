@@ -84,6 +84,7 @@ the original. Every story keeps its source URL.
 | RSS and article publishers | Page/feed requests, IP address, and request headers | Yes |
 | YouTube | Searches, metadata requests, and requests for selected audio | When fetching sources |
 | Spotify | Search queries, catalog lookups for missing years and genres, and application credentials | Yes |
+| LRCLIB | Artist, title, album and length of songs in your library, to find synced lyrics | Yes — `lyrics.enabled` / Mix settings |
 | Open-Meteo | The latitude and longitude you configure, for weather | Yes — off until a location is set |
 | Cloudflare | Tunnelled page, control and stream traffic, and Access sign-in | Yes — remote listening only |
 
@@ -102,4 +103,4 @@ and deletion limits. See the [terms](TERMS.md), [copyright notice](COPYRIGHT.md)
 and [patch notes](CHANGELOG.md) for the rest of the release information.
 
 ---
-Defalt v0.4.0 · © 2026 Zachary Parker
+Defalt v0.4.1 · © 2026 Zachary Parker

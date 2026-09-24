@@ -43,6 +43,9 @@ hosts:
   # Chance the next break is told, as a fact it may use, that the last mix
   # was a flashy technique (an echo out, a spinback...). Never invented.
   transition_note_chance: 0.3
+  # Chance a song comment may quote ONE short line (ten words at most) of the
+  # song's synced lyrics, credited. Never more than that one line.
+  lyric_quote_chance: 0.08
 
   humour: >
     Sound like friends in a group chat: brief, reactive, irreverent, and
@@ -118,6 +121,9 @@ transitions:
   # prefer blends that start on a phrase of both records.
   phrase_cues: true
   phrase_weight: 0.3
+  # With synced lyrics: leave after the last chorus (never mid-chorus) and
+  # come in where the singing starts. 0 ignores the lyric sections.
+  section_weight: 0.4
   adaptive_eq_fx: true
   overlap_scoring: true
   vocal_collision_weight: 1.0
@@ -478,6 +484,18 @@ enrichment:
   enabled: true
   batch: 12
   interval_minutes: 5
+
+# Time-synced lyrics from LRCLIB (lrclib.net), looked up in the background
+# with the artist, title, album and length. They stay in the local database:
+# the lyric line on screen, verse/chorus bands on the waveforms, and mix
+# points that never cut a chorus in half. See docs/LYRICS.md.
+lyrics:
+  enabled: true
+  # Walk the library a few songs at a time, not just what is about to play.
+  backfill: true
+  batch: 10
+  interval_minutes: 4
+  timeout_seconds: 8
 
 downloader:
   # yt_dlp runs locally (default). metube hands the job to your MeTube

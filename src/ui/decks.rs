@@ -55,6 +55,12 @@ fn overview_pane(app: &mut Defalt, ui: &mut Ui, deck: usize, rect: Rect) {
         )
     };
 
+    // Synced lyrics, when the station has them for this record: the section
+    // strip along the bottom and the line being sung under the title.
+    let lyrics = match &app.decks[deck].record {
+        Some(record) if !app.decks[deck].loading => app.view_state.lyrics.get(&app.root, &record.key),
+        _ => None,
+    };
     let state = &app.decks[deck];
 
     if state.loading {
@@ -83,6 +89,9 @@ fn overview_pane(app: &mut Defalt, ui: &mut Ui, deck: usize, rect: Rect) {
             &state.cues,
             app.view_state.wave_mode,
         );
+        if let Some(lyrics) = &lyrics {
+            waveform::section_bands(ui.painter(), wave, &lyrics.sections, state.length);
+        }
 
         // A scrim under the text so it stays legible over a loud record,
         // faintly in the deck's colour.
@@ -104,10 +113,16 @@ fn overview_pane(app: &mut Defalt, ui: &mut Ui, deck: usize, rect: Rect) {
                             theme::display(theme::SIZE_L), theme::TEXT_BRIGHT);
         super::clipped_label(ui, Rect::from_min_size(text_at + vec2(0.0, 24.0), vec2(title_width, 17.0)),
                              &artist, theme::SIZE_S, theme::TEXT_DIM);
+        let station_deck = app.airtime.on_deck(deck).is_some();
+        if let Some(lyrics) = lyrics.as_ref().filter(|_| !app.view_state.hide_lyrics) {
+            let from = if station_deck { wave.left() + 96.0 } else { text_at.x };
+            let at = egui::pos2(from, wave.top() + 45.0);
+            lyric_line(ui, at, (wave.right() - 110.0 - from).max(40.0), &lyrics.lines, state.position);
+        }
 
         // A record the station put here says so, because a deck that starts
         // playing on its own is alarming if nothing on screen claims it.
-        if app.airtime.on_deck(deck).is_some() {
+        if station_deck {
             let held = app.airtime.held.tone[deck].iter().any(|h| *h)
                 || app.airtime.held.gain[deck];
             let (text, colour) = if held {
@@ -135,11 +150,22 @@ fn overview_pane(app: &mut Defalt, ui: &mut Ui, deck: usize, rect: Rect) {
             egui::pos2(wave.left(), (wave.top() + 55.0).min(wave.bottom() - 18.0)), wave.max);
         waveform::transition_marks(ui.painter(), marker_rect, windows, 0.0, state.length);
         let mut response = ui.interact(wave, ui.id().with(("ov", deck)), Sense::click_and_drag());
-        if !windows.is_empty() {
-            let description = windows.iter().map(|w| format!("Planned mix {}: {} to {}",
-                if w.incoming { "in" } else { "out" }, super::mmss(w.start), super::mmss(w.end)))
-                .collect::<Vec<_>>().join("\n");
-            response = response.on_hover_text(description);
+        let mut description: Vec<String> = windows.iter().map(|w| format!("Planned mix {}: {} to {}",
+            if w.incoming { "in" } else { "out" }, super::mmss(w.start), super::mmss(w.end))).collect();
+        if let Some(lyrics) = lyrics.as_ref().filter(|l| !l.sections.is_empty()) {
+            if response.hovered() {
+                waveform::section_legend(ui.painter(), wave, &lyrics.sections);
+            }
+            let pointer = ui.ctx().pointer_hover_pos().filter(|at| wave.contains(*at));
+            if let Some(section) = pointer.and_then(|at| {
+                lyrics.section_at(((at.x - wave.left()) / wave.width()).clamp(0.0, 1.0) as f64 * state.length)
+            }) {
+                description.insert(0, format!("{} {} to {} (from the synced lyrics)", section.label.name(),
+                    super::mmss(section.start), super::mmss(section.end)));
+            }
+        }
+        if !description.is_empty() {
+            response = response.on_hover_text(description.join("\n"));
         }
         if (response.clicked() || response.dragged()) && app.decks[deck].length > 0.0 {
             if let Some(at) = ui.ctx().pointer_interact_pos() {
@@ -156,6 +182,29 @@ fn overview_pane(app: &mut Defalt, ui: &mut Ui, deck: usize, rect: Rect) {
     }
 
     load_button(app, ui, deck, loader);
+}
+
+/// The line being sung at `position` (source seconds), bright, and the next
+/// one after it, dim, on a scrim so it reads over the waveform.
+fn lyric_line(ui: &Ui, at: egui::Pos2, width: f32, lines: &[crate::lyrics::Line], position: f64) {
+    let showing = crate::lyrics::showing(lines, position);
+    if showing.current.is_none() && showing.next.is_none() {
+        return;
+    }
+    let font = FontId::proportional(theme::SIZE_XS);
+    let mut job = egui::text::LayoutJob::default();
+    if let Some(current) = showing.current {
+        job.append(current, 0.0, egui::TextFormat::simple(font.clone(), theme::AMBER_PALE));
+    }
+    if let Some(next) = showing.next {
+        let gap = if showing.current.is_some() { 14.0 } else { 0.0 };
+        job.append(next, gap, egui::TextFormat::simple(font, theme::TEXT_MUTE));
+    }
+    job.wrap = egui::text::TextWrapping::truncate_at_width(width);
+    let galley = ui.painter().layout_job(job);
+    let back = Rect::from_min_size(at - vec2(4.0, 1.0), galley.size() + vec2(8.0, 2.0));
+    ui.painter().rect_filled(back, theme::R_S, Color32::from_black_alpha(170));
+    ui.painter().galley(at, galley, theme::TEXT);
 }
 
 /// The load key. Loads whatever the crate has selected; its letter is in the

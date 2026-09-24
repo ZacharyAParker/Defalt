@@ -20,6 +20,7 @@ const ui = {
   lamp: el("lamp"), state: el("state-value"), uptime: el("uptime"),
   wallclock: el("wallclock"),
   source: el("now-source"), title: el("now-title"), artist: el("now-artist"),
+  lyric: { box: el("now-lyric"), line: el("lyric-line"), next: el("lyric-next") },
   scope: el("scope"), meterL: el("meter-l"), meterR: el("meter-r"),
   progress: el("progress"), fill: el("progress-fill"),
   pos: el("pos"), dur: el("dur"),
@@ -963,11 +964,22 @@ function talkingNow(now) {
     && i.start_at - 0.2 <= now && now < i.start_at + i.duration);
 }
 
+/* The line being sung, from the station's synced lyrics, when it has them.
+   stationNow() is what you hear, stream delay included. */
+function updateLyric(music, now) {
+  if (!window.RadioLyrics || !ui.lyric.box) return;
+  window.RadioLyrics.update(ui.lyric, music, now, {
+    fetcher: (path) => api(path),
+    playbackAt, curve: music ? playbackCurve(music) : null,
+  });
+}
+
 function updateNowPlaying() {
   const now = stationNow();
   const music = currentMusic(now);
   const talking = talkingNow(now);
   setData(ui.root, "talking", talking ? "1" : "0");
+  updateLyric(music, now);
 
   // The autoplay warning outlives the problem otherwise: the watcher gives up
   // after a few tries, and the browser often releases audio later anyway.
@@ -1222,18 +1234,23 @@ function frame(time = performance.now()) {
   try {
     if (window.LiveStudio && !document.hidden && time - studioAt >= STUDIO_MS) {
       studioAt = time;
-      const levels = {mav:0, rue:0}, now = stationNow();
+      const levels = {mav:0, rue:0}, tones = {mav:0, rue:0}, now = stationNow();
       if (running && ctx?.state === "running") for (const entry of scheduled.values()) {
         if (!entry.hostAnalyser || now < entry.item.start_at || now >= entry.item.start_at + entry.item.duration) continue;
         entry.hostAnalyser.getFloatTimeDomainData(entry.hostSamples);
-        const level = Math.sqrt(entry.hostSamples.reduce((sum,x)=>sum+x*x,0)/entry.hostSamples.length);
+        // Level (RMS), and brightness: how much of the energy is in the
+        // sample-to-sample change -- a hiss high, a vowel low. The desktop
+        // booth measures its voices the same way.
+        let energy = 0, change = 0, previous = 0;
+        for (const x of entry.hostSamples) { energy += x * x; change += (x - previous) ** 2; previous = x; }
+        const level = Math.sqrt(energy / entry.hostSamples.length), tone = energy > 1e-9 ? change / energy : 0;
         const host = entry.item.meta?.host;
-        if (host in levels) levels[host] = Math.max(levels[host], level);
+        if (host in levels) { levels[host] = Math.max(levels[host], level); tones[host] = Math.max(tones[host], tone); }
       }
       const live = running && ctx?.state === "running";
       // The low band drives the studio's rain and city lights, a little.
       const energy = window.RadioVisualizer?.lowBand?.(live ? analyser : null, time) ?? 0;
-      window.LiveStudio.update(levels, running ? currentMusic(now) : null, energy, running);
+      window.LiveStudio.update(levels, running ? currentMusic(now) : null, energy, running, tones);
     }
     if (running) {
       updateNowPlaying();
@@ -1400,6 +1417,7 @@ function stop() {
   ui.up.disabled = ui.down.disabled = true;
   ui.source.textContent = "off air";
   ui.hint.textContent = "The station holds its place while you're away.";
+  if (ui.lyric.box) ui.lyric.box.hidden = true;
 }
 
 ui.power.addEventListener("click", () => (running ? stop() : start()));

@@ -18,7 +18,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
-from . import config, eras, playback, techniques, transitions
+from . import config, eras, lyric_sections, playback, techniques, transitions
 
 # Web Audio cannot ramp to or through exact zero on an exponential curve, and
 # a true zero also makes de-duplication ambiguous. This is silence.
@@ -391,6 +391,25 @@ def playout_facts(track: dict[str, Any]) -> dict[str, Any]:
     return facts
 
 
+def lyric_facts(track: dict[str, Any]) -> dict[str, Any]:
+    """What the players need from the synced lyrics, kept small: the
+    sections, where the singing is, and whether there are lines to fetch
+    from /api/lyrics/<key>. Source seconds, like every other item fact."""
+    found = lyric_sections.lyric_map(track)
+    if not found:
+        return {}
+    facts: dict[str, Any] = {"lyrics": str(found.get("status") or "")}
+    sections = [{"start": s["start"], "end": s["end"], "label": s["label"]}
+                for s in (found.get("sections") or [])[:40]
+                if isinstance(s, dict) and s.get("label") in lyric_sections.LABELS]
+    if sections:
+        facts["sections"] = sections
+    spans = (found.get("vocal_spans") or [])[:120]
+    if spans:
+        facts["vocal_spans"] = spans
+    return facts
+
+
 def _key_trusted(row: dict[str, Any]) -> bool:
     confidence = _finite(row.get("key_confidence"))
     return bool(transitions.shift_camelot(str(row.get("camelot") or ""), 0)) and (
@@ -644,9 +663,9 @@ class Schedule:
         # controls only after that final timing, and only once (echo attenuation
         # must not compound each time the schedule is sealed).
         if plan is not None and cfg.get("transitions.adaptive_eq_fx", True):
-            from . import mixplanner, structure
-            outgoing_profile = structure.profile_for(self._last_row or {})
-            incoming_profile = structure.profile_for(track)
+            from . import mixplanner
+            outgoing_profile = mixplanner.profile(self._last_row or {})
+            incoming_profile = mixplanner.profile(track)
             if (outgoing_profile.get("complete") and incoming_profile.get("complete")):
                 source_end = previous.offset + playback.source_at(
                     previous_curve, previous.duration, previous.meta.get("playback_rate", 1.0))
@@ -691,6 +710,7 @@ class Schedule:
             item.meta["rate_curve"] = rate_curve
         if track.get("selection"):
             item.meta["selection"] = dict(track["selection"])
+        item.meta.update(lyric_facts(track))
         # Envelope is finalised in `seal()` once we know what ducks it.
         self._fades[item.id] = (fade_in, fade_out)
         self._pending_ducks[item.id] = []
@@ -728,7 +748,7 @@ class Schedule:
                           effective_track: dict[str, Any], offset: float, rate: float,
                           start: float, overlap: float, grid: bool) -> None:
         """Decide whether this boundary gets a technique, and build its shape."""
-        from . import analysis, mixplanner, structure
+        from . import analysis, mixplanner
         cfg = config.station
 
         def trusted(row, name, minimum):
@@ -775,14 +795,22 @@ class Schedule:
         step = in_energy - out_energy if out_energy is not None and in_energy is not None else None
 
         out_vocal = in_vocal = None
-        out_profile = structure.profile_for(self._last_row or {})
-        in_profile = structure.profile_for(track)
+        out_profile = mixplanner.profile(self._last_row or {})
+        in_profile = mixplanner.profile(track)
+        source_end = previous.offset + playback.source_at(
+            previous_curve, previous.duration, previous.meta.get("playback_rate", 1.0))
+        reach = (overlap + 2 * (beat or 0.5)) * previous_rate
         if out_profile.get("complete") and in_profile.get("complete"):
-            source_end = previous.offset + playback.source_at(
-                previous_curve, previous.duration, previous.meta.get("playback_rate", 1.0))
-            reach = (overlap + 2 * (beat or 0.5)) * previous_rate
             out_vocal = mixplanner._window(out_profile, max(0.0, source_end - reach), source_end, "vocal")
             in_vocal = mixplanner._window(in_profile, offset, offset + overlap * rate, "vocal")
+        # Synced lyrics know when somebody sings even without an analysis.
+        if out_vocal is None:
+            out_vocal = lyric_sections.vocal_fraction(
+                lyric_sections.lyric_map(self._last_row or {}).get("vocal_spans"),
+                max(0.0, source_end - reach), source_end)
+        if in_vocal is None:
+            in_vocal = lyric_sections.vocal_fraction(
+                lyric_sections.lyric_map(track).get("vocal_spans"), offset, offset + overlap * rate)
 
         reach_back = 16 * (beat or 0.5) + 0.5
         speech = any(v.kind == "voice" and v.start_at < start + overlap + 1.0

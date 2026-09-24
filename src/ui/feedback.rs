@@ -424,10 +424,12 @@ fn draw(app: &mut Defalt, ctx: &egui::Context) {
                 submit = ui.add_enabled(!feedback.sending, egui::Button::new(RichText::new(label).color(theme::TEXT_BRIGHT))
                     .fill(theme::BLUE_DEEP)).clicked();
                 ui.label(RichText::new("Ctrl+Enter").size(10.5).color(theme::TEXT_MUTE));
-                if let Some((message, error)) = &feedback.status {
-                    ui.label(RichText::new(message).size(11.0).color(if *error { theme::RED } else { theme::TEXT_DIM }));
-                }
             });
+            // On its own line, so a long error wraps inside the dialog
+            // instead of running off the side of a row that never wraps.
+            if let Some((message, error)) = &feedback.status {
+                ui.label(RichText::new(message).size(11.0).color(if *error { theme::RED } else { theme::TEXT_DIM }));
+            }
             if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Enter)) {
                 submit = true;
             }

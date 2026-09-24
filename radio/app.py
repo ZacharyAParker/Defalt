@@ -671,6 +671,18 @@ def set_intro():
     return jsonify(ok=True, key=key, intro_override=seconds)
 
 
+@app.get("/api/lyrics/<path:key>")
+def get_lyrics(key: str):
+    """A track's synced lines and the sections read off them, if LRCLIB had them."""
+    from . import lyrics
+    if not key or len(key) > 500:
+        return jsonify(error="Track key required"), 400
+    found = lyrics.payload(key)
+    if found is None:
+        return jsonify(error="No lyrics for this track"), 404
+    return jsonify(found)
+
+
 @app.get("/api/transition")
 def get_transition():
     from . import transitions
@@ -930,4 +942,6 @@ def create_app() -> Flask:
     director.station()  # start the threads
     from . import enrich
     enrich.start(_closing)
+    from . import lyrics
+    lyrics.start(_closing)
     return app

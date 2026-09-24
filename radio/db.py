@@ -130,6 +130,24 @@ CREATE TABLE IF NOT EXISTS enrichment (
     status       TEXT NOT NULL      -- filled | nothing_new | no_match | error
 );
 
+-- Time-synced lyrics from LRCLIB (radio/lyrics.py), kept apart from the
+-- tracks.lyrics column, which only ever holds text embedded in your own file.
+-- A miss is a row too, so a song LRCLIB does not know is not asked about
+-- again for a fortnight. The console reads this table directly.
+CREATE TABLE IF NOT EXISTS lyrics (
+    track_key    TEXT PRIMARY KEY,
+    status       TEXT NOT NULL,     -- synced | plain | instrumental | missing | error
+    synced       TEXT,              -- json [{"t": seconds, "text": line}, ...]
+    plain        TEXT,
+    sections     TEXT,              -- json [{"start", "end", "label", "confidence"}, ...]
+    vocal_spans  TEXT,              -- json [[start, end], ...], source seconds
+    source       TEXT,              -- 'lrclib'
+    lrclib_id    INTEGER,
+    instrumental INTEGER NOT NULL DEFAULT 0,
+    fetched_at   REAL NOT NULL,
+    sections_version INTEGER
+);
+
 CREATE TABLE IF NOT EXISTS unavailable_sources (
     video_id TEXT PRIMARY KEY,
     retry_after REAL NOT NULL,
@@ -193,7 +211,7 @@ def connect() -> sqlite3.Connection:
             # The one-row check covers a file deleted and recreated under the
             # same name (tests do this) without paying for the whole schema.
             if identity not in _SCHEMA_READY or conn.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='import_paths'"
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='lyrics'"
                     ).fetchone() is None:
                 conn.executescript(SCHEMA)
                 _migrate(conn)

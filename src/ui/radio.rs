@@ -47,15 +47,26 @@ pub fn draw(app: &mut Defalt, ui: &mut Ui) {
     }
     let preview = app.airtime.on
         && super::transition_preview::next_pair(&app.airtime.schedule, app.airtime.station_now).is_some();
+    let singing = now_singing(app);
     if app.studio.enabled {
         // The booth lays out its own column: art, record, transcript, the
-        // next mix and the spectrum, one under the other.
-        super::studio::draw(app, ui, main, preview);
+        // next mix and the spectrum, one under the other. The lyric line
+        // takes a strip under it, only while there is one to show.
+        let mut booth = main;
+        if let Some((lyrics, at)) = &singing {
+            if has_line(lyrics, *at) {
+                booth.max.y -= LYRIC_STRIP;
+                let strip = Rect::from_min_max(egui::pos2(main.left(), booth.bottom()), main.max);
+                ui.painter().rect_filled(strip, 0.0, theme::BOOTH_GROUND);
+                lyric_strip(ui, strip.shrink2(vec2(theme::SP_4, 6.0)), &lyrics.lines, *at);
+            }
+        }
+        super::studio::draw(app, ui, booth, preview);
     } else {
         let spectrum_height = if app.studio.visualizer { (main.height() * 0.13).clamp(84., 148.) } else { 0. };
         let preview_height = if preview { super::transition_preview::HEIGHT + theme::SP_3 } else { 0.0 };
         let content = Rect::from_min_max(main.min, main.max - vec2(0., spectrum_height + preview_height));
-        on_air(app, ui, content);
+        on_air(app, ui, content, singing.as_ref());
         if preview {
             let strip = Rect::from_min_size(egui::pos2(main.left() + theme::SP_4, content.bottom()),
                                             vec2(main.width() - theme::SP_4 * 2., super::transition_preview::HEIGHT));
@@ -952,9 +963,64 @@ fn vibe_section(app: &mut Defalt, column: &mut Ui) {
     }
 }
 
+/* ── The lyric line ──────────────────────────────────────────────────── */
+
+/// The strip the line being sung takes, when it shows.
+const LYRIC_STRIP: f32 = 58.0;
+
+/// Where the record on air is, in its own seconds, at station time `now`:
+/// the item's offset into the file plus what its rate has played since.
+fn source_position(item: &crate::airtime::Scheduled, now: f64) -> f64 {
+    item.source_at(now - item.start_at)
+}
+
+/// The record on air and how far into it the station clock is, when the
+/// station has synced lyrics for it.
+fn now_singing(app: &mut Defalt) -> Option<(std::sync::Arc<crate::lyrics::Lyrics>, f64)> {
+    let now = app.airtime.station_now;
+    let (key, at) = {
+        let item = app.airtime.current().or_else(|| {
+            app.airtime.schedule.iter()
+                .filter(|item| item.is_music() && item.start_at <= now && now < item.ends_at())
+                .max_by(|a, b| a.start_at.total_cmp(&b.start_at))
+        })?;
+        (item.key.clone(), source_position(item, now))
+    };
+    let lyrics = app.view_state.lyrics.get(&app.root, &key)?;
+    (!lyrics.lines.is_empty()).then_some((lyrics, at))
+}
+
+fn has_line(lyrics: &crate::lyrics::Lyrics, at: f64) -> bool {
+    let showing = crate::lyrics::showing(&lyrics.lines, at);
+    showing.current.is_some() || showing.next.is_some()
+}
+
+/// Karaoke: the line being sung, big and warm, and the next one dim under
+/// it. Nothing at all between verses.
+fn lyric_strip(ui: &Ui, rect: Rect, lines: &[crate::lyrics::Line], at: f64) {
+    let showing = crate::lyrics::showing(lines, at);
+    let painter = ui.painter().with_clip_rect(rect);
+    let width = rect.width();
+    let mut y = rect.top();
+    for (text, size, colour) in [(showing.current, theme::SIZE_L, theme::AMBER_PALE),
+                                 (showing.next, theme::SIZE_S, theme::TEXT_MUTE)] {
+        if let Some(text) = text {
+            let mut job = egui::text::LayoutJob::simple_singleline(text.to_string(), FontId::proportional(size), colour);
+            job.wrap = egui::text::TextWrapping::truncate_at_width(width);
+            let galley = painter.layout_job(job);
+            let height = galley.size().y;
+            painter.galley(egui::pos2(rect.left(), y), galley, colour);
+            y += height + 2.0;
+        } else if size == theme::SIZE_L {
+            y += 24.0;
+        }
+    }
+}
+
 /* ── On air, without the booth ───────────────────────────────────────── */
 
-fn on_air(app: &mut Defalt, ui: &mut Ui, rect: Rect) {
+fn on_air(app: &mut Defalt, ui: &mut Ui, rect: Rect,
+          singing: Option<&(std::sync::Arc<crate::lyrics::Lyrics>, f64)>) {
     let head = Rect::from_min_size(rect.min, vec2(rect.width(), 44.0));
     let mut bar = super::child(ui, head.shrink2(vec2(theme::SP_3, 5.0)), super::left_row(), "radiohead");
     bar.label(RichText::new("On air").font(theme::display(theme::SIZE_L)).color(theme::TEXT_BRIGHT));
@@ -992,9 +1058,17 @@ fn on_air(app: &mut Defalt, ui: &mut Ui, rect: Rect) {
         );
     }
 
+    // The line being sung, while there is one.
+    let mut top = 82.0;
+    if let Some((lyrics, at)) = singing.filter(|(lyrics, at)| has_line(lyrics, *at)) {
+        lyric_strip(ui, Rect::from_min_size(inner.min + vec2(0.0, 74.0), vec2(inner.width(), LYRIC_STRIP - 8.0)),
+                    &lyrics.lines, *at);
+        top += LYRIC_STRIP;
+    }
+
     // What they have been saying. Newest last, because that is how a
     // conversation reads.
-    let lines = Rect::from_min_max(inner.min + vec2(0.0, 82.0), inner.max);
+    let lines = Rect::from_min_max(inner.min + vec2(0.0, top), inner.max);
     let mut area = super::child(ui, lines, Layout::top_down(Align::Min), "transcript");
     super::transcript_header(&mut area, &status.transcript, &mut app.transcript_follow, app.music_duck < 0.99);
     area.add_space(8.0);
@@ -1056,6 +1130,25 @@ mod tests {
         assert_eq!(lines.len(), 3, "{lines:?}");
         assert!(lines[1].0.contains("Song · Band") && lines[1].1);
         assert_eq!(upcoming(&items, 0.0, 2).len(), 2);
+    }
+
+    #[test]
+    fn the_lyric_line_follows_the_station_clock_through_offset_and_rate() {
+        // Started 30 s into the file, playing 5% fast, on air from 100 s.
+        let body = serde_json::json!({"now": 0, "items": [
+            {"id": "m", "kind": "music", "url": "/m", "start_at": 100, "duration": 200, "offset": 30,
+             "meta": {"title": "Song", "artist": "Band", "key": "band|song", "playback_rate": 1.05}}
+        ]});
+        let items = crate::airtime::snapshot_from(&body, 0).items;
+        let lines: Vec<crate::lyrics::Line> = [(40.0, "one"), (50.0, "two"), (60.0, "three")]
+            .iter().map(|(t, text)| crate::lyrics::Line { t: *t, text: text.to_string() }).collect();
+        // 20 s of station time is 21 s of the record: 51 s into the file.
+        let at = source_position(&items[0], 120.0);
+        assert!((at - 51.0).abs() < 1e-9, "{at}");
+        let showing = crate::lyrics::showing(&lines, at);
+        assert_eq!((showing.current, showing.next), (Some("two"), Some("three")));
+        // Before the item starts nothing has been sung.
+        assert_eq!(crate::lyrics::showing(&lines, source_position(&items[0], 90.0)).current, None);
     }
 
     #[test]

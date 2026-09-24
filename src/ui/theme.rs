@@ -387,6 +387,32 @@ mod tests {
     }
 
     #[test]
+    fn no_label_style_breaks_words_in_half() {
+        // Truncate is the one wrap mode that sets break_anywhere.
+        let ctx = Context::default();
+        apply(&ctx);
+        for theme in [egui::Theme::Dark, egui::Theme::Light] {
+            let style = ctx.style_of(theme);
+            assert_ne!(style.wrap_mode, Some(egui::TextWrapMode::Truncate), "{theme:?} truncates mid-word");
+        }
+        let text = "Mix settings sent. New transitions use the new choices.";
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            // A plain label in a narrow column, as the panel sets them.
+            ui.allocate_ui(egui::vec2(120.0, 400.0), |ui| {
+                let (_, galley, _) = egui::Label::new(text).layout_in_ui(ui);
+                assert!(!galley.job.wrap.break_anywhere, "labels break anywhere");
+                assert!(galley.rows.len() > 1 && galley.size().x <= 120.5);
+                for pair in galley.rows.windows(2) {
+                    let end = pair[0].row.glyphs.last().map(|g| g.chr);
+                    let start = pair[1].row.glyphs.first().map(|g| g.chr);
+                    assert!(!(end.is_some_and(char::is_alphanumeric) && start.is_some_and(char::is_alphanumeric)),
+                            "a wrapped label broke mid-word");
+                }
+            });
+        }).drop_without_applying_deltas();
+    }
+
+    #[test]
     fn the_bundled_fonts_parse_and_cover_the_panel_s_symbols() {
         let ctx = Context::default();
         apply(&ctx);

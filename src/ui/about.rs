@@ -28,9 +28,12 @@ impl Page {
     }
 }
 
+/// The height of the strip along the foot of the window.
+pub const FOOTER: f32 = 28.0;
+
 pub fn footer(app: &mut Defalt, ui: &mut Ui) {
     egui::Panel::bottom("release_footer")
-        .exact_size(28.0)
+        .exact_size(FOOTER)
         .frame(egui::Frame::NONE.fill(theme::GROUND).inner_margin(egui::Margin::symmetric(12, 4)))
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {

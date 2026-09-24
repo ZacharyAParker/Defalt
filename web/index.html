@@ -89,7 +89,7 @@
           <div class="host-tags"><span id="mav-tag"><i></i>MAV <small>the anchor</small></span><span id="rue-tag"><i></i>RUE <small>the wildcard</small></span></div>
         </section>
 
-<details class="booth-options"><summary>Studio settings</summary><div class="ambience-controls"><label><input type="checkbox" id="rain-enabled" checked> Rain</label><label><input type="checkbox" id="lights-enabled" checked> City lights</label><label><input type="checkbox" id="cat-enabled" checked> Cat antics</label><label><input type="checkbox" id="visualizer-enabled" checked> Audio visualizer</label><label><input type="checkbox" id="reduced"> Reduced motion</label><button id="cat-preview" type="button">Meet the cat</button><span id="cat-note">Sleeping on the job.</span></div></details>
+<details class="booth-options"><summary>Studio settings</summary><div class="ambience-controls"><label><input type="checkbox" id="rain-enabled" checked> Rain</label><label><input type="checkbox" id="lights-enabled" checked> City lights</label><label><input type="checkbox" id="cat-enabled" checked> Cat antics</label><label><input type="checkbox" id="lightning-enabled" checked> Lightning</label><label><input type="checkbox" id="visualizer-enabled" checked> Audio visualizer</label><label><input type="checkbox" id="reduced"> Reduced motion</label><button id="cat-preview" type="button">Meet the cat</button><span id="cat-note">Sleeping on the job.</span></div></details>
     <section class="deck__now" aria-labelledby="np-heading">
       <h2 class="sr-only" id="np-heading">Now playing</h2>
 
@@ -98,6 +98,7 @@
         <p class="now__eyebrow" id="now-source">on air</p>
         <p class="now__title" id="now-title">Side Room is off the air</p>
         <p class="now__artist" id="now-artist">Press start to bring it up</p>
+        <p class="now__lyric" id="now-lyric" aria-live="off" hidden><span class="now__lyric-line" id="lyric-line"></span><span class="now__lyric-next" id="lyric-next"></span></p>
       </div></div>
 
       <div class="scope" id="audio-visualizer">
@@ -314,7 +315,9 @@
 <script src="/static/about.js?v={{APP_VERSION}}" defer></script>
 <script src="/static/visualizer.js?v={{APP_VERSION}}" defer></script>
 <script src="/static/stream.js?v={{APP_VERSION}}" defer></script>
+<script src="/static/lyrics.js?v={{APP_VERSION}}" defer></script>
 <script src="/static/radio.js?v={{APP_VERSION}}" defer></script>
+<script src="/static/studio-motion.js?v={{APP_VERSION}}"></script>
 <script src="/static/studio-scene.js?v={{APP_VERSION}}"></script>
 <script src="/static/studio-live.js?v={{APP_VERSION}}"></script>
 <script src="/static/studio-ambience.js?v={{APP_VERSION}}"></script>

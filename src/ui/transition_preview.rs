@@ -146,7 +146,7 @@ pub fn draw(ui: &mut Ui, rect: Rect, schedule: &[Scheduled], now: f64) {
 
     let hover = ui.interact(rect, ui.id().with("transition-preview"), egui::Sense::hover());
     if !transition.reason.is_empty() {
-        hover.on_hover_text(&transition.reason);
+        super::hint(hover, &transition.reason);
     }
 }
 
@@ -193,7 +193,11 @@ fn item_lane(painter: &egui::Painter, lane: Rect, item: &Scheduled, colour: Colo
 
     let title = if item.artist.is_empty() { item.title.clone() } else { format!("{} - {}", item.artist, item.title) };
     let text = Rect::from_min_size(lane.min + vec2(5.0, 2.0), vec2((lane.width() - 10.0).max(0.0), lane.height()));
-    let galley = painter.layout(title, FontId::proportional(theme::SIZE_XS), theme::TEXT, text.width().max(1.0));
+    // Two lines fit a lane; past that it ends in an ellipsis rather than a
+    // third line cut in half by the lane's edge.
+    let mut job = egui::text::LayoutJob::simple(title, FontId::proportional(theme::SIZE_XS), theme::TEXT, text.width().max(1.0));
+    job.wrap.max_rows = 2;
+    let galley = painter.layout_job(job);
     painter.with_clip_rect(text.intersect(painter.clip_rect())).galley(text.min, galley, theme::TEXT);
 }
 

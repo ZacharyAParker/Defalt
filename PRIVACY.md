@@ -1,6 +1,6 @@
 # Privacy policy
 
-Effective September 23, 2026. Applies to Defalt 0.4.0 as distributed in this repository.
+Effective September 23, 2026. Applies to Defalt 0.4.1 as distributed in this repository.
 
 ## The short version
 
@@ -23,6 +23,7 @@ The browser player uses local storage for playback preferences such as volume an
 - Steam receives the configured SteamID and applicable credentials when library, wishlist, or news features are used. RSS publishers and article websites receive requests for their pages or feeds.
 - The browser player's fonts are bundled with the app; it no longer contacts Google Fonts. Optional model or dependency downloads contact their respective hosts.
 - Background enrichment sends track titles and artists to Spotify's catalog search to fill in missing years, albums and genres. It only fills blank fields.
+- Synced lyrics lookup sends each song's artist, title, album and length to LRCLIB (lrclib.net), a few songs at a time in the background, with a User-Agent that names Defalt. The lyrics it returns are stored in the local database and shown only in your own console and browser player; a host may occasionally quote one short line on air. Turn off **Synced lyrics from LRCLIB** in Mix settings (`lyrics.enabled: false`) to stop new lookups. See [Lyrics](docs/LYRICS.md).
 - Optional weather sends the latitude and longitude you configure to Open-Meteo, at most every 30 minutes. It is off until a location is set.
 - Remote listening, when you configure it, carries the page, controls and the audio stream through Cloudflare's network via a Cloudflare Tunnel, and Cloudflare Access handles sign-in (including the email one-time code). Cloudflare therefore processes that traffic and your sign-in details under its own policies.
 
@@ -57,4 +58,4 @@ The server binds to loopback by default. Its only remote path is the optional Cl
 Material changes to these practices will be reflected in this document with a new effective date. The version bundled with a native executable describes that build; the repository may describe a newer release. Contact the maintainer through the Defalt repository on GitHub. Do not include credentials, private listening records, or other sensitive data in public issues.
 
 ---
-Defalt v0.4.0 · © 2026 Zachary Parker
+Defalt v0.4.1 · © 2026 Zachary Parker

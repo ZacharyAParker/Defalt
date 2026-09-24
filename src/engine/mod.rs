@@ -196,6 +196,10 @@ pub struct Telemetry {
     frame: AtomicU64,
     air_peak: AtomicU32,
     voice_peaks: [AtomicU32; playout::CHANNELS],
+    /// Each voice channel's level (RMS) over the last callback, and its
+    /// brightness: the energy of its sample-to-sample change over its energy.
+    voice_rms: [AtomicU32; playout::CHANNELS],
+    voice_tone: [AtomicU32; playout::CHANNELS],
     applied: [AtomicU64; DECKS],
     applied_any: AtomicU64,
     restarts: AtomicU64,
@@ -246,8 +250,19 @@ impl Telemetry {
         f32::from_bits(self.air_peak.load(Ordering::Relaxed))
     }
 
+    /// Each voice channel's loudest sample in the last callback. The booth
+    /// reads `voice_rms` now; this stays for anything that wants a meter.
+    #[allow(dead_code)]
     pub fn voice_peaks(&self) -> [f32; playout::CHANNELS] {
         std::array::from_fn(|i| f32::from_bits(self.voice_peaks[i].load(Ordering::Relaxed)))
+    }
+
+    pub fn voice_rms(&self) -> [f32; playout::CHANNELS] {
+        std::array::from_fn(|i| f32::from_bits(self.voice_rms[i].load(Ordering::Relaxed)))
+    }
+
+    pub fn voice_tones(&self) -> [f32; playout::CHANNELS] {
+        std::array::from_fn(|i| f32::from_bits(self.voice_tone[i].load(Ordering::Relaxed)))
     }
 
     /// Loudest sample of the last callback, measured before the final clamp,
@@ -733,6 +748,16 @@ impl Console {
         for (i, peak) in self.air.channel_peaks.iter_mut().enumerate() {
             telemetry.voice_peaks[i].store(peak.to_bits(), Ordering::Relaxed);
             *peak = 0.0;
+        }
+        for i in 0..playout::CHANNELS {
+            let (energy, count) = (self.air.channel_energy[i], self.air.channel_samples[i]);
+            let rms = if count > 0 { (energy / count as f32).sqrt() } else { 0.0 };
+            let tone = if energy > 1e-9 { self.air.channel_change[i] / energy } else { 0.0 };
+            telemetry.voice_rms[i].store(rms.to_bits(), Ordering::Relaxed);
+            telemetry.voice_tone[i].store(tone.to_bits(), Ordering::Relaxed);
+            self.air.channel_energy[i] = 0.0;
+            self.air.channel_change[i] = 0.0;
+            self.air.channel_samples[i] = 0;
         }
         telemetry.peak[0].store(peak[0].to_bits(), Ordering::Relaxed);
         telemetry.peak[1].store(peak[1].to_bits(), Ordering::Relaxed);

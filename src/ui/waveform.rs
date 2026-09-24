@@ -58,6 +58,83 @@ pub fn transition_marks(
     }
 }
 
+/// A section's colour: the chorus warm, the verse cool, the bridge the odd
+/// one out, and the parts nobody sings in greys and teal.
+pub fn section_colour(label: crate::lyrics::Label) -> Color32 {
+    use crate::lyrics::Label;
+    match label {
+        Label::Chorus => theme::AMBER,
+        Label::Verse => theme::BLUE,
+        Label::Bridge => theme::DECK_B,
+        Label::Instrumental => theme::CYAN,
+        Label::Intro | Label::Outro => theme::TEXT_MUTE,
+    }
+}
+
+/// How tall the section strip along the bottom of an overview is.
+pub const SECTION_STRIP: f32 = 4.0;
+
+/// Verse, chorus and bridge from the synced lyrics, as a strip of colour
+/// along the bottom of the overview and the faintest wash above it. On the
+/// same source-time axis as the waveform.
+pub fn section_bands(painter: &Painter, rect: Rect, sections: &[crate::lyrics::Section], length: f64) {
+    if sections.is_empty() || !length.is_finite() || length <= 0.0 || rect.width() < 8.0 {
+        return;
+    }
+    let painter = painter.with_clip_rect(rect.intersect(painter.clip_rect()));
+    let x = |seconds: f64| rect.left() + (seconds / length).clamp(0.0, 1.0) as f32 * rect.width();
+    for section in sections {
+        let (left, right) = (x(section.start), x(section.end));
+        if right - left < 1.0 {
+            continue;
+        }
+        let colour = section_colour(section.label);
+        let wash = Rect::from_min_max(pos2(left, rect.top()), pos2(right, rect.bottom() - SECTION_STRIP));
+        painter.rect_filled(wash, 0.0, colour.gamma_multiply(0.05));
+        // A hairline gap between neighbours, so two verses read as two.
+        let strip = Rect::from_min_max(pos2(left + 0.5, rect.bottom() - SECTION_STRIP),
+                                       pos2((right - 0.5).max(left + 1.0), rect.bottom()));
+        painter.rect_filled(strip, 1.0, colour.gamma_multiply(0.85));
+    }
+}
+
+/// A small key to the strip's colours, for the labels this record has.
+/// Drawn in the bottom-left corner, above the strip, while it is hovered.
+pub fn section_legend(painter: &Painter, rect: Rect, sections: &[crate::lyrics::Section]) {
+    use crate::lyrics::Label;
+    let mut labels: Vec<Label> = Vec::new();
+    for label in [Label::Intro, Label::Verse, Label::Chorus, Label::Bridge, Label::Instrumental, Label::Outro] {
+        if sections.iter().any(|s| s.label == label)
+            && !(label == Label::Outro && labels.contains(&Label::Intro)) {
+            labels.push(label);
+        }
+    }
+    if labels.is_empty() {
+        return;
+    }
+    let font = FontId::proportional(theme::SIZE_XS);
+    let galleys: Vec<_> = labels.iter().map(|label| {
+        let name = if *label == Label::Intro { "Intro/outro" } else { label.name() };
+        (*label, painter.layout_no_wrap(name.into(), font.clone(), theme::TEXT_DIM))
+    }).collect();
+    let width: f32 = galleys.iter().map(|(_, g)| g.size().x + 16.0).sum::<f32>() + 4.0;
+    let height = 16.0;
+    let back = Rect::from_min_size(pos2(rect.left() + 4.0, rect.bottom() - SECTION_STRIP - height - 3.0),
+                                   vec2(width, height));
+    if back.right() > rect.right() {
+        return;
+    }
+    painter.rect_filled(back, theme::R_S, theme::WELL.gamma_multiply(0.92));
+    let mut at = back.left() + 4.0;
+    for (label, galley) in galleys {
+        let swatch = Rect::from_center_size(pos2(at + 4.0, back.center().y), vec2(8.0, 8.0));
+        painter.rect_filled(swatch, 2.0, section_colour(label));
+        let size = galley.size();
+        painter.galley(pos2(at + 11.0, back.center().y - size.y / 2.0), galley, theme::TEXT_DIM);
+        at += size.x + 16.0;
+    }
+}
+
 /// What an overview mesh was built for. Anything else and it is rebuilt.
 #[derive(Clone, PartialEq)]
 struct OverviewKey {
@@ -445,6 +522,23 @@ mod tests {
         let quiet = Bucket::default();
         let mesh = columns_mesh(rect, std::iter::once((0.0, 1.0, quiet)), 1.0, 1.0, WaveMode::ThreeBand);
         assert_eq!(mesh.vertices.len(), 4);
+    }
+
+    #[test]
+    fn every_section_has_its_own_colour_and_is_found_by_time() {
+        use crate::lyrics::{Label, Section};
+        let labels = [Label::Verse, Label::Chorus, Label::Bridge, Label::Instrumental, Label::Intro];
+        for (i, a) in labels.iter().enumerate() {
+            for b in &labels[i + 1..] {
+                assert_ne!(section_colour(*a), section_colour(*b), "{a:?} and {b:?}");
+            }
+        }
+        assert_eq!(section_colour(Label::Intro), section_colour(Label::Outro));
+        let lyrics = crate::lyrics::Lyrics { lines: Vec::new(), sections: vec![
+            Section { start: 0.0, end: 10.0, label: Label::Intro },
+            Section { start: 10.0, end: 30.0, label: Label::Chorus }] };
+        assert_eq!(lyrics.section_at(12.0).map(|s| s.label), Some(Label::Chorus));
+        assert!(lyrics.section_at(31.0).is_none());
     }
 
     #[test]

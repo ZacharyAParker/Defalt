@@ -21,6 +21,7 @@ mod platform;
 mod process;
 mod keys;
 mod library;
+mod lyrics;
 mod logfile;
 mod reports;
 mod peaks;
@@ -138,6 +139,8 @@ pub struct Defalt {
     /// The loudest the radio bus was last frame.
     pub air_peak: f32,
     pub host_levels: [f32; 2],
+    /// How bright each host's voice is right now (a hiss high, a vowel low).
+    pub host_tones: [f32; 2],
     pub studio: ui::studio::Studio,
     pub library_error: Option<String>,
     pub search: String,
@@ -264,6 +267,8 @@ pub struct Defalt {
     posed: bool,
     pose_frame: u64,
     asked_for_shot: bool,
+    /// Booth frames saved so far by a `DEFALT_SHOT_FRAMES` run.
+    shot_frames: usize,
     pub scroll_to_selection: bool,
     pub feedback: ui::feedback::Feedback,
     /// Every command sent, by name, for tests that have no audio device.
@@ -312,6 +317,7 @@ impl Defalt {
             library_inbox: Some(library::load_in_background(&root)),
             air_peak: 0.0,
             host_levels: [0.0; 2],
+            host_tones: [0.0; 2],
             studio: ui::studio::Studio::new(&root),
             library_error: None,
             search: String::new(),
@@ -381,6 +387,7 @@ impl Defalt {
             mix_generation: 0,
             pose_frame: 0,
             asked_for_shot: false,
+            shot_frames: 0,
             scroll_to_selection: false,
             feedback: Default::default(),
             #[cfg(test)]
@@ -492,7 +499,8 @@ impl Defalt {
         }
         self.limiter_db = telemetry.limiter_reduction_db().max(self.limiter_db - elapsed * 12.0).max(0.0);
         self.air_peak = telemetry.air_peak();
-        self.host_levels = self.airtime.host_levels(&telemetry.voice_peaks());
+        self.host_levels = self.airtime.host_levels(&telemetry.voice_rms());
+        self.host_tones = self.airtime.host_levels(&telemetry.voice_tones());
         self.underruns = telemetry.underruns.load(std::sync::atomic::Ordering::Relaxed);
 
         let restarts = telemetry.device_restarts();

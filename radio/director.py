@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from . import analysis, config, db, discovery, library, taste, timeline, trends, tts, wishes, vibe
+from . import analysis, config, db, discovery, library, lyrics, lyric_sections, taste, timeline, trends, tts, wishes, vibe
 from .segments import writers
 from .segments.base import Line
 
@@ -46,6 +46,22 @@ def _log(*parts: Any) -> None:
 
 def audio_present(track: dict[str, Any]) -> bool:
     return bool(track.get("file")) and Path(track["file"]).is_file()
+
+
+def talk_up_post(track: dict[str, Any], fallback: float) -> float:
+    """Where the singing starts, in source seconds: the post a host talks up to.
+
+    Your override always wins. Then the first line of the synced lyrics,
+    which is when the words actually start, rather than a measured guess at
+    the vocal; a lyric sheet that starts in the first two seconds is no
+    help to a host and falls back too.
+    """
+    if track.get("intro_override") is not None:
+        return db.intro_of(track, fallback)
+    first = lyric_sections.first_line(track)
+    if first is not None and first >= 2.0:
+        return first
+    return db.intro_of(track, fallback)
 
 
 def media_url(track: dict[str, Any]) -> str:
@@ -203,6 +219,8 @@ class Station:
                         or not track.get("file") or not Path(track["file"]).is_file()):
                     raise ValueError(f"opening track is not playable: {key}")
                 track["selection_origin"] = {"by": "listener", "method": "preloaded_deck"}
+                lyrics.request(track)
+                track = lyrics.attach(track)
                 prepared.append((deck, track, offset))
 
             if prepared:
@@ -406,6 +424,8 @@ class Station:
             _log("feature analysis failed", repr(error))
         if track.get("selection"):
             prepared["selection"] = track["selection"]
+        # Looked up in the background while it waits in the lineup.
+        lyrics.request(prepared)
         with self.lock:
             if not was_request and vibe_revision != vibe.selection_revision():
                 return True  # A newer brief superseded this automatic pick.
@@ -656,7 +676,8 @@ class Station:
             self.status_note = "waiting on the next track"
             self._stop.wait(1.0)
             return
-        track = entry["track"]
+        # Whatever the lyric worker found while this waited in the lineup.
+        track = entry["track"] = lyrics.attach(entry["track"])
 
         with self.lock:
             planned_schedule = self.schedule
@@ -777,7 +798,7 @@ class Station:
             return 45.0
         if kind in ("news", "patch_notes", "game_ad"):
             return 28.0
-        intro = db.intro_of(
+        intro = talk_up_post(
             track, config.station.get("talk_placement.assumed_intro", 12.0))
         return max(6.0, min(intro, 20.0))
 
@@ -842,7 +863,7 @@ class Station:
             self.schedule.seal()
             return True
 
-        intro = db.intro_of(
+        intro = talk_up_post(
             track, cfg.get("talk_placement.assumed_intro", 12.0) or 12.0)
         from . import playback
         intro = playback.wall_at(music.meta.get("rate_curve"), max(0.0, intro - music.offset),

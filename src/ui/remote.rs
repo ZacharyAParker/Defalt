@@ -43,7 +43,7 @@ pub fn indicator(app: &Defalt, ui: &mut Ui) {
         (TunnelState::Connecting, _) => "Reaching Cloudflare...".to_string(),
         (TunnelState::Off, _) => "The tunnel runs while the radio is on. See docs/REMOTE.md.".to_string(),
     };
-    response.on_hover_text(detail);
+    super::hint(response, &detail);
 }
 
 #[cfg(test)]

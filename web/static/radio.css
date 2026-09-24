@@ -233,6 +233,31 @@ button, input { font: inherit; color: inherit; }
   overflow-wrap: anywhere;
 }
 
+/* The line being sung, and the next one dim under it (lyrics.js). */
+.now__lyric {
+  display: grid;
+  gap: 2px;
+  margin-top: 6px;
+  min-width: 0;
+}
+.now__lyric[hidden] { display: none; }
+.now__lyric-line {
+  font-size: clamp(15px, 1.7vw, 19px);
+  font-weight: 600;
+  color: var(--amber);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.now__lyric-line:empty { display: none; }
+.now__lyric-next {
+  font-size: 13px;
+  color: var(--text-mute);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ── Scope + meters ── */
 /* `grid-template-rows: 1fr` is load-bearing. Without a definite row, the
    canvas's `height: 100%` cannot resolve, so it falls back to its intrinsic

@@ -56,6 +56,11 @@ impl State {
         self.bass = 0.4;
     }
 
+    /// The beat's flash, 1 on a kick and fading: what the hosts nod along to.
+    pub fn beat(&self) -> f32 {
+        self.pulse
+    }
+
     /// How much is going on at the bottom of the spectrum, 0..1: the kick
     /// and the bass, which is what a room feels before it hears anything else.
     pub fn low_energy(&self) -> f32 {

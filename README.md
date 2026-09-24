@@ -6,13 +6,13 @@ a DJ app for when i want to mix something myself, and a radio station for when
 i just want to leave music on. two decks, a local library, and two hosts (Mav
 and Rue) who have way too much to say about what i'm listening to
 
-![the console: two decks, 3-band waveforms, channel meters and the library](docs/screenshots/console.webp)
+![the console: two decks, 3-band waveforms with verse/chorus bands, synced lyrics, channel meters and the library](docs/screenshots/console.webp)
 
 the console is Rust with egui and cpal. the radio brain is Python. it all runs
 locally on Windows, and the only way in from outside is your own tunnel if you
 set one up
 
-current release is **0.4.0**. [patch notes](CHANGELOG.md) ·
+current release is **0.4.1**. [patch notes](CHANGELOG.md) ·
 [privacy](PRIVACY.md) · [terms](TERMS.md) · [copyright](COPYRIGHT.md). those
 same pages open from the app footer without stopping the music
 
@@ -42,6 +42,9 @@ same pages open from the app footer without stopping the music
   settings decides how much it shows off. more in [Transitions](docs/TRANSITIONS.md)
 - song choice looks at genre, artist, key, energy and what you've been skipping,
   and plans a few songs ahead. requests always win
+- synced lyrics come from LRCLIB in the background. the current line shows
+  under the deck and on the radio, the waveform gets verse/chorus bands, and
+  the mixes stop cutting choruses in half. more in [Lyrics](docs/LYRICS.md)
 - Mav and Rue talk between songs, roast your picks, read the news and do fake
   ads. they know what day and time it is and they remember running bits
 - **Director chat** is the private line to the station: "keep this energy but
@@ -133,9 +136,10 @@ more docs: [radio and mixing](docs/RADIO.md) ·
 
 ## still rough
 
-- song structure comes from acoustic changes and vocal stems. it doesn't really
-  know a verse from a chorus yet
-- lyric matching only uses whatever text is embedded in the files
+- verse and chorus only come from synced lyrics, so a song LRCLIB doesn't
+  have (or an instrumental) still only gets the acoustic guesswork
+- lyric matching for song choice only uses whatever text is embedded in the
+  files
 - the browser player can't do key lock, fakes stem swaps and turns spinbacks
   into brakes. stream mode plays the console's real mix instead
 - the new energy and similarity data were checked on test signals, not tuned by
@@ -176,4 +180,4 @@ the browser studio uses WebP sprites cut from the desktop art in
 third-party audio code and its licenses are in [vendor/README.md](vendor/README.md)
 
 ---
-Defalt v0.4.0 · © 2026 Zachary Parker
+Defalt v0.4.1 · © 2026 Zachary Parker

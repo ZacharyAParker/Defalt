@@ -79,6 +79,11 @@ pub struct ViewState {
     /// The height the bands and the library share, as of the last frame:
     /// what the splitter measures a drag against.
     pub console_height: f32,
+    /// Synced lyrics and sections per record, read from the station's
+    /// database in the background.
+    pub lyrics: crate::lyrics::Cache,
+    /// The lyric line under each deck's title, switched off.
+    pub hide_lyrics: bool,
 }
 
 /// The library's share of the console, remembered between launches.
@@ -930,20 +935,87 @@ fn notice(app: &mut Defalt, ctx: &egui::Context) {
     // one that fades looks like it finished.
     let alpha = ((2.6 - age) / 0.8).clamp(0.0, 1.0);
 
+    // Laid out here, at a width worked out from the text and the window,
+    // then placed by its own size. An egui Area left to size itself wraps
+    // its contents at whatever size it was last frame, so after a short
+    // notice a long one came out a word wide, broken mid-word.
+    let screen = ctx.content_rect();
+    let galley = notice_galley(ctx, &message, screen.width());
+    let pad = vec2(theme::SP_3, theme::SP_2);
+    let size = galley.size() + pad * 2.0;
+    let bottom = screen.bottom() - about::FOOTER - theme::SP_2;
+    let rect = Rect::from_min_size(egui::pos2(screen.center().x - size.x / 2.0, bottom - size.y), size);
+    let cut = galley.elided;
+
     egui::Area::new(egui::Id::new("notice"))
-        .anchor(egui::Align2::CENTER_BOTTOM, vec2(0.0, -18.0))
-        .interactable(false)
+        .order(egui::Order::Foreground)
+        .fixed_pos(rect.min)
+        .constrain(false)
+        // Only a cut-short notice takes the pointer, to show the rest.
+        .interactable(cut)
         .show(ctx, |ui| {
-            let text = RichText::new(&message)
-                .font(FontId::proportional(theme::SIZE_S))
-                .color(theme::TEXT.gamma_multiply(alpha));
-            egui::Frame::NONE
-                .fill(theme::RAISED.gamma_multiply(alpha * 0.95))
-                .stroke(Stroke::new(1.0, theme::EDGE.gamma_multiply(alpha)))
-                .corner_radius(theme::R_L)
-                .inner_margin(egui::Margin::symmetric(theme::SP_3 as i8, theme::SP_2 as i8))
-                .show(ui, |ui| ui.label(text));
+            let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
+            ui.painter().rect(rect, theme::R_L, theme::RAISED.gamma_multiply(alpha * 0.95),
+                              Stroke::new(1.0, theme::EDGE.gamma_multiply(alpha)), egui::StrokeKind::Inside);
+            ui.painter().galley(rect.min + pad, galley, theme::TEXT.gamma_multiply(alpha));
+            if cut {
+                hint(response, &message);
+            }
         });
+}
+
+/// The widest a notice is set before it wraps.
+pub const NOTICE_MOST: f32 = 520.0;
+/// However narrow the window, a notice is never wrapped tighter than this.
+pub const NOTICE_LEAST: f32 = 160.0;
+/// Past this many lines a notice is cut short, the whole of it on hover.
+pub const NOTICE_ROWS: usize = 3;
+
+/// The width a notice's text wraps at: the most it may take in a window this
+/// wide, keeping clear of the window's edges.
+pub fn notice_width(screen: f32) -> f32 {
+    wrap_width(NOTICE_MOST, screen)
+}
+
+/// The width floating text wraps at: `most`, or less in a narrow window, but
+/// never so little that it comes out a word or two to the line.
+pub fn wrap_width(most: f32, screen: f32) -> f32 {
+    most.min(screen - 2.0 * (theme::SP_4 + theme::SP_3)).max(NOTICE_LEAST)
+}
+
+/// Text on one line at its own width when that fits, otherwise wrapped
+/// between words at `width` and cut short with an ellipsis after `rows`.
+///
+/// For anything floating. An Area sizes itself to last frame's contents, so
+/// a label left to wrap at the width it is given inherits whatever the text
+/// before it needed; a galley laid out here depends on nothing but its text.
+pub fn wrapped(ctx: &egui::Context, text: &str, font: FontId, colour: Color32, width: f32, rows: usize)
+    -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple(text.to_owned(), font, colour, width);
+    job.wrap.max_rows = rows;
+    job.wrap.break_anywhere = false;
+    ctx.fonts_mut(|fonts| fonts.layout_job(job))
+}
+
+/// A notice's text, wrapped at `notice_width` and cut short after a few
+/// lines. Inked when painted, so the fade reaches the text too.
+pub fn notice_galley(ctx: &egui::Context, text: &str, screen: f32) -> std::sync::Arc<egui::Galley> {
+    wrapped(ctx, text, FontId::proportional(theme::SIZE_S), Color32::PLACEHOLDER, notice_width(screen), NOTICE_ROWS)
+}
+
+/// A tooltip whose text can change while it is showing. egui sizes a tooltip
+/// once, when it opens; a longer text after that wrapped at the shorter one's
+/// width. Laid out from the text alone, it is always as wide as it needs.
+pub fn hint(response: Response, text: &str) -> Response {
+    if text.is_empty() {
+        return response;
+    }
+    response.on_hover_ui(|ui| {
+        let width = wrap_width(ui.spacing().tooltip_width, ui.ctx().content_rect().width());
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let galley = wrapped(ui.ctx(), text, font, ui.visuals().text_color(), width, usize::MAX);
+        ui.add(egui::Label::new(galley));
+    })
 }
 
 fn help_overlay(app: &mut Defalt, ctx: &egui::Context) {
@@ -1264,6 +1336,102 @@ mod tests {
         std::fs::write(root.join("cache").join("console-layout.json"), b"not json").unwrap();
         assert_eq!(Library::load(&root).share, Library::SHARE);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Each wrapped row's text, and whether the galley was cut short.
+    fn notice_rows(text: &str, screen: f32) -> (Vec<String>, f32, bool) {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut out = (Vec::new(), 0.0, false);
+        ctx.run_ui(egui::RawInput::default(), |_| {
+            let galley = notice_galley(&ctx, text, screen);
+            let rows = galley.rows.iter().map(|row| row.row.glyphs.iter().map(|g| g.chr).collect()).collect();
+            out = (rows, galley.size().x, galley.elided);
+        }).drop_without_applying_deltas();
+        out
+    }
+
+    fn natural(text: &str) -> f32 {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut width = 0.0;
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            width = ui.painter().layout_no_wrap(text.into(), FontId::proportional(theme::SIZE_S), theme::TEXT).size().x;
+        }).drop_without_applying_deltas();
+        width
+    }
+
+    #[test]
+    fn a_notice_wraps_at_most_520_and_never_tighter_than_160() {
+        assert_eq!(notice_width(1440.0), NOTICE_MOST);
+        assert_eq!(notice_width(1024.0), NOTICE_MOST);
+        assert!(notice_width(400.0) < NOTICE_MOST, "a narrow window's notice ran to its edges");
+        assert_eq!(notice_width(100.0), NOTICE_LEAST);
+        assert_eq!(notice_width(0.0), NOTICE_LEAST);
+        // Tooltips go through the same floor, at their own most.
+        assert_eq!(wrap_width(500.0, 1024.0), 500.0);
+        assert_eq!(wrap_width(500.0, 120.0), NOTICE_LEAST);
+    }
+
+    #[test]
+    fn a_short_notice_sits_on_one_line_at_its_own_width() {
+        let text = "Mix settings sent. New transitions use the new choices.";
+        for screen in [1440.0, 1024.0] {
+            let (rows, width, cut) = notice_rows(text, screen);
+            assert_eq!(rows.len(), 1, "wrapped at {screen}: {rows:?}");
+            assert!((width - natural(text)).abs() < 1.0, "{width} is not the text's own width");
+            assert!(!cut);
+        }
+        let (rows, width, _) = notice_rows("Skipped.", 1024.0);
+        assert_eq!(rows.len(), 1);
+        assert!(width < 100.0, "a short notice was padded out to {width}");
+    }
+
+    #[test]
+    fn a_long_notice_wraps_between_words_and_is_cut_after_three_lines() {
+        let long = "The station is still getting ready (warming the voices, fetching the next record and \
+                    working out the transition into it), so the first song may take a moment longer than usual.";
+        for screen in [1440.0, 1024.0, 300.0] {
+            let (rows, width, _) = notice_rows(long, screen);
+            assert!(rows.len() > 1 && rows.len() <= NOTICE_ROWS, "{rows:?}");
+            assert!(width <= notice_width(screen) + 0.5, "{width} is wider than it may be");
+            assert!(width >= NOTICE_LEAST.min(natural(long)) - 40.0, "wrapped a word wide: {rows:?}");
+            for pair in rows.windows(2) {
+                let (end, start) = (pair[0].chars().last(), pair[1].chars().next());
+                assert!(!(end.is_some_and(char::is_alphanumeric) && start.is_some_and(char::is_alphanumeric)),
+                        "broke mid-word: {pair:?}");
+            }
+        }
+        let (rows, _, cut) = notice_rows(&long.repeat(4), 1024.0);
+        assert_eq!(rows.len(), NOTICE_ROWS);
+        assert!(cut && rows.last().unwrap().ends_with('…'), "a very long notice was not cut: {rows:?}");
+    }
+
+    #[test]
+    fn a_long_notice_after_a_short_one_is_not_squeezed_to_its_width() {
+        // What an Area sizing itself did: remembered the short one's width.
+        let mut app = app();
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let input = || egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1024.0, 640.0))),
+            ..Default::default()
+        };
+        app.say("Skipped.");
+        for _ in 0..3 {
+            ctx.run_ui(input(), |_| notice(&mut app, &ctx)).drop_without_applying_deltas();
+        }
+        let short = ctx.memory(|m| m.area_rect(egui::Id::new("notice"))).expect("no notice drawn");
+        let text = "Mix settings sent. New transitions use the new choices.";
+        app.say(text);
+        for _ in 0..3 {
+            ctx.run_ui(input(), |_| notice(&mut app, &ctx)).drop_without_applying_deltas();
+        }
+        let long = ctx.memory(|m| m.area_rect(egui::Id::new("notice"))).unwrap();
+        assert!(long.width() > natural(text) && long.width() > short.width() * 2.0, "{short:?} then {long:?}");
+        assert!((long.center().x - 512.0).abs() <= 1.0, "not centred: {long:?}");
+        assert!(long.bottom() <= 640.0 - about::FOOTER, "over the footer: {long:?}");
+        assert!(long.height() < 40.0, "a one-line notice is {} tall", long.height());
     }
 
     #[test]

@@ -1,34 +1,35 @@
 //! The live booth. Drawing never advances or schedules audio.
+mod motion;
+
 use super::theme;
-use egui::{pos2, vec2, Align2, Color32, ColorImage, FontId, Rect, Sense, Stroke, TextureHandle, Ui};
+use egui::{epaint::Vertex, pos2, vec2, Align2, Color32, ColorImage, FontId, Mesh, Pos2, Rect, Sense, Shape, Stroke, TextureHandle, TextureId, Ui};
+use motion::{Cat, Eyes, Lights, Lips, Rain, Sign, Steam};
 use std::{
     f64::consts::TAU,
     path::{Path, PathBuf},
-    sync::mpsc,
+    sync::{mpsc, Arc},
     time::{Duration, Instant},
 };
 
 const W: f32 = 1728.;
 const H: f32 = 1152.;
+/// Where the cat can be clicked, in scene units.
 const CAT: [f32; 4] = [49., 251., 264., 137.];
 const HOSTS: [[f32; 4]; 2] = [[101., 183., 781., 861.], [910., 213., 681., 824.]];
 const PHONES: [[f32; 4]; 2] = [[383., 185., 328., 296.], [1077., 216., 304., 305.]];
-const ANCHORS: [f32; 2] = [1005., 1010.];
-const MOUTHS: [[f32; 4]; 2] = [[585., 463., 89., 51.], [1252., 477., 84., 55.]];
-const EYES: [[[f32; 4]; 2]; 2] = [
-    [[550., 374., 64., 40.], [634., 372., 48., 41.]],
-    [[1224., 391., 71., 47.], [1323., 405., 54., 48.]],
-];
+/// Each host's body, top to bottom: the head rides rigidly above the neck,
+/// the chest rises between the shoulders and the desk, the arms on the desk
+/// stay put.
+const NECK: [f32; 2] = [545., 575.];
+const SHOULDERS: [f32; 2] = [610., 650.];
+const DESK: [f32; 2] = [1005., 1010.];
 /// The neon ON AIR sign on the booth wall, with its glow, in scene units.
+#[cfg(test)]
 const SIGN: [f32; 4] = [1236., 72., 262., 132.];
-/// The part of each cat pose's canvas the cat is actually in, in that
-/// image's own pixels.
-const CAT_CROPS: [[f32; 4]; 4] = [
-    [1., 3., 264., 137.],
-    [58., 33., 1635., 848.],
-    [19., 10., 1678., 888.],
-    [40., 14., 1641., 878.],
-];
+/// The frame atlas and where everything in it goes, built by
+/// tools/build-studio-frames.py from the booth's own art.
+const ATLAS: &[u8] = include_bytes!("../../web/static/studio-v2/atlas.png");
+const FRAMES: &[u8] = include_bytes!("../../web/static/studio-v2/web/frames.json");
 
 /// A layer cut down to the part of the scene it covers.
 struct Patch {
@@ -37,17 +38,93 @@ struct Patch {
     area: [f32; 4],
 }
 
+/// One picture in the atlas: its texture coordinates, and where it goes in
+/// the scene.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Frame {
+    uv: Rect,
+    at: [f32; 4],
+}
+
+/// Every frame the booth animates with, read from the atlas's manifest.
+#[derive(Clone, Debug)]
+struct Frames {
+    /// Per host: the five open mouths, the half and closed lids, and the two
+    /// glances. A missing one is simply never drawn.
+    mouths: [[Option<Frame>; 5]; 2],
+    lids: [[Option<Frame>; 2]; 2],
+    looks: [[Option<Frame>; 2]; 2],
+    cat: Vec<Frame>,
+    lights: Vec<(Frame, Frame)>,
+    window: Frame,
+    flash: Frame,
+    sign_off: Frame,
+    sign_glow: Frame,
+    z: Frame,
+    soft: Frame,
+    lamp: Pos2,
+    mugs: [Pos2; 2],
+    snore: Pos2,
+}
+
+impl Frames {
+    fn parse(json: &[u8]) -> Option<Self> {
+        let v: serde_json::Value = serde_json::from_slice(json).ok()?;
+        let size = [v["atlas"][0].as_f64()? as f32, v["atlas"][1].as_f64()? as f32];
+        let four = |v: &serde_json::Value| -> Option<[f32; 4]> {
+            Some([v[0].as_f64()? as f32, v[1].as_f64()? as f32, v[2].as_f64()? as f32, v[3].as_f64()? as f32])
+        };
+        let frame = |v: &serde_json::Value| -> Option<Frame> {
+            let src = four(&v["src"])?;
+            let uv = Rect::from_min_size(pos2(src[0] / size[0], src[1] / size[1]), vec2(src[2] / size[0], src[3] / size[1]));
+            Some(Frame { uv, at: four(&v["at"])? })
+        };
+        let point = |v: &serde_json::Value| -> Option<Pos2> { Some(pos2(v[0].as_f64()? as f32, v[1].as_f64()? as f32)) };
+        let list = |v: &serde_json::Value, n: usize| -> [Option<Frame>; 5] {
+            std::array::from_fn(|i| if i < n { frame(&v[i]) } else { None })
+        };
+        let host = |name: &str| {
+            let h = &v["faces"][name];
+            let mouths = list(&h["mouths"], 5);
+            let lids = list(&h["lids"], 2);
+            let looks = list(&h["looks"], 2);
+            (mouths, [lids[0], lids[1]], [looks[0], looks[1]])
+        };
+        let (mav, rue) = (host("mav"), host("rue"));
+        let cat = v["cat"].as_array()?.iter().map(frame).collect::<Option<Vec<_>>>()?;
+        if cat.len() != motion::CAT_FRAMES.len() {
+            return None;
+        }
+        let lights = v["lights"].as_array()?.iter()
+            .map(|l| Some((frame(&l["lit"])?, frame(&l["dim"])?)))
+            .collect::<Option<Vec<_>>>()?;
+        Some(Frames {
+            mouths: [mav.0, rue.0],
+            lids: [mav.1, rue.1],
+            looks: [mav.2, rue.2],
+            cat,
+            lights,
+            window: frame(&v["window"])?,
+            flash: frame(&v["flash"])?,
+            sign_off: frame(&v["sign_off"])?,
+            sign_glow: frame(&v["sign_glow"])?,
+            z: frame(&v["z"])?,
+            soft: frame(&v["soft"])?,
+            lamp: point(&v["lamp"])?,
+            mugs: [point(&v["mugs"][0])?, point(&v["mugs"][1])?],
+            snore: point(&v["snore"])?,
+        })
+    }
+}
+
 struct Art {
     base: TextureHandle,
     hosts: [TextureHandle; 2],
     phones: [TextureHandle; 2],
-    mouths: [Patch; 2],
-    eyes: [Patch; 2],
-    cats: [TextureHandle; 4],
     mugs: [TextureHandle; 2],
     microphones: Patch,
-    /// The sign with its tubes cold, laid over the wall while off air.
-    sign_off: Patch,
+    atlas: TextureHandle,
+    frames: Frames,
 }
 
 /// The same, decoded but not yet uploaded: what the worker hands back.
@@ -55,12 +132,64 @@ struct Decoded<T> {
     base: T,
     hosts: [T; 2],
     phones: [T; 2],
-    mouths: [(T, [f32; 4]); 2],
-    eyes: [(T, [f32; 4]); 2],
-    cats: [T; 4],
     mugs: [T; 2],
     microphones: (T, [f32; 4]),
-    sign_off: (T, [f32; 4]),
+    atlas: T,
+    frames: Frames,
+}
+
+/// Meshes kept from frame to frame. egui holds on to a frame's shapes only
+/// until it has drawn them, so by the next frame each of these is ours
+/// alone again and is refilled in place rather than allocated anew.
+#[derive(Default)]
+struct Meshes {
+    pool: Vec<Arc<Mesh>>,
+    used: usize,
+}
+
+impl Meshes {
+    fn begin(&mut self) {
+        self.used = 0;
+    }
+    fn next(&mut self, texture: TextureId) -> &mut Mesh {
+        if self.used == self.pool.len() {
+            self.pool.push(Arc::new(Mesh::default()));
+        }
+        let mesh = Arc::make_mut(&mut self.pool[self.used]);
+        self.used += 1;
+        mesh.clear();
+        mesh.texture_id = texture;
+        mesh
+    }
+    /// Hand the mesh just filled to the painter.
+    fn paint(&self, p: &egui::Painter) {
+        if let Some(mesh) = self.pool[..self.used].last() {
+            if !mesh.is_empty() {
+                p.add(Shape::Mesh(mesh.clone()));
+            }
+        }
+    }
+}
+
+/// What the booth hears this frame.
+#[derive(Clone, Copy, Debug, Default)]
+struct Heard {
+    levels: [f32; 2],
+    tones: [f32; 2],
+    /// The low end of the music, 0..1, and its beat's flash.
+    energy: f32,
+    beat: f32,
+    on_air: bool,
+}
+
+/// A screenshot run: the booth played from a script instead of the station,
+/// a thirtieth of a second per frame, so every run looks the same.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Script {
+    voices: [bool; 2],
+    music: bool,
+    on_air_at: Option<f64>,
+    strike_at: Option<f64>,
 }
 
 type Cover = (String, Option<(ColorImage, String)>);
@@ -71,6 +200,7 @@ pub struct Studio {
     rain: bool,
     lights: bool,
     cat: bool,
+    lightning: bool,
     pub(super) reduced: bool,
     preferences: PathBuf,
     art: Option<Art>,
@@ -81,11 +211,24 @@ pub struct Studio {
     /// the fraction of a second a blink needs after a few hours on air.
     clock: f64,
     last: Instant,
-    holds: [f64; 2],
-    next_cat: f64,
-    cat_start: f64,
-    routine: usize,
-    next_routine: usize,
+    lips: [Lips; 2],
+    eyes: [Eyes; 2],
+    looks: [motion::Look; 2],
+    kitty: Cat,
+    pose: motion::CatPose,
+    /// How much the Zs show: they fade as the cat wakes, and back.
+    snoring: f32,
+    weather: Box<Rain>,
+    city: Lights,
+    steam: Steam,
+    sign: Sign,
+    both: bool,
+    meshes: Meshes,
+    script: Option<Script>,
+    /// Seconds a screenshot run has asked the booth to move on by.
+    pending: f64,
+    /// Where the scene was last drawn, in points, for a screenshot run to crop to.
+    pub(crate) drawn: Option<Rect>,
     cover_key: String,
     cover: Option<TextureHandle>,
     cover_source: String,
@@ -102,13 +245,15 @@ impl Studio {
             .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
             .unwrap_or_default();
         let (cover_out, cover_in) = mpsc::channel();
-        Self {
+        let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(7, |d| d.subsec_nanos());
+        let mut studio = Self {
             enabled: settings["enabled"].as_bool().unwrap_or(true),
             visualizer: settings["visualizer"].as_bool().unwrap_or(true),
             spectrum: super::visualizer::State::default(),
             rain: settings["rain"].as_bool().unwrap_or(true),
             lights: settings["lights"].as_bool().unwrap_or(true),
             cat: settings["cat"].as_bool().unwrap_or(true),
+            lightning: settings["lightning"].as_bool().unwrap_or(true),
             reduced: settings["reduced"].as_bool().unwrap_or(false),
             preferences,
             art: None,
@@ -116,39 +261,107 @@ impl Studio {
             preview: false,
             clock: 0.,
             last: Instant::now(),
-            holds: [0.; 2],
-            next_cat: 120.,
-            cat_start: 0.,
-            routine: usize::MAX,
-            next_routine: 0,
+            lips: [Lips::default(); 2],
+            eyes: [Eyes::new(1, true), Eyes::new(2, false)],
+            looks: [motion::Look { lid: 0, glance: 0 }; 2],
+            kitty: Cat::new(3, 0.),
+            pose: motion::CatPose { frame: 0, asleep: true },
+            snoring: 1.,
+            weather: Box::new(Rain::new(4)),
+            city: Lights::new(5, 0),
+            steam: Steam::new(6),
+            sign: Sign::default(),
+            both: false,
+            meshes: Meshes::default(),
+            script: None,
+            pending: 0.,
+            drawn: None,
             cover_key: String::new(),
             cover: None,
             cover_source: String::new(),
             cover_in,
             cover_out,
             agent: None,
-        }
+        };
+        studio.reseed(seed);
+        studio
     }
+
+    /// Shuffle what the booth does next, so no two sessions run alike.
+    fn reseed(&mut self, seed: u32) {
+        let seed = seed | 1;
+        self.eyes = [Eyes::new(seed.wrapping_mul(3), true), Eyes::new(seed.wrapping_mul(5), false)];
+        self.kitty = Cat::new(seed.wrapping_mul(7), self.clock);
+        self.weather = Box::new(Rain::new(seed.wrapping_mul(11)));
+        self.city = Lights::new(seed.wrapping_mul(13), self.city.count);
+        self.steam = Steam::new(seed.wrapping_mul(17));
+    }
+
+    /// Set the booth up for a screenshot: frozen on one moment, or (with
+    /// `advance`) played a frame at a time from a script.
     pub(crate) fn pose(&mut self, name: &str) {
         self.preview = true;
         self.reduced = name == "reduced";
-        self.clock = if name == "blink" { 0.05 } else { 1. };
-        self.holds = match name {
-            "mav" => [60., 0.],
-            "rue" => [0., 60.],
-            "both" => [60., 60.],
-            _ => [0., 0.],
-        };
-        if name == "yawn" {
-            self.routine = 1;
-            self.cat_start = 0.;
+        self.clock = 0.;
+        self.reseed(12_345);
+        let mut script = Script::default();
+        match name {
+            "mav" => script.voices = [true, false],
+            "rue" => script.voices = [false, true],
+            "both" | "speaking" => script.voices = [true, true],
+            "sign" => script.on_air_at = Some(0.5),
+            "rain" => {
+                script.music = true;
+                script.on_air_at = Some(0.);
+                script.strike_at = Some(2.2);
+            }
+            "overview" => {
+                script = Script { voices: [true, true], music: true, on_air_at: Some(0.), strike_at: Some(3.) };
+            }
+            "lights" | "blink" => script.on_air_at = Some(0.),
+            _ => {}
+        }
+        self.script = Some(script);
+        match name {
+            // Frozen poses land on the moment they are named for.
+            "mav" | "rue" | "both" => self.warm(1.2),
+            "blink" => {
+                self.warm(0.6);
+                self.eyes[0].next = self.clock;
+                self.eyes[1].next = self.clock;
+                self.warm(0.08);
+            }
+            "yawn" => {
+                self.kitty.play(3, self.clock);
+                self.warm(2.3);
+            }
+            "cat" => self.kitty.play(3, self.clock),
+            "groom" => self.kitty.play(4, self.clock),
+            "stretch" => self.kitty.play(5, self.clock),
+            "perk" => self.kitty.poke(self.clock),
+            _ => self.warm(0.05),
         }
     }
+
+    /// Run the posed booth forward without drawing.
+    fn warm(&mut self, seconds: f64) {
+        let steps = (seconds * 30.).round() as usize;
+        for _ in 0..steps {
+            let heard = self.scripted();
+            self.step(1. / 30., heard);
+        }
+    }
+
+    /// Move a screenshot run on by `seconds` before its next frame.
+    pub(crate) fn advance(&mut self, seconds: f64) {
+        self.pending += seconds;
+    }
+
     pub fn save(&self) {
         if let Some(parent) = self.preferences.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let data = serde_json::json!({"enabled":self.enabled,"visualizer":self.visualizer,"rain":self.rain,"lights":self.lights,"cat":self.cat,"reduced":self.reduced});
+        let data = serde_json::json!({"enabled":self.enabled,"visualizer":self.visualizer,"rain":self.rain,"lights":self.lights,"cat":self.cat,"lightning":self.lightning,"reduced":self.reduced});
         let _ = std::fs::write(&self.preferences, data.to_string());
     }
 
@@ -175,7 +388,9 @@ impl Studio {
         // the placeholder; everything else carries on drawing meanwhile.
         let decoded = if self.preview { receive.recv().ok() } else { receive.try_recv().ok() };
         if let Some(decoded) = decoded {
-            self.art = Some(Art::upload(ctx, decoded));
+            let art = Art::upload(ctx, decoded);
+            self.city.count = art.frames.lights.len().min(motion::MAX_WINDOWS);
+            self.art = Some(art);
             self.art_in = None;
         }
     }
@@ -214,47 +429,88 @@ impl Studio {
         }
     }
 
-    /// Advance the animation clock and the cat's routine, and return the
-    /// pose to draw it in.
-    fn step(&mut self, levels: [f32; 2]) -> usize {
-        let elapsed = self.last.elapsed().as_secs_f64();
-        self.last = Instant::now();
-        // Returning from another page or a minimized window does not fast-forward the cat.
-        let dt = if elapsed < 0.25 { elapsed } else { 0. };
-        if !self.reduced && !self.preview {
-            self.clock += dt;
-        }
-        for (i, level) in levels.iter().enumerate() {
-            if *level > 0.018 {
-                self.holds[i] = self.clock + 0.075;
+    /// What a screenshot run hears at this moment of its script.
+    fn scripted(&self) -> Heard {
+        let script = self.script.unwrap_or_default();
+        let t = self.clock;
+        let mut heard = Heard { on_air: script.on_air_at.is_some_and(|at| t >= at), ..Default::default() };
+        for host in 0..2 {
+            if script.voices[host] {
+                let (level, tone) = synthetic_voice(t, host, script.voices == [true, true]);
+                heard.levels[host] = level;
+                heard.tones[host] = tone;
             }
         }
-        let t = self.clock;
-        if !self.cat || self.reduced {
-            self.routine = usize::MAX;
-            self.next_cat = t + 120.;
+        if script.music {
+            let beat = (-(t.rem_euclid(0.5)) / 0.12).exp() as f32;
+            heard.beat = beat;
+            heard.energy = 0.35 + 0.35 * beat;
         }
-        if self.cat && !self.reduced && t >= self.next_cat && self.routine == usize::MAX {
-            self.routine = self.next_routine;
-            self.next_routine = (self.next_routine + 3) % 7;
-            self.cat_start = t;
-        }
-        let age = (t - self.cat_start) as f32;
-        let (pose, duration) = cat_pose(self.routine, age);
-        if self.routine != usize::MAX && age > duration {
-            self.routine = usize::MAX;
-            self.next_cat = t + 90. + (sine(t, 17. / TAU, 0.).abs() * 90.) as f64;
-        }
-        if self.routine == usize::MAX { 0 } else { pose }
+        heard
     }
 
-    fn scene(&mut self, ui: &mut Ui, scene: Rect, levels: [f32; 2], on_air: bool) {
+    /// Move everything on by `dt` seconds.
+    fn step(&mut self, dt: f64, heard: Heard) {
+        self.clock += dt;
+        let t = self.clock;
+        let dt = dt as f32;
+        let reduced = self.reduced;
+        for host in 0..2 {
+            self.lips[host].step(dt, heard.levels[host], heard.tones[host], reduced);
+        }
+        let talking = [self.lips[0].talking(), self.lips[1].talking()];
+        for host in 0..2 {
+            self.looks[host] = self.eyes[host].step(t, talking[host], talking[1 - host], reduced);
+        }
+        let both = self.lips[0].viseme != motion::REST && self.lips[1].viseme != motion::REST;
+        if both && !self.both && self.cat && !reduced {
+            self.kitty.crowd(t);
+        }
+        self.both = both;
+        self.pose = self.kitty.step(t, self.cat, reduced);
+        let target = if self.pose.asleep { 1. } else { 0. };
+        self.snoring += (target - self.snoring).clamp(-dt / 0.5, dt / 0.5);
+        if !reduced {
+            self.weather.step(dt, t, heard.energy);
+            self.weather.storm(t, self.lightning && self.rain);
+            if let Some(at) = self.script.and_then(|s| s.strike_at) {
+                if t >= at && t - (dt as f64) < at {
+                    self.weather.strike(t);
+                }
+            }
+            self.city.step(dt, t);
+            self.steam.step(dt);
+        }
+        self.sign.step(t, heard.on_air, reduced);
+    }
+
+    fn scene(&mut self, ui: &mut Ui, scene: Rect, mut heard: Heard) {
         if !ui.is_rect_visible(scene) {
             self.last = Instant::now();
             return;
         }
         self.collect_art(ui.ctx());
-        let pose = self.step(levels);
+        let elapsed = self.last.elapsed().as_secs_f64();
+        self.last = Instant::now();
+        // Returning from another page or a minimized window does not fast-forward the cat.
+        let dt = if elapsed < 0.25 { elapsed } else { 0. };
+        if self.preview {
+            // A screenshot run steps exactly a thirtieth of a second at a
+            // time, from its script, and only when asked to.
+            let steps = (std::mem::take(&mut self.pending) * 30.).round() as usize;
+            for _ in 0..steps {
+                let scripted = self.scripted();
+                self.step(1. / 30., scripted);
+            }
+            heard = self.scripted();
+        } else if dt > 0. {
+            self.step(dt, heard);
+        }
+        if self.reduced {
+            heard.energy = 0.;
+            heard.beat = 0.;
+        }
+        self.drawn = Some(scene);
         let p = ui.painter().with_clip_rect(scene.intersect(ui.clip_rect()));
         let Some(a) = self.art.as_ref() else {
             // Still decoding: an empty booth rather than a stalled window.
@@ -265,122 +521,166 @@ impl Studio {
             return;
         };
         let t = self.clock;
-        // The room moves with the music, a little: the kick lifts the city
-        // lights and thickens the rain. Nothing at all in reduced motion.
-        let energy = if self.reduced { 0. } else { self.spectrum.low_energy() };
-        layer(&p, scene, &a.base, [0., 0., W, H], full_uv());
-        // The sign tells the truth: lit only while the station is.
-        if !on_air {
-            layer(&p, scene, &a.sign_off.texture, a.sign_off.area, full_uv());
-        }
         let s = scene.width() / W;
         let at = |x: f32, y: f32| scene.min + vec2(x * s, y * s);
-        // Weather is painted before the host layers, so silhouettes occlude it.
-        if !self.reduced {
-            if self.lights {
-                for (i, (x, y)) in [
-                    (771., 389.),
-                    (818., 474.),
-                    (905., 383.),
-                    (987., 430.),
-                    (1000., 514.),
-                    (748., 436.),
-                ]
-                .iter()
-                .enumerate()
-                {
-                    let i64 = i as f64;
-                    let glow = 0.5 + 0.5 * sine(t, 1. / (TAU * (5. + i64 * 0.4)), i64);
-                    let alpha = (15. + 26. * glow + 34. * energy).min(255.) as u8;
-                    p.rect_filled(
-                        Rect::from_min_size(at(*x, *y), vec2(9., 14.) * s),
-                        0.,
-                        theme::WINDOW_LIGHT.gamma_multiply_u8(alpha),
-                    );
+        let rect = |r: [f32; 4]| Rect::from_min_size(at(r[0], r[1]), vec2(r[2], r[3]) * s);
+        let f = &a.frames;
+        let atlas = a.atlas.id();
+        let still = self.reduced;
+        let meshes = &mut self.meshes;
+        meshes.begin();
+        layer(&p, scene, &a.base, [0., 0., W, H], full_uv());
+
+        // The city: lit windows breathe a little, and now and then one goes
+        // out and comes back. The music lifts them, a touch.
+        if self.lights && !still {
+            let mesh = meshes.next(atlas);
+            for (i, (lit, dim)) in f.lights.iter().enumerate().take(self.city.count) {
+                let off = 1. - self.city.windows[i].on;
+                if off > 0.01 {
+                    mesh.add_rect_with_uv(rect(dim.at), dim.uv, Color32::from_white_alpha((off * 235.) as u8));
                 }
+                let glow = self.city.glow(i, t, heard.energy);
+                mesh.add_rect_with_uv(rect(lit.at), lit.uv, additive(glow));
             }
-            if self.rain {
-                let drops = 64 + (energy * 32.) as usize;
-                let alpha = (48. + 50. * energy).min(255.) as u8;
-                for i in 0..drops {
-                    let i = i as f64;
-                    let x = (468. + (i * 79.73) % 660.) as f32;
-                    let y = (i * 49.17 + t * (42. + i % 6. * 7.)).rem_euclid(650.) as f32 - 25.;
-                    let end = pos2(x - 2., y + 11. + (i % 9.) as f32);
-                    if glass(x, y) && glass(end.x, end.y) {
-                        p.line_segment(
-                            [at(x, y), at(end.x, end.y)],
-                            Stroke::new((1.1 * s).max(0.45), theme::RAIN.gamma_multiply_u8(alpha)),
-                        );
-                    }
-                }
-            }
+            meshes.paint(&p);
         }
-        let breath = if self.reduced { 0. } else { 0.7 * (1. - cosine(t, 1. / 4.8, 0.)) };
-        let cat_texture = &a.cats[pose];
-        layer(
-            &p,
-            scene,
-            cat_texture,
-            [CAT[0], CAT[1] - breath, CAT[2], CAT[3] + breath],
-            full_uv(),
-        );
-        if pose == 0 {
-            for phase in [0., 2.] {
-                let k = if self.reduced { 0.4 } else { ((t + phase).rem_euclid(4.) / 4.) as f32 };
-                p.text(
-                    at(155. + k * 9., 261. - k * 32.),
-                    Align2::LEFT_BOTTOM,
-                    "z",
-                    FontId::monospace((18. * s).max(7.)),
-                    theme::SNORE.gamma_multiply_u8((153. * (std::f32::consts::PI * k).sin()) as u8),
-                );
-                if self.reduced {
-                    break;
+        let window = rect(motion::WINDOW);
+        if self.rain && !still {
+            let flash = self.weather.flash(t);
+            if flash > 0. {
+                let mesh = meshes.next(atlas);
+                mesh.add_rect_with_uv(rect(f.flash.at), f.flash.uv, additive(0.9 * flash));
+                meshes.paint(&p);
+            }
+            let wet = p.with_clip_rect(window.intersect(p.clip_rect()));
+            let mesh = meshes.next(TextureId::default());
+            rain_mesh(mesh, &self.weather, &at, s);
+            meshes.paint(&wet);
+            let mesh = meshes.next(atlas);
+            for bead in self.weather.beads.iter().filter(|b| b.state > 0) {
+                let r = bead.r * 1.7;
+                let dot = Rect::from_center_size(at(bead.x, bead.y), vec2(r, r) * 2. * s);
+                mesh.add_rect_with_uv(dot, f.soft.uv, Color32::from_rgba_unmultiplied(205, 218, 240, 120));
+                if bead.state == 2 && bead.y - bead.top > 2. {
+                    let trail = Rect::from_min_max(at(bead.x - 0.6, bead.top), at(bead.x + 0.6, bead.y));
+                    mesh.add_rect_with_uv(trail, f.soft.uv, Color32::from_rgba_unmultiplied(190, 205, 235, 70));
                 }
             }
+            meshes.paint(&wet);
+            let mesh = meshes.next(atlas);
+            mesh.add_rect_with_uv(rect(f.window.at), f.window.uv, Color32::WHITE);
+            meshes.paint(&p);
         }
+
+        // The sign: lit only while the station is, warming up with a flicker,
+        // its glow breathing while it burns.
+        let burn = self.sign.level * self.sign.pulse(t, still);
+        {
+            let mesh = meshes.next(atlas);
+            let dark = (1. - burn).clamp(0., 1.);
+            if dark > 0.004 {
+                mesh.add_rect_with_uv(rect(f.sign_off.at), f.sign_off.uv, Color32::from_white_alpha((dark * 255.) as u8));
+            }
+            if burn > 1. {
+                mesh.add_rect_with_uv(rect(f.sign_glow.at), f.sign_glow.uv, additive((burn - 1.) * 3.));
+            }
+            // The lamp flutters, and dips now and then.
+            if !still {
+                let lamp = self.city.lamp(t) - 1.;
+                let glow = Rect::from_center_size(at(f.lamp.x, f.lamp.y + 30.), vec2(330., 300.) * s);
+                let colour = if lamp > 0. {
+                    let k = lamp * 1.6;
+                    Color32::from_rgba_premultiplied((255. * k) as u8, (185. * k) as u8, (105. * k) as u8, 0)
+                } else {
+                    Color32::from_black_alpha((-lamp * 300.).min(255.) as u8)
+                };
+                mesh.add_rect_with_uv(glow, f.soft.uv, colour);
+            }
+            meshes.paint(&p);
+        }
+
+        // The cat, and its Zs while it sleeps.
+        {
+            let mesh = meshes.next(atlas);
+            let cat = f.cat[self.pose.frame.min(f.cat.len() - 1)];
+            mesh.add_rect_with_uv(rect(cat.at), cat.uv, Color32::WHITE);
+            if self.snoring > 0.01 {
+                let zs: &[f32] = if still { &[0.45] } else { &[0., 1. / 3., 2. / 3.] };
+                for phase in zs {
+                    let k = if still { *phase } else { ((t / 3.6) as f32 + phase).fract() };
+                    let (dx, dy, size, alpha) = motion::z_at(k);
+                    let alpha = if still { 0.5 } else { alpha * self.snoring };
+                    let z = Rect::from_center_size(at(f.snore.x + dx, f.snore.y + dy), vec2(18., 18.) * size * s);
+                    mesh.add_rect_with_uv(z, f.z.uv, theme::SNORE.gamma_multiply(alpha));
+                }
+            }
+            meshes.paint(&p);
+        }
+
+        // The hosts: breathing from the chest, the head riding rigidly on
+        // top, a nod when a word lands and a small bob to the beat.
         for i in 0..2 {
-            let stretch = if self.reduced {
-                1.
+            let lips = &self.lips[i];
+            let (chest, head) = if still {
+                (0., 0.)
             } else {
-                1. + 0.0016 * (1. - cosine(t, 1. / (5.4 + i as f64 * 0.6), i as f64 / TAU))
+                let chest = motion::breath(t, i);
+                let bob = if lips.talking() { 0. } else { 0.9 * heard.beat };
+                // Whole screen pixels, so the face never shimmers.
+                (chest, ((chest + lips.nod() + bob) * s).round() / s)
             };
-            let posed = |r| breathing_rect(r, ANCHORS[i], stretch);
-            layer(&p, scene, &a.hosts[i], posed(HOSTS[i]), full_uv());
-            layer(&p, scene, &a.phones[i], posed(PHONES[i]), full_uv());
-            let speaking = if self.reduced {
-                levels[i] > 0.018
-            } else {
-                t < self.holds[i]
-            };
-            if speaking {
-                face_patch(&p, scene, &a.mouths[i], MOUTHS[i], posed(MOUTHS[i]));
-            }
-            let (offset, period) = if i == 0 { (0., 5.1) } else { (1.7, 6.7) };
-            if !self.reduced && (t + offset).rem_euclid(period) < 0.14 {
-                for eye in EYES[i] {
-                    face_patch(&p, scene, &a.eyes[i], eye, posed(eye));
+            let bands = [(NECK[i], head), (SHOULDERS[i], chest), (DESK[i], 0.)];
+            let mesh = meshes.next(a.hosts[i].id());
+            warp(mesh, HOSTS[i], &bands, &at);
+            meshes.paint(&p);
+            let mesh = meshes.next(a.phones[i].id());
+            warp(mesh, PHONES[i], &bands, &at);
+            meshes.paint(&p);
+            let mesh = meshes.next(atlas);
+            let mut face = |frame: Option<Frame>| {
+                if let Some(frame) = frame {
+                    let [x, y, w, h] = frame.at;
+                    mesh.add_rect_with_uv(rect([x, y + head, w, h]), frame.uv, Color32::WHITE);
                 }
+            };
+            let viseme = lips.viseme;
+            if viseme != motion::REST {
+                face(f.mouths[i][viseme - 1]);
             }
+            let look = self.looks[i];
+            if look.glance != 0 {
+                face(f.looks[i][look.glance - 1]);
+            }
+            if look.lid != motion::OPEN {
+                face(f.lids[i][look.lid - 1]);
+            }
+            meshes.paint(&p);
         }
         layer(&p, scene, &a.mugs[0], [416., 892., 164., 175.], full_uv());
         layer(&p, scene, &a.mugs[1], [1095., 921., 184., 175.], full_uv());
+        // Steam off both mugs, curling as it rises and gone before it reaches the faces.
+        if !still {
+            let mesh = meshes.next(atlas);
+            for (mug, puffs) in self.steam.puffs.iter().enumerate() {
+                for puff in puffs {
+                    let (x, y, r, alpha) = motion::puff_at(puff);
+                    let centre = f.mugs[mug] + vec2(x, y);
+                    let dot = Rect::from_center_size(at(centre.x, centre.y), vec2(r, r * 1.2) * 2. * s);
+                    mesh.add_rect_with_uv(dot, f.soft.uv, Color32::from_rgba_unmultiplied(236, 226, 214, (alpha * 255.) as u8));
+                }
+            }
+            meshes.paint(&p);
+        }
         layer(&p, scene, &a.microphones.texture, a.microphones.area, full_uv());
         if ui
-            .interact(
-                Rect::from_min_size(at(CAT[0], CAT[1]), vec2(CAT[2], CAT[3]) * s),
-                ui.id().with("cat"),
-                Sense::click(),
-            )
+            .interact(rect(CAT), ui.id().with("cat"), Sense::click())
             .on_hover_text("Say hello to the studio cat")
             .clicked()
             && !self.reduced
             && self.cat
-            && self.routine == usize::MAX
         {
-            self.routine = 5;
-            self.cat_start = t;
+            self.kitty.poke(t);
         }
         if !self.reduced {
             ui.ctx().request_repaint_after(Duration::from_millis(33));
@@ -388,15 +688,118 @@ impl Studio {
     }
 }
 
-/// `sin` of a phase that turns `cycles_per_second` times a second, worked
-/// out in f64 and wrapped before the trig so hours of clock stay exact.
-fn sine(t: f64, cycles_per_second: f64, offset: f64) -> f32 {
-    ((t * cycles_per_second * TAU + offset).rem_euclid(TAU)).sin() as f32
+/// A voice for screenshot runs: phrases of syllables at about four a second,
+/// mostly open vowels with the odd hiss and round one, a breath between
+/// phrases. With both hosts talking they take turns and overlap a little.
+fn synthetic_voice(t: f64, host: usize, both: bool) -> (f32, f32) {
+    let (phrase, gap, offset) = if both { (2.6, 2.2, if host == 0 { 0. } else { 2.1 }) } else { (2.4, 0.7, 0.) };
+    let cycle = (t + 20. - offset).rem_euclid(phrase + gap);
+    if cycle >= phrase {
+        return (0., 0.);
+    }
+    let syllable = cycle * (3.7 + host as f64 * 0.6);
+    let n = syllable.floor() as u32;
+    let hash = n.wrapping_mul(2_654_435_761).wrapping_add(host as u32 * 97) >> 16;
+    let within = syllable.fract() as f32;
+    let loud = 0.35 + 0.65 * ((hash % 7) as f32 / 6.);
+    let shape = (std::f32::consts::PI * within).sin().powf(0.7);
+    let level = 0.004 + 0.2 * loud * shape;
+    let tone = match hash % 5 {
+        0 if within < 0.5 => 0.4,
+        1 => 0.01,
+        _ => 0.05,
+    };
+    (level, tone)
 }
 
-/// The same for `cos`; `offset` is in turns.
-fn cosine(t: f64, cycles_per_second: f64, offset: f64) -> f32 {
-    ((t * cycles_per_second + offset).rem_euclid(1.) * TAU).cos() as f32
+/// A colour that adds `k` of a texture's own light rather than covering.
+fn additive(k: f32) -> Color32 {
+    let v = (k.clamp(0., 1.) * 255.) as u8;
+    Color32::from_rgba_premultiplied(v, v, v, 0)
+}
+
+/// Draw a layer bent vertically: each band's line moves down by its offset,
+/// everything between follows in proportion, and above the first band and
+/// below the last the layer just moves.
+fn warp(mesh: &mut Mesh, r: [f32; 4], bands: &[(f32, f32)], at: &impl Fn(f32, f32) -> Pos2) {
+    let offset = |y: f32| -> f32 {
+        let (first, last) = (bands[0], bands[bands.len() - 1]);
+        if y <= first.0 {
+            return first.1;
+        }
+        if y >= last.0 {
+            return last.1;
+        }
+        for pair in bands.windows(2) {
+            if y <= pair[1].0 {
+                let k = (y - pair[0].0) / (pair[1].0 - pair[0].0);
+                return pair[0].1 + (pair[1].1 - pair[0].1) * k;
+            }
+        }
+        last.1
+    };
+    let (top, bottom) = (r[1], r[1] + r[3]);
+    let mut row = |y: f32| {
+        let v = (y - top) / r[3];
+        let dy = offset(y);
+        for (u, x) in [(0., r[0]), (1., r[0] + r[2])] {
+            mesh.vertices.push(Vertex { pos: at(x, y + dy), uv: pos2(u, v), color: Color32::WHITE });
+        }
+    };
+    row(top);
+    for &(y, _) in bands {
+        if y > top && y < bottom {
+            row(y);
+        }
+    }
+    row(bottom);
+    let rows = mesh.vertices.len() as u32 / 2;
+    for i in 0..rows - 1 {
+        let k = i * 2;
+        mesh.indices.extend_from_slice(&[k, k + 1, k + 2, k + 1, k + 3, k + 2]);
+    }
+}
+
+/// Every drop as a thin streak, brightest at its head, and the splashes on the sill.
+fn rain_mesh(mesh: &mut Mesh, rain: &Rain, at: &impl Fn(f32, f32) -> Pos2, s: f32) {
+    let uv = egui::epaint::WHITE_UV;
+    let weight = 0.85 + 0.4 * rain.weight;
+    let mut quad = |a: Pos2, b: Pos2, width: f32, tail: Color32, head: Color32| {
+        let along = b - a;
+        let length = along.length().max(1e-3);
+        let n = vec2(-along.y, along.x) / length * (width * 0.5);
+        let k = mesh.vertices.len() as u32;
+        for (pos, color) in [(a - n, tail), (a + n, tail), (b - n, head), (b + n, head)] {
+            mesh.vertices.push(Vertex { pos, uv, color });
+        }
+        mesh.indices.extend_from_slice(&[k, k + 1, k + 2, k + 1, k + 3, k + 2]);
+    };
+    let (r, g, b) = (theme::RAIN.r(), theme::RAIN.g(), theme::RAIN.b());
+    for drop in &rain.drops {
+        let lean = rain.lean(drop.layer);
+        let head = at(drop.x, drop.y);
+        let tail = at(drop.x - lean * drop.len, drop.y - drop.len);
+        let alpha = (drop.alpha * weight).min(1.);
+        let width = (motion::LAYERS[drop.layer].4 * s).max(0.7);
+        quad(tail, head, width, Color32::TRANSPARENT, Color32::from_rgba_unmultiplied(r, g, b, (alpha * 255.) as u8));
+    }
+    for splash in rain.splashes.iter().filter(|s| s.age < motion::SPLASH_LIFE) {
+        let k = splash.age / motion::SPLASH_LIFE;
+        let alpha = ((1. - k) * 150.) as u8;
+        let colour = Color32::from_rgba_unmultiplied(r, g, b, alpha);
+        for side in [-1., 1.] {
+            let x = splash.x + side * (2. + 6. * k) * splash.size;
+            let y = 604. - 7. * (std::f32::consts::PI * k).sin() * splash.size;
+            quad(at(x, y + 1.2), at(x, y - 1.2), (1.2 * s).max(0.7), colour, colour);
+        }
+    }
+}
+
+/// `sin` of a phase that turns `cycles_per_second` times a second, worked
+/// out in f64 and wrapped before the trig so hours of clock stay exact.
+#[cfg(test)]
+fn sine(t: f64, cycles_per_second: f64, offset: f64) -> f32 {
+    ((t * cycles_per_second * TAU + offset).rem_euclid(TAU)).sin() as f32
 }
 
 fn fetch_cover(agent: &ureq::Agent, url: &str) -> Option<(ColorImage, String)> {
@@ -428,11 +831,6 @@ fn fetch_cover(agent: &ureq::Agent, url: &str) -> Option<(ColorImage, String)> {
 fn full_uv() -> Rect {
     Rect::from_min_max(pos2(0., 0.), pos2(1., 1.))
 }
-fn breathing_rect(mut r: [f32; 4], anchor: f32, scale: f32) -> [f32; 4] {
-    r[1] = anchor + (r[1] - anchor) * scale;
-    r[3] *= scale;
-    r
-}
 fn layer(p: &egui::Painter, scene: Rect, texture: &TextureHandle, r: [f32; 4], uv: Rect) {
     let s = scene.width() / W;
     p.image(
@@ -441,32 +839,6 @@ fn layer(p: &egui::Painter, scene: Rect, texture: &TextureHandle, r: [f32; 4], u
         uv,
         Color32::WHITE,
     );
-}
-fn face_patch(p: &egui::Painter, scene: Rect, patch: &Patch, source: [f32; 4], dest: [f32; 4]) {
-    // An elliptical mesh samples only the mouth/eyelids; no rectangular skin seams.
-    let mut mesh = egui::Mesh::with_texture(patch.texture.id());
-    let s = scene.width() / W;
-    let area = patch.area;
-    for i in 0..=49 {
-        let v = if i == 0 {
-            vec2(0.5, 0.5)
-        } else {
-            let a = (i - 1) as f32 * std::f32::consts::TAU / 48.;
-            vec2(0.5 + 0.5 * a.cos(), 0.5 + 0.5 * a.sin())
-        };
-        mesh.vertices.push(egui::epaint::Vertex {
-            pos: scene.min + vec2(dest[0] + v.x * dest[2], dest[1] + v.y * dest[3]) * s,
-            uv: pos2(
-                (source[0] + v.x * source[2] - area[0]) / area[2],
-                (source[1] + v.y * source[3] - area[1]) / area[3],
-            ),
-            color: Color32::WHITE,
-        });
-        if i > 1 {
-            mesh.indices.extend_from_slice(&[0, i - 1, i]);
-        }
-    }
-    p.add(egui::Shape::mesh(mesh));
 }
 
 fn colour_image(image: &image::RgbaImage) -> ColorImage {
@@ -478,34 +850,6 @@ fn colour_image(image: &image::RgbaImage) -> ColorImage {
 fn cut(image: &image::RgbaImage, area: [f32; 4]) -> (ColorImage, [f32; 4]) {
     let (piece, covered) = cut_rgba(image, area);
     (colour_image(&piece), covered)
-}
-
-/// A neon sign with the power off: the red light taken out of every pixel
-/// in proportion to how much of it there was, so the tubes go dark glass and
-/// the glow on the wall around them goes with them. Worked on a copy cut
-/// from the background at load; the artwork on disk is never touched.
-fn unlit(image: &mut image::RgbaImage) {
-    let (width, height) = (image.width() as f32, image.height() as f32);
-    // The wall is a warm brown with some red in it already, so only red
-    // beyond the wall's own counts as the sign's light; and the change fades
-    // out towards the edges of the patch, so there is no seam where it
-    // meets the untouched wall.
-    const WALL: f32 = 45.0;
-    const FEATHER: f32 = 18.0;
-    for (x, y, pixel) in image.enumerate_pixels_mut() {
-        let [r, g, b, a] = pixel.0.map(f32::from);
-        let edge = (x as f32).min(y as f32).min(width - 1.0 - x as f32).min(height - 1.0 - y as f32);
-        let feather = (edge / FEATHER).clamp(0.0, 1.0);
-        let glow = (r - g.max(b) - WALL).max(0.0);
-        // How much of this pixel is the sign's own light.
-        let lit = (glow / 90.0).clamp(0.0, 1.0) * feather;
-        if lit <= 0.0 {
-            continue;
-        }
-        let dim = 1.0 - 0.72 * lit;
-        let r = (r - glow * 0.85 * feather) * dim;
-        pixel.0 = [r, g * dim, b * dim, a].map(|v| v.round().clamp(0.0, 255.0) as u8);
-    }
 }
 
 fn cut_rgba(image: &image::RgbaImage, area: [f32; 4]) -> (image::RgbaImage, [f32; 4]) {
@@ -538,13 +882,10 @@ fn opaque_area(image: &image::RgbaImage) -> [f32; 4] {
     [left as f32 / k, top as f32 / k, (right - left) as f32 / k, (bottom - top) as f32 / k]
 }
 
-/// Decode, and cut every layer down to what the scene uses of it.
-///
-/// Several layers are drawn from full-size canvases of which only a sliver
-/// is ever sampled -- two mouths out of a whole frame of `speaking.jpg`, a cat
-/// a few hundred pixels wide out of a canvas nearly two thousand wide. Kept
-/// whole they are most of the booth's video memory. The files themselves are
-/// untouched; the browser player uses them as they are.
+/// Decode, and cut every layer down to what the scene uses of it. The
+/// microphones are a whole canvas of which a band is drawn; kept whole they
+/// would be most of the booth's video memory. Everything that moves comes
+/// from the one atlas.
 fn decode_art() -> Decoded<ColorImage> {
     fn rgba(bytes: &[u8]) -> image::RgbaImage {
         image::load_from_memory(bytes).expect("embedded studio layer").to_rgba8()
@@ -555,55 +896,16 @@ fn decode_art() -> Decoded<ColorImage> {
         };
     }
     let whole = |image: image::RgbaImage| colour_image(&image);
-    let speaking = art!("speaking.jpg");
-    let blink = art!("blink.png");
-    let mouths = MOUTHS.map(|mouth| cut(&speaking, mouth));
-    let eyes = EYES.map(|[a, b]| {
-        let left = a[0].min(b[0]);
-        let top = a[1].min(b[1]);
-        let right = (a[0] + a[2]).max(b[0] + b[2]);
-        let bottom = (a[1] + a[3]).max(b[1] + b[3]);
-        cut(&blink, [left, top, right - left, bottom - top])
-    });
     let microphones = art!("microphones.png");
     let microphones = cut(&microphones, opaque_area(&microphones));
-    let background = art!("background.png");
-    let (mut sign, sign_area) = cut_rgba(&background, SIGN);
-    unlit(&mut sign);
-    let cats = [
-        art!("sleeping-cat.png"),
-        art!("cat-awake.png"),
-        art!("cat-yawn.png"),
-        art!("cat-groom.png"),
-    ];
-    let mut index = 0;
-    let cats = cats.map(|cat| {
-        let [x, y, w, h] = CAT_CROPS[index];
-        index += 1;
-        let piece = image::imageops::crop_imm(&cat, x as u32, y as u32, w as u32, h as u32).to_image();
-        // The cat is drawn a few hundred scene units wide; twice that is
-        // enough for any display the booth fits on.
-        let (most_w, most_h) = ((CAT[2] * 2.) as u32, (CAT[3] * 2.) as u32);
-        let piece = if piece.width() > most_w || piece.height() > most_h {
-            let scale = (most_w as f32 / piece.width() as f32).min(most_h as f32 / piece.height() as f32);
-            image::imageops::resize(&piece, (piece.width() as f32 * scale) as u32,
-                                    (piece.height() as f32 * scale) as u32,
-                                    image::imageops::FilterType::Triangle)
-        } else {
-            piece
-        };
-        colour_image(&piece)
-    });
     Decoded {
-        sign_off: (colour_image(&sign), sign_area),
-        base: whole(background),
+        base: whole(art!("background.png")),
         hosts: [whole(art!("man.png")), whole(art!("woman.png"))],
         phones: [whole(art!("headphones-mav.png")), whole(art!("headphones-rue.png"))],
-        mouths,
-        eyes,
-        cats,
         mugs: [whole(art!("black-mug.png")), whole(art!("white-mug.png"))],
         microphones,
+        atlas: whole(rgba(ATLAS)),
+        frames: Frames::parse(FRAMES).expect("the studio frame manifest matches its atlas"),
     }
 }
 
@@ -611,66 +913,19 @@ impl Art {
     fn upload(ctx: &egui::Context, decoded: Decoded<ColorImage>) -> Self {
         let texture = |name: &str, image: ColorImage| ctx.load_texture(name, image, egui::TextureOptions::LINEAR);
         let patch = |name: &str, (image, area): (ColorImage, [f32; 4])| Patch { texture: texture(name, image), area };
-        let [mouth_a, mouth_b] = decoded.mouths;
-        let [eyes_a, eyes_b] = decoded.eyes;
         let [host_a, host_b] = decoded.hosts;
         let [phones_a, phones_b] = decoded.phones;
-        let [cat_0, cat_1, cat_2, cat_3] = decoded.cats;
         let [mug_a, mug_b] = decoded.mugs;
         Self {
             base: texture("studio-background", decoded.base),
             hosts: [texture("studio-mav", host_a), texture("studio-rue", host_b)],
             phones: [texture("studio-phones-mav", phones_a), texture("studio-phones-rue", phones_b)],
-            mouths: [patch("studio-mouth-mav", mouth_a), patch("studio-mouth-rue", mouth_b)],
-            eyes: [patch("studio-eyes-mav", eyes_a), patch("studio-eyes-rue", eyes_b)],
-            cats: [
-                texture("studio-cat-sleeping", cat_0),
-                texture("studio-cat-awake", cat_1),
-                texture("studio-cat-yawn", cat_2),
-                texture("studio-cat-groom", cat_3),
-            ],
             mugs: [texture("studio-mug-black", mug_a), texture("studio-mug-white", mug_b)],
             microphones: patch("studio-microphones", decoded.microphones),
-            sign_off: patch("studio-sign-off", decoded.sign_off),
+            atlas: texture("studio-frames", decoded.atlas),
+            frames: decoded.frames,
         }
     }
-}
-
-fn cat_pose(routine: usize, t: f32) -> (usize, f32) {
-    let frames: &[(f32, usize)] = match routine {
-        0 => &[(0., 1), (2.6, 0), (3.1, 1), (4.5, 0)],
-        1 => &[(0., 1), (0.7, 2), (2.2, 1), (3.2, 0)],
-        2 => &[
-            (0., 1),
-            (0.8, 3),
-            (1.6, 1),
-            (2., 3),
-            (2.8, 1),
-            (3.2, 3),
-            (4.1, 1),
-            (5., 0),
-        ],
-        3 => &[(0., 1), (1.4, 0), (2.1, 1), (3., 0), (3.5, 1), (4.1, 0)],
-        4 => &[(0., 0)],
-        5 => &[(0., 1), (1.8, 0), (2.15, 1), (3.8, 0)],
-        6 => &[(0., 1), (1., 2), (2.5, 1), (3.3, 3), (4.4, 1), (5.6, 0)],
-        _ => &[(0., 0)],
-    };
-    (
-        frames
-            .iter()
-            .rev()
-            .find(|(at, _)| t >= *at)
-            .map(|(_, p)| *p)
-            .unwrap_or(0),
-        [5., 4., 5.5, 5., 9., 4.5, 6.]
-            .get(routine)
-            .copied()
-            .unwrap_or(0.),
-    )
-}
-fn glass(x: f32, y: f32) -> bool {
-    (466. ..1131.).contains(&x) && (0. ..618.).contains(&y) && !(709. ..726.).contains(&x)
 }
 
 /// What the booth shows as the record playing: a few small fields, copied
@@ -769,8 +1024,15 @@ pub fn draw(app: &mut crate::Defalt, ui: &mut Ui, rect: Rect, preview: bool) {
 
     let mut header = super::child(ui, layout.header, super::left_row(), "booth-header");
     settings_row(app, &mut header);
-    let on_air = app.station.ready();
-    app.studio.scene(ui, layout.scene, app.host_levels, on_air);
+    let music = app.airtime.on && !app.studio.reduced;
+    let heard = Heard {
+        levels: app.host_levels,
+        tones: app.host_tones,
+        energy: if music { app.studio.spectrum.low_energy() } else { 0. },
+        beat: if music { app.studio.spectrum.beat() } else { 0. },
+        on_air: app.station.ready(),
+    };
+    app.studio.scene(ui, layout.scene, heard);
     let mut card = super::child(ui, layout.card, egui::Layout::top_down(egui::Align::Min), "booth-card");
     record_card(&app.studio, &mut card, &playing, spinning);
     if let Some(rect) = layout.transcript {
@@ -793,10 +1055,11 @@ fn settings_row(app: &mut crate::Defalt, ui: &mut Ui) {
             changed |= ui.checkbox(&mut app.studio.rain, "Rain").changed();
             changed |= ui.checkbox(&mut app.studio.lights, "City lights").changed();
             changed |= ui.checkbox(&mut app.studio.cat, "Cat antics").changed();
+            changed |= ui.checkbox(&mut app.studio.lightning, "Lightning").changed();
             changed |= ui
                 .checkbox(&mut app.studio.reduced, "Reduced motion")
                 .changed();
-            ui.small("The cat keeps breathing between antics. With the visualizer on, the lights and rain follow the bass.");
+            ui.small("The cat keeps breathing between antics. The rain and the city lights follow the bass.");
         });
         if changed {
             app.studio.save();
@@ -906,75 +1169,126 @@ fn transcript(app: &mut crate::Defalt, ui: &mut Ui) {
 mod tests {
     use super::*;
 
-    fn dimensions(bytes: &[u8]) -> (u32, u32) {
-        image::ImageReader::new(std::io::Cursor::new(bytes))
-            .with_guessed_format().unwrap().into_dimensions().unwrap()
+    fn studio() -> Studio {
+        Studio::new(&std::env::temp_dir().join("defalt-studio-test"))
     }
 
     #[test]
-    fn the_face_canvases_are_the_shapes_the_rectangles_assume() {
-        assert_eq!(dimensions(include_bytes!("../../web/static/studio-v2/speaking.jpg")), (1728, 1152));
-        assert_eq!(dimensions(include_bytes!("../../web/static/studio-v2/blink.png")), (1536, 1024));
-        assert_eq!(dimensions(include_bytes!("../../web/static/studio-v2/microphones.png")), (1536, 1024));
-    }
-
-    #[test]
-    fn layers_are_cut_down_to_what_the_scene_samples() {
-        let art = decode_art();
-        let contains = |area: [f32; 4], inner: [f32; 4]| {
-            area[0] <= inner[0] && area[1] <= inner[1]
-                && area[0] + area[2] >= inner[0] + inner[2]
-                && area[1] + area[3] >= inner[1] + inner[3]
-        };
-        for i in 0..2 {
-            let (image, area) = &art.mouths[i];
-            assert!(contains(*area, MOUTHS[i]), "mouth {i} cut short: {area:?}");
-            assert!(image.size[0] < 120 && image.size[1] < 80, "mouth {i} kept {:?}", image.size);
-            let (image, area) = &art.eyes[i];
-            for eye in EYES[i] {
-                assert!(contains(*area, eye), "eyes {i} cut short: {area:?}");
+    fn the_frame_manifest_matches_its_atlas_and_has_every_face() {
+        let frames = Frames::parse(FRAMES).expect("frames.json parses");
+        let atlas = image::load_from_memory(ATLAS).unwrap();
+        assert!(atlas.width() <= 2048 && atlas.height() <= 2048, "atlas is {}x{}", atlas.width(), atlas.height());
+        let inside = |f: &Frame| f.uv.min.x >= 0. && f.uv.min.y >= 0. && f.uv.max.x <= 1. && f.uv.max.y <= 1.;
+        for host in 0..2 {
+            for mouth in &frames.mouths[host] {
+                let mouth = mouth.expect("every mouth shape has a frame");
+                assert!(inside(&mouth));
+                // On the face, and small: a patch, not a head.
+                assert!(mouth.at[2] < 160. && mouth.at[3] < 130., "{:?}", mouth.at);
+                assert!(HOSTS[host][0] < mouth.at[0] && mouth.at[1] + mouth.at[3] < NECK[host]);
             }
-            assert!(image.size[0] < 200, "eyes {i} kept {:?}", image.size);
+            for lid in frames.lids[host].iter().chain(&frames.looks[host]) {
+                let lid = lid.expect("every eye frame is there");
+                assert!(inside(&lid) && lid.at[1] + lid.at[3] < NECK[host]);
+            }
         }
-        let (image, area) = &art.microphones;
-        assert!(image.size[1] < 1024 / 2, "microphones kept {:?}", image.size);
-        assert!(area[1] > 0. && area[1] + area[3] <= H + 1.);
-        for (i, cat) in art.cats.iter().enumerate() {
-            assert!(cat.size[0] as f32 <= CAT[2] * 2. + 1. && cat.size[1] as f32 <= CAT[3] * 2. + 1.,
-                    "cat {i} kept {:?}", cat.size);
-            // The pose keeps its proportions, or it would squash on screen.
-            let crop = CAT_CROPS[i];
-            let want = crop[2] / crop[3];
-            let got = cat.size[0] as f32 / cat.size[1] as f32;
-            assert!((want - got).abs() < 0.03, "cat {i} aspect {got} for {want}");
+        assert_eq!(frames.cat.len(), motion::CAT_FRAMES.len());
+        for cat in &frames.cat {
+            assert!(inside(cat));
+            assert!(cat.at[0] >= 0. && cat.at[1] >= 150. && cat.at[1] + cat.at[3] <= 395., "{:?}", cat.at);
         }
+        for host in 0..2 {
+            assert_eq!(frames.mouths[host].len(), motion::VISEMES.len());
+        }
+        assert!(!frames.lights.is_empty() && frames.lights.len() <= motion::MAX_WINDOWS);
+        for (lit, _) in &frames.lights {
+            let centre = (lit.at[0] + lit.at[2] / 2., lit.at[1] + lit.at[3] / 2.);
+            assert!(motion::on_glass(centre.0, centre.1), "a city light off the glass at {centre:?}");
+        }
+        assert!(frames.sign_off.at[0] <= SIGN[0] + 20. && frames.sign_off.at[0] + frames.sign_off.at[2] >= SIGN[0] + SIGN[2] - 20.);
+        assert_eq!(frames.window.at[0].round(), motion::WINDOW[0].round());
+    }
+
+    #[test]
+    fn the_sign_goes_dark_off_air() {
+        let frames = Frames::parse(FRAMES).unwrap();
+        let atlas = image::load_from_memory(ATLAS).unwrap().to_rgba8();
+        let background = image::load_from_memory(include_bytes!("../../web/static/studio-v2/background.png")).unwrap().to_rgba8();
+        let (w, h) = (atlas.width() as f32, atlas.height() as f32);
+        let f = frames.sign_off;
+        let off = image::imageops::crop_imm(&atlas, (f.uv.min.x * w).round() as u32, (f.uv.min.y * h).round() as u32,
+            (f.uv.width() * w).round() as u32, (f.uv.height() * h).round() as u32).to_image();
+        let (lit, _) = cut_rgba(&background, [f.at[0] + 2., f.at[1] + 2., f.at[2] - 4., f.at[3] - 4.]);
+        let red = |image: &image::RgbaImage| image.pixels().map(|p| p[0] as f64).sum::<f64>() / image.pixels().len() as f64;
+        assert!(red(&off) < red(&lit) * 0.8, "the tubes stayed lit: {} of {}", red(&off), red(&lit));
+    }
+
+    #[test]
+    fn a_warped_host_keeps_the_head_rigid_and_the_desk_still() {
+        let mut mesh = Mesh::default();
+        let at = |x: f32, y: f32| pos2(x, y);
+        warp(&mut mesh, HOSTS[0], &[(NECK[0], 2.), (SHOULDERS[0], 1.5), (DESK[0], 0.)], &at);
+        for v in &mesh.vertices {
+            let source = HOSTS[0][1] + v.uv.y * HOSTS[0][3];
+            let moved = v.pos.y - source;
+            if source <= NECK[0] { assert!((moved - 2.).abs() < 1e-3, "the head stretched at {source}"); }
+            if source >= DESK[0] { assert!(moved.abs() < 1e-3, "the arms moved at {source}"); }
+        }
+        assert_eq!(mesh.vertices.len(), 10);
+        assert_eq!(mesh.indices.len(), 4 * 6);
     }
 
     #[test]
     fn the_animation_clock_keeps_its_fractions_after_a_long_night() {
-        // Ten hours in, a blink is still a blink: the phase maths wraps in
-        // f64 before any trig, so the same moment in the cycle reads the same.
+        // Ten hours in, a cycle is still a cycle: the phase maths wraps in
+        // f64 before any trig, so the same moment reads the same.
         let late = 36_000.0 * 4.8;
-        assert!((cosine(late, 1. / 4.8, 0.) - 1.).abs() < 1e-5);
-        assert!((cosine(late + 2.4, 1. / 4.8, 0.) + 1.).abs() < 1e-5);
         assert!((sine(late + 1.2, 1. / 4.8, 0.) - 1.).abs() < 1e-5);
+        assert!((motion::breath(36_000. * 4.1, 0) - motion::breath(0., 0)).abs() < 1e-3);
     }
 
     #[test]
-    fn the_sign_goes_dark_off_air_and_nothing_else_changes() {
-        let background = image::load_from_memory(include_bytes!("../../web/static/studio-v2/background.png"))
-            .unwrap().to_rgba8();
-        let (lit, area) = cut_rgba(&background, SIGN);
-        let mut dark = lit.clone();
-        unlit(&mut dark);
-        let red = |image: &image::RgbaImage| image.pixels().map(|p| p[0] as f64).sum::<f64>() / image.len() as f64;
-        assert!(red(&dark) < red(&lit) * 0.7, "the tubes stayed lit: {} of {}", red(&dark), red(&lit));
-        // A grey pixel -- the wall, not the light -- is left exactly alone.
-        let mut wall = image::RgbaImage::from_pixel(1, 1, image::Rgba([90, 90, 96, 255]));
-        unlit(&mut wall);
-        assert_eq!(wall.get_pixel(0, 0).0, [90, 90, 96, 255]);
-        // The patch covers the sign, and sits on the wall above the hosts.
-        assert!(area[0] <= 1255. && area[0] + area[2] >= 1477. && area[1] + area[3] < HOSTS[1][1]);
+    fn a_scripted_run_talks_overlaps_and_goes_on_air() {
+        let mut studio = studio();
+        studio.pose("speaking");
+        let mut talked = [0; 2];
+        let mut together = 0;
+        let mut shapes = std::collections::BTreeSet::new();
+        for _ in 0..30 * 12 {
+            let heard = studio.scripted();
+            studio.step(1. / 30., heard);
+            for host in 0..2 {
+                if studio.lips[host].viseme != motion::REST { talked[host] += 1; }
+                shapes.insert(studio.lips[host].viseme);
+            }
+            if studio.lips[0].talking() && studio.lips[1].talking() { together += 1; }
+        }
+        assert!(talked[0] > 60 && talked[1] > 60, "{talked:?}");
+        assert!(together > 10, "the hosts never overlapped");
+        assert!(shapes.len() >= 5, "only {shapes:?}");
+        let mut sign = self::studio();
+        sign.pose("sign");
+        for _ in 0..90 {
+            let heard = sign.scripted();
+            sign.step(1. / 30., heard);
+        }
+        assert_eq!(sign.sign.level, 1.);
+    }
+
+    #[test]
+    fn reduced_motion_holds_the_booth_still() {
+        let mut studio = studio();
+        studio.pose("reduced");
+        let drops: Vec<f32> = studio.weather.drops.iter().map(|d| d.y).collect();
+        for i in 0..300 {
+            let loud = if (i / 4) % 2 == 0 { 0.3 } else { 0. };
+            studio.step(1. / 30., Heard { levels: [loud, 0.], tones: [0.05, 0.], energy: 1., beat: 1., on_air: true });
+            assert!(studio.lips[0].viseme <= motion::SLIGHT);
+            assert_eq!(studio.looks[0].lid, motion::OPEN);
+            assert_eq!(motion::CAT_FRAMES[studio.pose.frame], "sleep-0");
+        }
+        assert!(studio.weather.drops.iter().map(|d| d.y).eq(drops), "the rain moved");
+        assert_eq!(studio.sign.level, 1.);
     }
 
     #[test]
@@ -992,21 +1306,6 @@ mod tests {
             assert!(c.rect.top() >= area.top() && c.rect.bottom() <= area.bottom() + 0.5, "{c:?} spills out of {area:?}");
             let (over, under) = (c.rect.top() - area.top(), area.bottom() - c.rect.bottom());
             assert!((over - under).abs() < 1., "not centred: {over} over, {under} under");
-        }
-    }
-
-    #[test]
-    fn rain_stays_inside_window_panes() {
-        assert!(glass(800., 160.));
-        assert!(!glass(450., 350.));
-        assert!(!glass(800., 650.));
-        assert!(!glass(718., 150.));
-    }
-    #[test]
-    fn every_cat_routine_returns_to_sleep() {
-        for i in 0..7 {
-            let (_, d) = cat_pose(i, 0.);
-            assert_eq!(cat_pose(i, d).0, 0);
         }
     }
 }

@@ -1,5 +1,16 @@
 # Patch notes
 
+## 0.4.1 — September 23, 2026
+
+- the console got a djay style glow up. graphite panels, deck A is cyan and deck B is violet everywhere, real fonts, turntables that actually look like turntables, a green play and an amber CUE, and cue pads that match their markers on the waveform
+- channel meters next to every volume fader and a master meter up top. VOL and FILTER have real scales now and show the value while you drag
+- the library folds away. drag the divider or hit **Ctrl+L** and the decks get the room
+- synced lyrics from LRCLIB. the current line shows under the deck and on the radio, the waveforms get verse/chorus bands, and the mixes stop cutting choruses in half. the hosts talk over intros and stop right before the singing starts
+- the booth actually moves now. real mouth shapes and lip sync, blinks and glances, breathing, a cat that does stuff (yawns, grooms, stretches, perks up when you click it), rain that runs down the glass, city windows that flicker, steam off the mugs and an ON AIR sign that flickers on when you go live. there's a lightning toggle too
+- the radio view got cleaned up. **Go on air** is the one button that matters, the controls are grouped, and the visualizer glows with the bass now
+- notices don't squeeze into a skinny column anymore
+- the browser booth runs at 30 fps and the app got about 4 MB smaller
+
 ## 0.4.0 — September 23, 2026
 
 - Transitions got creative. Eleven new techniques join the six blends: echo out, loop rolls (4 → 2 → 1 → ½ beat), brake, spinback, echo freeze, reverb wash, stem swap, a cappella intro, filter ride, silence punch and drop swap. A selector chooses from the energy change, tempo gap, key fit, genre and time of day, avoids repeating the last three, and never stacks two vocals or puts effects under host speech. **Creativity** in Mix settings runs from smooth radio to show-off DJ; each technique can be switched off or pinned. Up next shows the technique, and the hosts occasionally mention a flashy one.
@@ -161,4 +172,4 @@ Artwork is fetched and cached in the background. Studio animation does not contr
 Earlier development builds used version 0.1.0. The 0.2.0 notes collect the current release changes; they are not a claim that every feature was first written on the release date.
 
 ---
-Defalt v0.4.0 · © 2026 Zachary Parker
+Defalt v0.4.1 · © 2026 Zachary Parker
