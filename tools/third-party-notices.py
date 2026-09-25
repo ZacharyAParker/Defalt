@@ -247,14 +247,14 @@ def render(groups: dict, python: list[dict]) -> str:
     fonts = [("Archivo", ROOT / "assets" / "fonts" / "OFL-Archivo.txt"),
              ("IBM Plex Mono", ROOT / "assets" / "fonts" / "OFL-IBMPlexMono.txt")]
     for name, path in fonts:
-        out.append(f"- {name} — OFL-1.1 — {first_copyright(path).rstrip(".")}. Used by the console and the browser player; license text in assets/fonts/{path.name} and web/static/fonts/{path.name}")
+        out.append(f"- {name} — OFL-1.1 — {first_copyright(path).rstrip('.')}. Used by the console and the browser player; license text in assets/fonts/{path.name} and web/static/fonts/{path.name}")
     cargo_toml = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
     if "default_fonts" in cargo_toml and any(p["name"] == "epaint_default_fonts" for p in groups["shipped"]):
         for name, license, holder in EGUI_FONTS:
-            out.append(f"- {name} — {license} — {holder.rstrip(".")}. Built into the console through egui's default fonts (epaint_default_fonts)")
+            out.append(f"- {name} — {license} — {holder.rstrip('.')}. Built into the console through egui's default fonts (epaint_default_fonts)")
     out += ["", "## Vendored source", ""]
     for name, holder, path in vendored():
-        out.append(f"- {name} — MIT — {holder.rstrip(".")}. Unmodified upstream headers compiled into the console; license text in {path}")
+        out.append(f"- {name} — MIT — {holder.rstrip('.')}. Unmodified upstream headers compiled into the console; license text in {path}")
     out += [
         "",
         "## Web assets",
