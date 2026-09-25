@@ -1,5 +1,9 @@
 # Patch notes
 
+## 0.4.5 — September 25, 2026
+
+- the app opens with the OBBY STUDIO intro now, discord style. a little window in the middle of the screen plays the logo with its whoosh, then the console comes up maximized behind it. click or hit Esc, Space or Enter to skip it. the browser and phone get the same intro (muted). the Startup video setting at the bottom of the Patches/Terms window can make it every launch, once a day (just a quick flash of the logo after the first) or off, and reduced motion only ever shows the still logo
+
 ## 0.4.4 — September 25, 2026
 
 - added the legal stuff. there's a real LICENSE now (source available, all rights reserved), proper terms with the no warranty and liability parts, a security policy and a generated list of every third party package and font. License and Notices sit in the footer next to Terms, and the first time you open the app (or when the terms change) it asks you to accept them and warns about the flashing lights and volume before anything plays
@@ -184,4 +188,4 @@ Artwork is fetched and cached in the background. Studio animation does not contr
 Earlier development builds used version 0.1.0. The 0.2.0 notes collect the current release changes; they are not a claim that every feature was first written on the release date.
 
 ---
-Defalt v0.4.4 · © 2026 Zachary Parker
+Defalt v0.4.5 · © 2026 Zachary Parker

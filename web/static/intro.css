@@ -1,0 +1,46 @@
+/* The startup intro: the OBBY STUDIO ident over the ident's own cool dark,
+   not the page's warm black, so the video's edges disappear into it. */
+.intro {
+  --intro-ground: #14181e;
+  --intro-text: #9aa8bc;   /* 7.3:1 on the ground */
+  position: fixed; inset: 0;
+  width: 100vw; height: 100dvh; max-width: none; max-height: none;
+  margin: 0; padding: 0; border: 0;
+  background: var(--intro-ground); color: var(--intro-text);
+  opacity: 1;
+  transition: opacity 260ms var(--ease);
+}
+.intro[open] { display: grid; place-items: center; }
+/* Spelled out: older engines don't let ::backdrop see the dialog's variables. */
+.intro::backdrop { background: #14181e; }
+.intro--out { opacity: 0; }
+.intro__video {
+  display: block;
+  width: min(92vw, 880px, calc(92dvh * 1344 / 1080));
+  aspect-ratio: 1344 / 1080; height: auto;
+  object-fit: contain; background: var(--intro-ground);
+  pointer-events: none;
+}
+.intro__skip {
+  position: absolute;
+  right: max(16px, env(safe-area-inset-right));
+  bottom: max(16px, env(safe-area-inset-bottom));
+  min-height: 40px; padding: 0 14px;
+  border: 0; border-radius: var(--r-sm);
+  background: transparent; color: var(--intro-text);
+  font: 500 13px/1 var(--sans); letter-spacing: .02em;
+  cursor: pointer;
+}
+.intro__skip:hover { color: #e7ebf1; background: #ffffff0f; }
+.intro__skip:focus-visible { outline: 2px solid #6aa6ff; outline-offset: 2px; }
+body.intro-playing { overflow: hidden; }
+@media (prefers-reduced-motion: reduce) {
+  .intro { transition: none; }
+}
+/* The startup setting, in the reading window's foot. */
+.intro-setting { display: inline-flex; align-items: center; gap: 8px; }
+.intro-setting select {
+  min-height: 32px; padding: 4px 8px; color: var(--text);
+  background: var(--ink-000); border: 1px solid var(--edge); border-radius: var(--r-md);
+  font: inherit;
+}

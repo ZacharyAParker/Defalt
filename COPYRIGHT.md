@@ -27,4 +27,4 @@ If you believe material in this repository infringes your copyright, contact the
 Audio that someone else downloaded with their own copy of Defalt is on their machine, not in this repository, and the maintainer has no access to it.
 
 ---
-Defalt v0.4.4 · © 2026 Zachary Parker
+Defalt v0.4.5 · © 2026 Zachary Parker

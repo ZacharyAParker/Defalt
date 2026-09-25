@@ -24,6 +24,7 @@
 <link rel="stylesheet" href="/static/director-chat.css?v={{APP_VERSION}}">
 <link rel="stylesheet" href="/static/feedback.css?v={{APP_VERSION}}">
 <link rel="stylesheet" href="/static/stream.css?v={{APP_VERSION}}">
+<link rel="stylesheet" href="/static/intro.css?v={{APP_VERSION}}">
 </head>
 <body>
 
@@ -296,8 +297,21 @@
   <article class="info-window__body" id="info-document" tabindex="0" aria-label="Document"></article>
   <footer class="info-window__foot">
     <span>v{{APP_VERSION}} · © 2026 Zachary Parker</span>
+    <label class="intro-setting">Startup video
+      <select id="intro-mode">
+        <option value="every">Every visit</option>
+        <option value="daily">Once a day</option>
+        <option value="off">Off</option>
+      </select>
+    </label>
     <a href="https://github.com/ZacharyAParker/Defalt" target="_blank" rel="noopener noreferrer">Repository</a>
   </footer>
+</dialog>
+<!-- The startup ident. Opened by intro.js after the first-run notice, so it
+     sits on top of it; it never delays the notice or the player. -->
+<dialog class="intro" id="intro" aria-label="Intro" data-video="/static/splash/intro.mp4?v={{APP_VERSION}}" data-poster="/static/splash/intro-poster.webp?v={{APP_VERSION}}">
+  <video class="intro__video" id="intro-video" muted playsinline preload="none" disablepictureinpicture aria-hidden="true"></video>
+  <button type="button" class="intro__skip" id="intro-skip">Skip</button>
 </dialog>
 <!-- First run, and whenever the terms version changes: nothing plays until
      this is accepted on this device. -->
@@ -344,6 +358,7 @@
 <script src="/static/director-chat.js?v={{APP_VERSION}}" defer></script>
 <script src="/static/about.js?v={{APP_VERSION}}" defer></script>
 <script src="/static/legal.js?v={{APP_VERSION}}" defer></script>
+<script src="/static/intro.js?v={{APP_VERSION}}" defer></script>
 <script src="/static/visualizer.js?v={{APP_VERSION}}" defer></script>
 <script src="/static/stream.js?v={{APP_VERSION}}" defer></script>
 <script src="/static/lyrics.js?v={{APP_VERSION}}" defer></script>

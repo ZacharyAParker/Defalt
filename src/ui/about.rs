@@ -84,12 +84,33 @@ pub fn overlay(app: &mut Defalt, ctx: &egui::Context) {
                 .auto_shrink([false, false])
                 .show(ui, |ui| document(ui, page.content()));
             ui.separator();
+            startup(app, ui);
+            ui.separator();
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(format!("v{VERSION}  ·  {COPYRIGHT}")).size(theme::SIZE_S).color(theme::TEXT_DIM));
                 ui.hyperlink_to("Repository", "https://github.com/ZacharyAParker/Defalt");
             });
         });
     app.info_page = if close || response.should_close() { None } else { Some(page) };
+}
+
+/// The startup ident: every launch, once a day or never, and whether it
+/// makes a sound. Saved as soon as it's changed; it applies next launch.
+fn startup(app: &mut Defalt, ui: &mut Ui) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new("Startup video").size(theme::SIZE_S).color(theme::TEXT_DIM));
+        let mut changed = false;
+        for mode in crate::splash::Mode::ALL {
+            changed |= ui.selectable_value(&mut app.startup.mode, mode, mode.label()).changed();
+        }
+        ui.add_space(theme::SP_2);
+        ui.add_enabled_ui(app.startup.mode != crate::splash::Mode::Off, |ui| {
+            changed |= ui.checkbox(&mut app.startup.sound, "Sound").changed();
+        });
+        if changed {
+            app.startup.save(&app.root);
+        }
+    });
 }
 
 fn document(ui: &mut Ui, text: &str) {

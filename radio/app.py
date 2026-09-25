@@ -41,6 +41,10 @@ app.register_blueprint(remote_blueprint)
 # Self-hosted fonts. Windows' registry does not always know the type, and a
 # font served as text/plain is refused by the browser.
 mimetypes.add_type("font/woff2", ".woff2")
+# Same for the startup intro: a video the registry calls something else
+# won't play, and WebP isn't registered at all on older Windows.
+mimetypes.add_type("video/mp4", ".mp4")
+mimetypes.add_type("image/webp", ".webp")
 
 
 @app.after_request

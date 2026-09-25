@@ -55,6 +55,73 @@ pub fn project_root() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
+static LAUNCHED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// Noted first thing in `main`, so startup can be timed from it.
+pub fn mark_launch() {
+    LAUNCHED.get_or_init(std::time::Instant::now);
+}
+
+pub fn since_launch() -> std::time::Duration {
+    LAUNCHED.get_or_init(std::time::Instant::now).elapsed()
+}
+
+/// Round the window's corners (Windows 11), or give it back its default.
+/// Older Windows doesn't know the attribute and says so, which is fine.
+#[cfg(windows)]
+pub fn round_corners(hwnd: isize, round: bool) {
+    #[link(name = "dwmapi")]
+    extern "system" {
+        fn DwmSetWindowAttribute(hwnd: isize, attribute: u32, value: *const std::ffi::c_void, size: u32) -> i32;
+    }
+    // DWMWA_WINDOW_CORNER_PREFERENCE; DWMWCP_ROUND or DWMWCP_DEFAULT.
+    let preference: u32 = if round { 2 } else { 0 };
+    unsafe {
+        DwmSetWindowAttribute(hwnd, 33, (&preference as *const u32).cast(), std::mem::size_of::<u32>() as u32);
+    }
+}
+
+#[cfg(not(windows))]
+pub fn round_corners(_hwnd: isize, _round: bool) {}
+
+/// Cloak the window: Windows still lets it draw, but doesn't show it. The
+/// console sits cloaked at its full size behind the startup splash, so it
+/// never has to be resized in front of anyone.
+#[cfg(windows)]
+pub fn cloak(hwnd: isize, cloaked: bool) -> bool {
+    #[link(name = "dwmapi")]
+    extern "system" {
+        fn DwmSetWindowAttribute(hwnd: isize, attribute: u32, value: *const std::ffi::c_void, size: u32) -> i32;
+    }
+    // DWMWA_CLOAK, a BOOL.
+    let value: i32 = cloaked.into();
+    unsafe { DwmSetWindowAttribute(hwnd, 13, (&value as *const i32).cast(), 4) == 0 }
+}
+
+#[cfg(not(windows))]
+pub fn cloak(_hwnd: isize, _cloaked: bool) -> bool {
+    false
+}
+
+/// A top-level window of ours, by its title.
+#[cfg(windows)]
+pub fn find_window(title: &str) -> Option<isize> {
+    #[link(name = "user32")]
+    extern "system" {
+        fn FindWindowW(class: *const u16, title: *const u16) -> isize;
+    }
+    let title: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+    match unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) } {
+        0 => None,
+        hwnd => Some(hwnd),
+    }
+}
+
+#[cfg(not(windows))]
+pub fn find_window(_title: &str) -> Option<isize> {
+    None
+}
+
 /// The window icon.
 ///
 /// Decoded rather than drawn: the artwork is a real asset now, and the image

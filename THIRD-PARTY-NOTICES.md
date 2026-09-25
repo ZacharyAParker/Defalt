@@ -6,7 +6,7 @@ Defalt's own code, art and documents are covered by LICENSE. The components belo
 
 ## Summary
 
-- Rust crates compiled into the console: 243
+- Rust crates compiled into the console: 244
 - Rust crates used only to build it: 27
 - Rust crates used only by its tests: 0
 - Python packages for the radio backend (installed by you from PyPI, not shipped in this repository): 37
@@ -112,6 +112,7 @@ Defalt's own code, art and documents are covered by LICENSE. The components belo
 - idna 1.1.0 — MIT OR Apache-2.0 — The rust-url developers
 - idna_adapter 1.2.2 — Apache-2.0 OR MIT — The rust-url developers
 - image 0.25.10 — MIT OR Apache-2.0 — The image-rs Developers
+- image-webp 0.2.4 — MIT OR Apache-2.0
 - indexmap 2.14.2 — Apache-2.0 OR MIT
 - itertools 0.15.0 — MIT OR Apache-2.0 — bluss
 - itoa 1.0.18 — MIT OR Apache-2.0 — David Tolnay
@@ -536,4 +537,4 @@ Full texts for the remaining licenses named above ship with the components that 
 - Unlicense: https://spdx.org/licenses/Unlicense.html
 
 ---
-Defalt v0.4.4 · © 2026 Zachary Parker
+Defalt v0.4.5 · © 2026 Zachary Parker

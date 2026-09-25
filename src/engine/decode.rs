@@ -13,7 +13,7 @@ use symphonia::core::codecs::audio::AudioDecoderOptions;
 use symphonia::core::errors::Error;
 use symphonia::core::formats::probe::Hint;
 use symphonia::core::formats::{FormatOptions, TrackType};
-use symphonia::core::io::MediaSourceStream;
+use symphonia::core::io::{MediaSource, MediaSourceStream};
 use symphonia::core::meta::MetadataOptions;
 
 /// Decoded audio, always two channels, always interleaved.
@@ -98,12 +98,28 @@ pub fn load_native(path: impl AsRef<Path>) -> Result<Arc<Track>, String> {
     decode(path.as_ref()).map(Arc::new)
 }
 
+/// Decode audio held in memory (a sound built into the executable), given
+/// the extension it would have as a file, and convert it to `rate` as
+/// `load_at` does.
+pub fn load_bytes(bytes: &'static [u8], extension: &str, rate: u32) -> Result<Arc<Track>, String> {
+    let track = decode_source(Box::new(std::io::Cursor::new(bytes)), Some(extension))?;
+    if rate == 0 || rate == track.sample_rate {
+        return Ok(Arc::new(track));
+    }
+    let samples = super::resample::stereo(&track.samples, track.sample_rate, rate);
+    Ok(Arc::new(Track { samples, sample_rate: rate }))
+}
+
 fn decode(path: &Path) -> Result<Track, String> {
     let file = File::open(path).map_err(|error| format!("{path:?}: {error}"))?;
-    let stream = MediaSourceStream::new(Box::new(file), Default::default());
+    decode_source(Box::new(file), path.extension().and_then(|value| value.to_str()))
+}
+
+fn decode_source(source: Box<dyn MediaSource>, extension: Option<&str>) -> Result<Track, String> {
+    let stream = MediaSourceStream::new(source, Default::default());
 
     let mut hint = Hint::new();
-    if let Some(extension) = path.extension().and_then(|value| value.to_str()) {
+    if let Some(extension) = extension {
         hint.with_extension(extension);
     }
 
@@ -130,10 +146,7 @@ fn decode(path: &Path) -> Result<Track, String> {
         .map_err(|error| {
             // Name the format. "unsupported codec" on its own sends you
             // looking at the file when the answer is the extension.
-            let kind = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| e.to_ascii_lowercase());
+            let kind = extension.map(|e| e.to_ascii_lowercase());
             match kind.as_deref() {
                 Some("opus") => "Opus is not supported. Re-request the record                                  and it will be saved as FLAC."
                     .to_string(),

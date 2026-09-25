@@ -7,3 +7,6 @@
 *.webp binary
 *.woff2 binary
 *.ico binary
+*.mov binary
+*.mp4 binary
+*.bin binary

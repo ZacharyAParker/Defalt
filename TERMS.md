@@ -1,6 +1,6 @@
 # Terms of use
 
-Effective September 25, 2026 (terms version 2026-09-25). Applies to Defalt 0.4.4 as distributed in this repository.
+Effective September 25, 2026 (terms version 2026-09-25). Applies to Defalt 0.4.5 as distributed in this repository.
 
 ## Agreement
 
@@ -120,4 +120,4 @@ Future releases may change these terms. Each version is identified by its effect
 Contact the maintainer through the Defalt repository on GitHub. Report security problems privately as described in SECURITY.md. Don't post credentials, private listening records or other sensitive data in public issues.
 
 ---
-Defalt v0.4.4 · © 2026 Zachary Parker
+Defalt v0.4.5 · © 2026 Zachary Parker

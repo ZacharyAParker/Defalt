@@ -162,6 +162,7 @@ function fakeSession() {
     ["/manifest.webmanifest", "static"],
     ["/api/schedule", null], ["/api/events?topics=schedule", null], ["/api/artwork?key=x", null],
     ["/listen", null], ["/listen?t=5", null], ["/media/track/abc", null], ["/stream", null], ["/sw.js", null],
+    ["/static/splash/intro.mp4?v=1", null], ["/static/splash/intro-poster.webp?v=1", null],
     ["https://elsewhere.example/static/x.js", null],
   ]) {
     assert.equal(sw.route(url.startsWith("http") ? url : origin + url, "GET", origin), expected, url);

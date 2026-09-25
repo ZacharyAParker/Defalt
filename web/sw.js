@@ -23,6 +23,9 @@ const SHELL = [
   "/static/icons/icon-192.png",
 ];
 const LIVE = ["/api/", "/listen", "/media/", "/stream", "/sw.js"];
+/* Static, but not the shell: the startup intro is a megabyte played once
+   per load, fetched in ranges. The browser's own cache is enough for it. */
+const UNCACHED = ["/static/splash/"];
 
 /* What to do with a request: "page" (network first, the cached shell when
    offline), "static" (cache first), or null (not ours: the network, untouched). */
@@ -32,6 +35,7 @@ function route(url, method = "GET", origin = null) {
   if (origin && parsed.origin !== origin) return null;
   const path = parsed.pathname;
   if (LIVE.some((prefix) => path === prefix || path.startsWith(prefix))) return null;
+  if (UNCACHED.some((prefix) => path.startsWith(prefix))) return null;
   if (path === "/" || path === "/index.html") return "page";
   if (path === "/manifest.webmanifest") return "static";
   if (path.startsWith("/static/")) return "static";
@@ -76,4 +80,4 @@ if (typeof self !== "undefined" && typeof self.addEventListener === "function" &
   });
 }
 
-if (typeof module !== "undefined") module.exports = { route, CACHE, SHELL, LIVE };
+if (typeof module !== "undefined") module.exports = { route, CACHE, SHELL, LIVE, UNCACHED };

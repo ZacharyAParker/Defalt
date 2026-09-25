@@ -1,6 +1,6 @@
 [package]
 name = "defalt"
-version = "0.4.4"
+version = "0.4.5"
 edition = "2021"
 rust-version = "1.80"
 description = "Defalt -- a DJ application"
@@ -29,12 +29,17 @@ eframe = { version = "0.36", default-features = false, features = [
 egui = "0.36"
 egui_extras = "0.36"
 rusqlite = { version = "0.40", features = ["bundled"] }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# webp for the startup ident's frames: image-webp, pure Rust, so a six
+# second logo doesn't need a video decoder.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 ureq = { version = "3", features = ["json"] }
 serde_json = "1"
 # Already in the build through serde_json; derive reads the station's
 # schedule into typed structs instead of by hand.
 serde = { version = "1", features = ["derive"] }
+# Already in the build under winit; named here to reach the window's HWND
+# and round the startup splash's corners.
+raw-window-handle = "0.6"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

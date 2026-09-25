@@ -12,7 +12,7 @@ the console is Rust with egui and cpal. the radio brain is Python. it all runs
 locally on Windows, and the only way in from outside is your own tunnel if you
 set one up
 
-current release is **0.4.4**. [patch notes](CHANGELOG.md) ·
+current release is **0.4.5**. [patch notes](CHANGELOG.md) ·
 [privacy](PRIVACY.md) · [terms](TERMS.md) · [license](LICENSE) ·
 [copyright](COPYRIGHT.md). those same pages open from the app footer without
 stopping the music
@@ -64,6 +64,9 @@ stopping the music
   home screen that streams the console's real mix. see [Remote listening](docs/REMOTE.md)
 - **Report a bug** (F8) saves what you saw, the station state and the logs from
   around that moment into `reports/`. see [Feedback](docs/FEEDBACK.md)
+- it opens with the OBBY STUDIO intro in a little window, then the console comes up
+  behind it. click to skip, or set it to once a day or off under Startup video
+  in the Patches window
 
 the hosts need a language model and text to speech. the decks don't need
 either. Spotify is only used for search and metadata, it's never the audio
@@ -206,4 +209,4 @@ the app asks you to accept the terms the first time you open it (and again if
 they change). License, Notices and the rest are in the footer
 
 ---
-Defalt v0.4.4 · © 2026 Zachary Parker
+Defalt v0.4.5 · © 2026 Zachary Parker

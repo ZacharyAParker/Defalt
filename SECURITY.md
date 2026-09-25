@@ -21,4 +21,4 @@ The one supported remote path is remote listening, described in docs/REMOTE.md. 
 Out of scope: problems that need someone who already controls your Windows account or files; setups that expose the local server directly to a network, which the documentation says not to do; misconfigured Cloudflare Access policies; and vulnerabilities in third-party services or tools such as Cloudflare, YouTube, Spotify, FFmpeg or cloudflared, which should go to those projects.
 
 ---
-Defalt v0.4.4 · © 2026 Zachary Parker
+Defalt v0.4.5 · © 2026 Zachary Parker

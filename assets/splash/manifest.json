@@ -1,0 +1,53 @@
+{
+  "source": {
+    "file": "assets/splash-src/Splash.mov",
+    "sha256": "c5d85640471331bedfb7c4a1bcad3c3d100ca65760102d6bd6c4592624d9f815"
+  },
+  "recipe": {
+    "native_width": 1200,
+    "native_quality": 85,
+    "target_lufs": -16.0,
+    "web_crf": 18,
+    "web_audio": "128k",
+    "poster_quality": 82
+  },
+  "crop": [
+    1344,
+    1080,
+    288,
+    0
+  ],
+  "frames": 145,
+  "fps": [
+    24,
+    1
+  ],
+  "native_size": [
+    1200,
+    964
+  ],
+  "source_lufs": -15.8,
+  "gain_db": -0.2,
+  "outputs": {
+    "frames": {
+      "file": "assets/splash/frames.bin",
+      "bytes": 3128178,
+      "sha256": "a3d88496852f16883f43e435d8fd7f3400785932cde9ebaf22be7a607fb411c8"
+    },
+    "sound": {
+      "file": "assets/splash/sound.wav",
+      "bytes": 1160044,
+      "sha256": "1eb981fb487fd0310170c65b19f0b84ab8b274fae84ea8de722c184ed844fe72"
+    },
+    "video": {
+      "file": "web/static/splash/intro.mp4",
+      "bytes": 825528,
+      "sha256": "cfab8ac83b57ca82a3326daa591c1641ac08d0d357c0ef396a11fa530b79ae3e"
+    },
+    "poster": {
+      "file": "web/static/splash/intro-poster.webp",
+      "bytes": 25006,
+      "sha256": "18d443b5f0fd765b28f39c2050fadd364ba05a5a7c183122b03a8d07dc61aabf"
+    }
+  }
+}

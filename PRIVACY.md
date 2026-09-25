@@ -1,6 +1,6 @@
 # Privacy policy
 
-Effective September 25, 2026. Applies to Defalt 0.4.4 as distributed in this repository.
+Effective September 25, 2026. Applies to Defalt 0.4.5 as distributed in this repository.
 
 ## The short version
 
@@ -58,4 +58,4 @@ The server binds to loopback by default. Its only remote path is the optional Cl
 Material changes to these practices will be reflected in this document with a new effective date. The version bundled with a native executable describes that build; the repository may describe a newer release. Contact the maintainer through the Defalt repository on GitHub, and report security problems privately as described in SECURITY.md. Do not include credentials, private listening records, or other sensitive data in public issues.
 
 ---
-Defalt v0.4.4 · © 2026 Zachary Parker
+Defalt v0.4.5 · © 2026 Zachary Parker

@@ -105,4 +105,4 @@ and deletion limits. See the [terms](TERMS.md), [license](LICENSE),
 the release information.
 
 ---
-Defalt v0.4.4 · © 2026 Zachary Parker
+Defalt v0.4.5 · © 2026 Zachary Parker

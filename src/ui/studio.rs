@@ -381,6 +381,13 @@ impl Studio {
         self.art_in = Some(receive);
     }
 
+    /// Whether the booth's artwork is decoded and uploaded, collecting it if
+    /// the worker has just finished. The startup splash waits on this.
+    pub fn art_ready(&mut self, ctx: &egui::Context) -> bool {
+        self.collect_art(ctx);
+        self.art.is_some()
+    }
+
     /// Upload the artwork if the worker has finished with it.
     fn collect_art(&mut self, ctx: &egui::Context) {
         let Some(receive) = &self.art_in else { return };

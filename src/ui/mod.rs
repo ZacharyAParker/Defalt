@@ -11,6 +11,7 @@ pub mod decks;
 pub mod racks;
 pub mod remote;
 pub mod radio;
+pub mod splash;
 pub mod studio;
 pub mod theme;
 pub mod toolbar;
@@ -110,14 +111,8 @@ impl Library {
     pub const LEAST: f32 = 0.15;
     pub const MOST: f32 = 0.75;
 
-    fn path(root: &std::path::Path) -> std::path::PathBuf {
-        root.join("cache").join("console-layout.json")
-    }
-
     pub fn load(root: &std::path::Path) -> Self {
-        let saved = std::fs::read(Self::path(root)).ok()
-            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-            .unwrap_or_default();
+        let saved = read_layout(root);
         Library {
             share: saved["library_share"].as_f64().map_or(Self::SHARE, |s| s as f32).clamp(Self::LEAST, Self::MOST),
             collapsed: saved["library_collapsed"].as_bool().unwrap_or(false),
@@ -126,17 +121,36 @@ impl Library {
     }
 
     pub fn save(&self, root: &std::path::Path) {
-        let path = Self::path(root);
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let data = serde_json::json!({"library_share": self.share, "library_collapsed": self.collapsed});
-        let _ = std::fs::write(path, data.to_string());
+        write_layout(root, serde_json::json!({"library_share": self.share, "library_collapsed": self.collapsed}));
     }
 
     pub fn set_share(&mut self, share: f32) {
         self.share = share.clamp(Self::LEAST, Self::MOST);
     }
+}
+
+/// The console's own remembered settings: the library's share and the
+/// startup ident. Anything unreadable reads as nothing saved.
+pub fn read_layout(root: &std::path::Path) -> serde_json::Value {
+    std::fs::read(root.join("cache").join("console-layout.json")).ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .filter(serde_json::Value::is_object)
+        .unwrap_or_else(|| serde_json::json!({}))
+}
+
+/// Write some of those settings, keeping the rest of the file as it was.
+pub fn write_layout(root: &std::path::Path, changes: serde_json::Value) {
+    let path = root.join("cache").join("console-layout.json");
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let mut saved = read_layout(root);
+    if let (Some(saved), Some(changes)) = (saved.as_object_mut(), changes.as_object()) {
+        for (key, value) in changes {
+            saved.insert(key.clone(), value.clone());
+        }
+    }
+    let _ = std::fs::write(path, saved.to_string());
 }
 
 /// Fold the library away or bring it back, and remember which.

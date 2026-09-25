@@ -27,6 +27,7 @@ mod logfile;
 mod reports;
 mod peaks;
 mod shots;
+mod splash;
 mod spotify;
 mod station;
 mod tunnel; // remote listening
@@ -275,15 +276,25 @@ pub struct Defalt {
     shot_frames: usize,
     pub scroll_to_selection: bool,
     pub feedback: ui::feedback::Feedback,
+    /// The startup ident, while it's on screen.
+    pub splash: Option<ui::splash::Splash>,
+    /// Whether launches get the ident, and with sound.
+    pub startup: splash::Prefs,
     /// Every command sent, by name, for tests that have no audio device.
     #[cfg(test)]
     sent_names: Vec<&'static str>,
 }
 
 impl Defalt {
-    fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    fn new(cc: &eframe::CreationContext<'_>, plan: splash::Plan) -> Self {
+        let window = platform::since_launch();
         ui::theme::apply(&cc.egui_ctx);
-        Self::from_root(platform::project_root(), true)
+        let mut app = Self::from_root(platform::project_root(), true);
+        logfile::log!("startup: window {:.0} ms, console built {:.0} ms after launch",
+                      window.as_secs_f64() * 1000.0, platform::since_launch().as_secs_f64() * 1000.0);
+        let sound = app.startup.sound && app.engine.is_some();
+        app.splash = ui::splash::Splash::new(plan, sound, window_handle(cc));
+        app
     }
 
     fn from_root(root: PathBuf, audio: bool) -> Self {
@@ -395,6 +406,8 @@ impl Defalt {
             shot_frames: 0,
             scroll_to_selection: false,
             feedback: Default::default(),
+            splash: None,
+            startup: splash::Prefs::load(&root),
             #[cfg(test)]
             sent_names: Vec::new(),
             root,
@@ -580,11 +593,17 @@ impl eframe::App for Defalt {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // The ident first; the console (and on a first run, the notice over
+        // it) once the window has grown.
+        if ui::splash::before(self, ui.ctx()) {
+            return;
+        }
         self.screenshots(ui.ctx());
         ui::feedback::show(self, ui.ctx());
 
         ui::draw(self, ui);
         ui::legal::overlay(self, ui.ctx());
+        ui::splash::after(self, ui.ctx());
 
         // Links clicked anywhere on the panel open through the console's own
         // opener, which starts the browser outside the console's job --
@@ -624,11 +643,34 @@ fn label(deck: usize) -> &'static str {
     if deck == 0 { "A" } else { "B" }
 }
 
+/// The window's HWND, for the splash's rounded corners.
+fn window_handle(cc: &eframe::CreationContext<'_>) -> Option<isize> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    match cc.window_handle().ok()?.as_raw() {
+        RawWindowHandle::Win32(handle) => Some(handle.hwnd.get()),
+        _ => None,
+    }
+}
+
 fn main() -> eframe::Result<()> {
+    platform::mark_launch();
     // Before anything is started, so everything started is contained.
     process::contain_self();
-    logfile::init(&platform::project_root());
+    let root = platform::project_root();
+    logfile::init(&root);
     let shot = std::env::var_os("DEFALT_SHOT").is_some();
+
+    // Screenshot runs capture the console as they always have, unless they
+    // ask for the splash itself.
+    let mut startup = splash::Prefs::load(&root);
+    let today = splash::today();
+    let plan = splash::plan(&startup, today, splash::reduced_motion(&root),
+                            shot && std::env::var_os("DEFALT_SHOT_SPLASH").is_none());
+    if plan == splash::Plan::Full && !shot && startup.last_day != Some(today) {
+        startup.last_day = Some(today);
+        startup.save(&root);
+    }
+
     let size = std::env::var("DEFALT_SHOT_SIZE").ok().and_then(|size| {
         let (w, h) = size.split_once('x')?;
         Some([w.parse::<f32>().ok()?, h.parse::<f32>().ok()?])
@@ -636,18 +678,31 @@ fn main() -> eframe::Result<()> {
         .unwrap_or(if std::env::var_os("DEFALT_SHOT_COMPACT").is_some() { [1024., 640.] } else { [1440., 900.] });
     let viewport = egui::ViewportBuilder::default()
         .with_title("Defalt")
-        .with_inner_size(size)
-        .with_maximized(!shot || std::env::var_os("DEFALT_SHOT_MAXIMIZED").is_some())
-        // Fits a 1080p screen at 150% scaling with the taskbar showing; the
-        // bands give up height before anything clips.
-        .with_min_inner_size([1024.0, 640.0])
         .with_decorations(false)
         .with_icon(Arc::new(platform::window_icon().unwrap_or_default()));
+    // With the splash, this window still opens as the console; it's cloaked
+    // until the ident (in a window of its own) is done. Only a screenshot of
+    // the splash draws it here, in a window the splash's size.
+    // Created unmaximized even then: a window created maximized is shown
+    // straight away, white, before anything can cloak it. The splash
+    // maximizes it once it's cloaked.
+    let pinned = plan != splash::Plan::Skip && ui::splash::in_console_window();
+    let viewport = if pinned {
+        let size = splash::Frames::parse(splash::FRAMES).map_or([800.0, 643.0], |frames| frames.window_size());
+        viewport.with_inner_size(size).with_resizable(false)
+    } else {
+        viewport
+            .with_inner_size(size)
+            .with_maximized(plan == splash::Plan::Skip && (!shot || std::env::var_os("DEFALT_SHOT_MAXIMIZED").is_some()))
+            // Fits a 1080p screen at 150% scaling with the taskbar showing; the
+            // bands give up height before anything clips.
+            .with_min_inner_size([1024.0, 640.0])
+    };
 
     eframe::run_native(
         "Defalt",
-        eframe::NativeOptions { viewport, ..Default::default() },
-        Box::new(|cc| Ok(Box::new(Defalt::new(cc)))),
+        eframe::NativeOptions { viewport, centered: pinned, ..Default::default() },
+        Box::new(move |cc| Ok(Box::new(Defalt::new(cc, plan)))),
     )
 }
 
