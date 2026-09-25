@@ -6,6 +6,10 @@
 
 This repository makes its source available for inspection. It provides no open-source license for original Defalt code, documentation or art. The LICENSE file sets out the limited permission it does give: viewing the source, and building and running Defalt for your own personal, noncommercial use under the terms of use. Rights provided by applicable law and GitHub's platform terms remain unaffected. Contact the maintainer through the Defalt repository for permission beyond those rights.
 
+## Booth artwork
+
+The radio booth artwork — Mav, Rue, the cat and the studio itself — is © 2026 Mara, all rights reserved, and is used in Defalt with her permission. The animation frames in `assets/studio-src/` and the sprites built from them are derived from her original art and carry the same notice. Nothing in this repository grants permission to reuse that artwork outside Defalt.
+
 ## Third-party work
 
 Dependencies, fonts and vendored components retain their own copyrights and licenses. See THIRD-PARTY-NOTICES.md, vendor/README.md and the license files shipped with those components. This notice does not override their terms or claim ownership of their work.

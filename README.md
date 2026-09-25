@@ -187,6 +187,11 @@ the browser studio uses WebP sprites cut from the desktop art in
 
 third-party audio code and its licenses are in [vendor/README.md](vendor/README.md)
 
+## credits
+
+- the booth art is by **Mara**: Mav, Rue, the cat and the whole studio. the
+  animation frames are made from her drawings
+
 ## legal
 
 the boring but important part. the short version: it's my code, you can look
