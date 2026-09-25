@@ -11,3 +11,5 @@ feedparser>=6.0.11,<7
 numpy>=1.26,<3
 mutagen>=1.47,<2
 Pillow>=10,<13
+# Signed-out YouTube Music searches, only for its explicit flag on songs.
+ytmusicapi>=1.10,<2

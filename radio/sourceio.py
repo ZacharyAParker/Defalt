@@ -53,6 +53,12 @@ def oembed(video_id):
     return _run("oembed", {"video_id": video_id}, 12)
 
 
+def ytmusic(payload):
+    # Signed-out song lookups; see radio/ytmusic.py. Short on purpose: the
+    # answer only ever refines a pick that works without it.
+    return _run("ytmusic", payload, 20)
+
+
 def guess_metadata(evidence):
     return _run("guess_metadata", evidence, 20)
 
@@ -72,6 +78,10 @@ def main():
         with contextlib.redirect_stdout(sys.stderr):
             stories=news_context.for_ad(payload['category'])
         print(json.dumps(stories,ensure_ascii=False),flush=True)
+        return
+    if operation == "ytmusic":
+        from .ytmusic import fetch
+        print(json.dumps(fetch(payload), ensure_ascii=False), flush=True)
         return
     if operation == "article":
         from .articles import fetch

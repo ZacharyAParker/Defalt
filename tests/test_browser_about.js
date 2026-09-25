@@ -19,7 +19,7 @@ class Element {
 }
 
 async function run() {
-  const names = ['patches', 'privacy', 'terms', 'copyright'];
+  const names = ['patches', 'privacy', 'terms', 'copyright', 'license', 'notices'];
   const outside = names.map(page => new Element('button', page));
   const inside = names.map(page => new Element('button', page));
   const elements = Object.fromEntries(['info-window', 'info-document', 'info-title', 'info-close'].map(id => [id, new Element()]));
@@ -65,6 +65,11 @@ async function run() {
   assert.equal(classes.size, 0);
   await outside[3].handlers.click();
   assert.equal(elements['info-title'].textContent, 'Copyright');
+  await outside[4].handlers.click();
+  assert.equal(elements['info-title'].textContent, 'License');
+  await outside[5].handlers.click();
+  assert.equal(elements['info-title'].textContent, 'Third-party notices');
+  assert.equal(elements['info-document'].children[0].textContent, 'notices');
   assert.equal(calls.length, 2, 'already-loaded documents need no further network requests');
   assert.ok(calls.every(path => path === '/api/about'), 'release pages must never call playback APIs');
   console.log('Browser release pages: tab race, offline retry, safe text, keyboard isolation, focus restoration passed.');

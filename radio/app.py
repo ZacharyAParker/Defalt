@@ -150,7 +150,8 @@ def guard_request():
 def index():
     """The same page the desktop app serves, for running this in a browser."""
     html = (config.ROOT / "web" / "index.html").read_text(encoding="utf-8")
-    return Response(html.replace("{{APP_VERSION}}", about.VERSION), mimetype="text/html",
+    html = html.replace("{{APP_VERSION}}", about.VERSION).replace("{{TERMS_VERSION}}", about.TERMS_VERSION)
+    return Response(html, mimetype="text/html",
                     headers={"Cache-Control": "no-store"})
 
 
@@ -944,4 +945,6 @@ def create_app() -> Flask:
     enrich.start(_closing)
     from . import lyrics
     lyrics.start(_closing)
+    from . import editions
+    editions.start(_closing, lambda: director.station()._janitor_protected()[0])
     return app

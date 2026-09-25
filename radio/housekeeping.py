@@ -206,6 +206,12 @@ def prune_source_info() -> int:
             # Honoured for 30 days by library._edition_checked; then noise.
             if path.is_file() and _age(path, now) > 31 * DAY:
                 freed += _remove(path)
+    answers = root / "ytmusic"
+    if answers.is_dir():
+        for path in answers.iterdir():
+            # Trusted for two weeks at most by radio.ytmusic.
+            if path.is_file() and _age(path, now) > 15 * DAY:
+                freed += _remove(path)
     return freed
 
 

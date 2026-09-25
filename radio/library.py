@@ -29,7 +29,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from . import analysis, config, db, sourceio, structure, versions
+from . import analysis, config, db, sourceio, structure, versions, ytmusic
 
 AUDIO_DIR = config.CACHE_DIR / "audio"
 # Work in progress: downloads (.raw_*) and renders (.tmp_*). Never evicted as
@@ -271,18 +271,40 @@ def _edition_check_path(video_id: str, artist: str, title: str) -> Path:
 def _edition_checked(video_id: str, artist: str, title: str) -> bool:
     try:
         data = json.loads(_edition_check_path(video_id, artist, title).read_text(encoding="utf-8"))
-        return (data.get("version") == 1 and time.time() - float(data["at"])
-                < (30 * 86400 if data.get("success", True) else 3600))
+        # Version 1 compared titles only, and a clean auto-generated upload is
+        # titled exactly like the explicit one. Those get looked at again.
+        if data.get("version") != 2:
+            return False
+        if not data.get("success", True):
+            ttl = 3600
+        elif data.get("ytmusic"):
+            ttl = 30 * 86400
+        else:
+            ttl = 6 * 3600  # titles only; ask YouTube Music again later
+        return time.time() - float(data["at"]) < ttl
     except (OSError, ValueError, TypeError, KeyError):
         return False
 
 
-def _record_edition_check(video_id: str, artist: str, title: str, *, success=True) -> None:
+def _edition_flagged(video_id: str, artist: str, title: str) -> bool:
+    try:
+        data = json.loads(_edition_check_path(video_id, artist, title).read_text(encoding="utf-8"))
+        return data.get("version") == 2 and bool(data.get("ytmusic"))
+    except (OSError, ValueError, TypeError, KeyError):
+        return False
+
+
+def _record_edition_check(video_id: str, artist: str, title: str, *, success=True,
+                          flagged=False, status: str | None = None) -> None:
     # Evidence of an edition search, not a claim that audio is proven explicit.
+    # `flagged` says YouTube Music's explicit flag was part of the answer.
     try:
         path = _edition_check_path(video_id, artist, title)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"version": 1, "at": time.time(), "success": success}), encoding="utf-8")
+        record = {"version": 2, "at": time.time(), "success": success, "ytmusic": bool(flagged)}
+        if status:
+            record["status"] = status
+        path.write_text(json.dumps(record), encoding="utf-8")
     except OSError:
         pass
 
@@ -303,11 +325,26 @@ def resolve(artist: str, title: str, expected_ms: int = 0, *, exclude=()) -> str
 
     prefer_explicit = (config.station.get("selection.avoid_clean_versions", True)
                        and not versions.is_clean_label(title))
-    # An unlabelled Topic upload can be the clean edition. Compare a targeted
-    # search before accepting it, instead of searching only after every result
-    # has already been rejected. Exact source URLs bypass resolution entirely.
+    # An unlabelled Topic upload can be the clean edition, titled exactly like
+    # the explicit one. YouTube Music's explicit flag tells them apart: when it
+    # has an explicit release of this song, that goes to the front. When it
+    # only has clean ones, the song has no explicit version and nothing else
+    # changes. Exact source URLs bypass resolution entirely.
+    hint = ytmusic.explicit_choice(artist, title, expected_ms) if prefer_explicit else None
+    flagged = [song["video_id"] for song in (hint or {}).get("explicit", [])]
+    if flagged:
+        known = {entry["id"] for entry in candidates}
+        for song in hint["explicit"]:
+            if song["video_id"] not in known:
+                # Scored on its own details below, like any search result.
+                candidates.append({"id": song["video_id"], "title": song["title"],
+                                   "duration": song["duration"] or None})
+                known.add(song["video_id"])
+    # Without that answer, compare a targeted search before accepting an
+    # unlabelled upload, instead of searching only after every result has
+    # already been rejected.
     searched_explicit = False
-    if prefer_explicit:
+    if prefer_explicit and not (hint and hint["matched"]):
         try:
             extra = sourceio.search(query + " explicit audio", options)
             searched_explicit = True
@@ -333,7 +370,8 @@ def resolve(artist: str, title: str, expected_ms: int = 0, *, exclude=()) -> str
             if require_identity:
                 # A fallback must still identify this recording; a merely
                 # high-ranked search result is not enough after the first fails.
-                if (not _same_recording(entry, artist, title) or
+                # YouTube Music already matched its releases by song and artist.
+                if ((entry['id'] not in flagged and not _same_recording(entry, artist, title)) or
                         classify(entry, artist, title)['variant']):
                     continue
             score = _candidate_score(entry, artist, title, expected_ms,
@@ -343,6 +381,7 @@ def resolve(artist: str, title: str, expected_ms: int = 0, *, exclude=()) -> str
             ranked.append((score, entry))
 
         for score, entry in sorted(ranked, key=lambda candidate: (
+                candidate[1]["id"] in flagged,
                 prefer_explicit and classify(candidate[1], artist, title)["explicit"], candidate[0]),
                 reverse=True):
             details = _source_info(entry["id"])
@@ -352,14 +391,19 @@ def resolve(artist: str, title: str, expected_ms: int = 0, *, exclude=()) -> str
                 continue
             kind = classify(entry, artist, title)
             tags = [k for k in ("art_track", "official_audio", "video", "lyrics", "explicit", "clean")
-                    if kind[k]]
+                    if kind[k]] + (["flagged explicit"] if entry["id"] in flagged else [])
             _log("resolved", artist, "-", title, "->", entry["id"],
                  f"(score {score:.1f}"
                  + (f", {'+'.join(tags)}" if tags else "") + ")")
             if allow_video:
                 _log("  only a video was available for", title)
-            if prefer_explicit and searched_explicit:
-                _record_edition_check(entry["id"], artist, title)
+            if flagged and entry["id"] not in flagged:
+                _log("  no explicit release was usable for", title)
+            if prefer_explicit and (searched_explicit or hint is not None):
+                _record_edition_check(
+                    entry["id"], artist, title, flagged=hint is not None,
+                    status="explicit" if entry["id"] in flagged else
+                    "no-explicit-version" if hint and hint["matched"] and not flagged else None)
             return entry["id"]
 
     _log("no acceptable match for", artist, "-", title,
@@ -730,7 +774,47 @@ def ensure(track: dict[str, Any]) -> dict[str, Any] | None:
         event.set()
 
 
-def _ensure_locked(track: dict[str, Any]) -> dict[str, Any] | None:
+def upgrade(track: dict[str, Any], video_id: str, protect=None) -> bool:
+    """Swap a cached track to another upload of the same record, in the background.
+
+    The old audio keeps playing until the new file is rendered and checked;
+    then one row update points the track at it. A track the feeder is
+    preparing right now is left alone. `protect` returns the files still
+    wanted on air; the old file is deleted only when it is not one of them
+    (without it, eviction gets to it in its own time).
+    """
+    key = track["key"]
+    with _RESOLVE_LOCK:
+        if key in _INFLIGHT:
+            return False
+        event = threading.Event()
+        _INFLIGHT[key] = event
+    try:
+        before = db.one("SELECT * FROM tracks WHERE key=?", (key,))
+        if not before or not before["file"] or before["video_id"] == video_id:
+            return False
+        ready = _ensure_locked(dict(track), replacement=video_id)
+        swapped = bool(ready and ready.get("file") and ready.get("video_id") != before["video_id"])
+        old = Path(before["file"])
+        if swapped and protect is not None and _same_file_key(ready["file"]) != _same_file_key(old):
+            try:
+                keep = {_same_file_key(p) for p in (protect() or ()) if p}
+                if (_same_file_key(old) not in keep
+                        and not db.one("SELECT key FROM tracks WHERE file=?", (str(old),))):
+                    old.unlink(missing_ok=True)
+            except OSError:
+                pass  # a reader still has it open; eviction will get it
+        if swapped:
+            _log("swapped", track.get("artist"), "-", track.get("title"), before["video_id"], "->", ready["video_id"])
+        return swapped
+    finally:
+        with _RESOLVE_LOCK:
+            _INFLIGHT.pop(key, None)
+        event.set()
+
+
+def _ensure_locked(track: dict[str, Any], replacement: str | None = None) -> dict[str, Any] | None:
+    """`replacement` swaps cached audio for that upload, keeping the old file on failure."""
     key = track["key"]
     AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -742,7 +826,14 @@ def _ensure_locked(track: dict[str, Any]) -> dict[str, Any] | None:
     use_existing = True
     replacement_id = None
     fallback_existing = False
-    if (existing and existing["file"] and existing["video_id"]
+    verified_upgrade = False
+    if replacement:
+        # Local files and exact links are never swapped for another upload.
+        if not (existing and existing["file"] and Path(existing["file"]).is_file()
+                and db.field(existing, "source") != "local" and not db.field(existing, "source_url")):
+            return dict(existing) if existing else None
+        replacement_id, fallback_existing, use_existing, verified_upgrade = replacement, True, False, True
+    elif (existing and existing["file"] and existing["video_id"]
             and db.field(existing, "source") != "local" and not db.field(existing, "source_url")
             and (config.station.get("selection.avoid_clean_versions", True)
                  or config.station.get("selection.prefer_original_recording", True)
@@ -756,15 +847,28 @@ def _ensure_locked(track: dict[str, Any]) -> dict[str, Any] | None:
                 and not _edition_checked(existing["video_id"], track["artist"], track["title"])):
             fallback_existing = Path(existing["file"]).is_file()
             _log("checking explicit edition for cached recording", track["artist"], track["title"])
-            try:
-                replacement_id = resolve(track["artist"], track["title"], track.get("expected_ms") or 0)
-            except (sourceio.SourceError, OSError):
-                # This is an ambiguous working source, not a proven clean one.
-                # A network outage must not discard it or retry every pick.
-                replacement_id = None
-            _record_edition_check(existing["video_id"], track["artist"], track["title"],
-                                  success=bool(replacement_id and _edition_checked(
-                                      replacement_id, track["artist"], track["title"])))
+            # YouTube Music's flag first: it answers "is this upload the clean
+            # one" directly, and only a proven clean upload with an explicit
+            # sibling is replaced. Without an answer, search as before.
+            found = ytmusic.verdict(existing["video_id"], track["artist"], track["title"],
+                                    db.field(existing, "duration") or 0)
+            if found is not None and found["status"] != "unknown":
+                replacement_id = found["upgrade"]
+                verified_upgrade = bool(replacement_id)
+                _record_edition_check(existing["video_id"], track["artist"], track["title"],
+                                      flagged=True, status=found["status"])
+            else:
+                try:
+                    replacement_id = resolve(track["artist"], track["title"], track.get("expected_ms") or 0)
+                except (sourceio.SourceError, OSError):
+                    # This is an ambiguous working source, not a proven clean one.
+                    # A network outage must not discard it or retry every pick.
+                    replacement_id = None
+                _record_edition_check(existing["video_id"], track["artist"], track["title"],
+                                      success=bool(replacement_id and _edition_checked(
+                                          replacement_id, track["artist"], track["title"])),
+                                      flagged=bool(replacement_id and _edition_flagged(
+                                          replacement_id, track["artist"], track["title"])))
             use_existing = not replacement_id or replacement_id == existing["video_id"]
         if info and _candidate_score(info, track["artist"], track["title"],
                                      track.get("expected_ms") or 0,
@@ -823,7 +927,14 @@ def _ensure_locked(track: dict[str, Any]) -> dict[str, Any] | None:
     if not video_id:
         db.write("UPDATE tracks SET blocked=1 WHERE key=?", (key,))
         return None
-    db.write("UPDATE tracks SET video_id=? WHERE key=?", (video_id, key))
+    if not fallback_existing:
+        # A replacement moves video_id and file together, in the last write,
+        # so the row never names one upload while playing another.
+        db.write("UPDATE tracks SET video_id=? WHERE key=?", (video_id, key))
+
+    def keep_existing() -> dict[str, Any]:
+        _record_edition_check(existing["video_id"], track["artist"], track["title"], success=False)
+        return dict(existing)
 
     final = _cache_path(video_id)
     measured: dict[str, Any] | None = None
@@ -831,14 +942,14 @@ def _ensure_locked(track: dict[str, Any]) -> dict[str, Any] | None:
     try:
         if not final.exists():
             if not raw:
-                return None
+                return keep_existing() if fallback_existing else None
 
             # Measure the source, then apply one gain. Analysing the raw file
             # also gets us the shape for free -- a linear gain does not move it.
             measured = measure(raw)
             gain = gain_for(measured["integrated"], measured["true_peak"])
             if not _render(raw, final, gain):
-                return None
+                return keep_existing() if fallback_existing else None
             _log(f"normalised {measured['integrated']:.1f} LUFS "
                  f"-> {measured['integrated'] + gain:.1f} ({gain:+.1f} dB)")
     finally:
@@ -881,6 +992,20 @@ def _ensure_locked(track: dict[str, Any]) -> dict[str, Any] | None:
                       "applied_gain_db": known.get("applied_gain_db"),
                       "true_peak": measured["true_peak"]}
 
+    old_length = float(db.field(existing, "duration") or 0) if existing else 0.0
+    if (fallback_existing and video_id != existing["video_id"] and old_length
+            and abs(duration - old_length) > max(8.0, old_length * 0.05)):
+        # Another edition of one record runs within seconds of it. Anything
+        # further off is some other recording: keep the one that works.
+        _log("replacement runs", f"{duration:.0f}s against {old_length:.0f}s; keeping cached",
+             track["artist"], "-", track["title"])
+        if not db.one("SELECT key FROM tracks WHERE file=?", (str(final),)):
+            try:
+                final.unlink(missing_ok=True)
+            except OSError:
+                pass
+        return keep_existing()
+
     # Tempo and key, so the director can pick a transition that suits the two
     # records rather than always reaching for the same crossfade.
     if reuse_tonal:
@@ -889,18 +1014,21 @@ def _ensure_locked(track: dict[str, Any]) -> dict[str, Any] | None:
         tonal = analysis.profile(final)
 
     db.write(
-        "UPDATE tracks SET blocked=0, file=?, duration=?, intro_sec=?, outro_sec=?, "
+        "UPDATE tracks SET blocked=0, video_id=?, file=?, duration=?, intro_sec=?, outro_sec=?, "
         "lufs=?, source_lufs=?, applied_gain_db=?, true_peak=?, "
         "bpm=?, bpm_confidence=?, key_tonic=?, key_mode=?, "
         "key_confidence=?, camelot=?, beat_offset=?, beat_period=?, "
         "beat_residual_ms=?, downbeat_offset=?, cache_used_at=? WHERE key=?",
-        (str(final), duration, stats["intro_sec"], stats["outro_sec"],
+        (video_id, str(final), duration, stats["intro_sec"], stats["outro_sec"],
          levels["lufs"], levels["source_lufs"], levels["applied_gain_db"], levels["true_peak"],
          tonal["bpm"], tonal["bpm_confidence"],
          tonal["key_tonic"], tonal["key_mode"], tonal["key_confidence"],
          tonal["camelot"], tonal["beat_offset"], tonal["beat_period"],
          tonal["beat_residual_ms"], tonal["downbeat_offset"], time.time(), key),
     )
+    if verified_upgrade and video_id == replacement_id:
+        # YouTube Music named this upload as the explicit release.
+        _record_edition_check(video_id, track["artist"], track["title"], flagged=True, status="explicit")
     _log("ready", track["artist"], "-", track["title"],
          f"{duration:.0f}s intro={stats['intro_sec']:.1f}s "
          f"outro={stats['outro_sec']:.1f}s "

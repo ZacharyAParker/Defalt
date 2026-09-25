@@ -124,8 +124,10 @@ playlist-only links are rejected. Share tracking and start timestamps are
 ignored so the director can prepare the complete recording and its transitions.
 
 The exact video stays pinned even when automatic searches prefer explicit
-editions. Different uploads have distinct library identities, and requesting
-the same link again does not create another pending copy.
+editions (they use YouTube Music's explicit flag to tell a clean upload from
+the explicit one; see [Radio](RADIO.md)). Different uploads have distinct
+library identities, and requesting the same link again does not create another
+pending copy.
 
 Metadata is resolved during preparation: YouTube music credits first, then
 title/channel parsing, then the director fills missing title, artist or genre

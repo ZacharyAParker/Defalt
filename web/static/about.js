@@ -4,7 +4,10 @@
   const dialog = document.getElementById("info-window");
   const body = document.getElementById("info-document");
   const title = document.getElementById("info-title");
-  const labels = {patches: "Patch notes", privacy: "Privacy policy", terms: "Terms of use", copyright: "Copyright"};
+  const labels = {
+    patches: "Patch notes", privacy: "Privacy policy", terms: "Terms of use", copyright: "Copyright",
+    license: "License", notices: "Third-party notices",
+  };
   let documents;
   let active;
   let opener;

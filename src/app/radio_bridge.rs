@@ -332,6 +332,10 @@ impl Defalt {
     }
 
     pub fn start_radio(&mut self) {
+        // The first-run notice covers the panel, but nothing gets past it.
+        if !self.legal.accepted() {
+            return;
+        }
         if let Err(error) = self.station.start() {
             self.say(&error);
             return;

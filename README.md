@@ -12,9 +12,10 @@ the console is Rust with egui and cpal. the radio brain is Python. it all runs
 locally on Windows, and the only way in from outside is your own tunnel if you
 set one up
 
-current release is **0.4.2**. [patch notes](CHANGELOG.md) ·
-[privacy](PRIVACY.md) · [terms](TERMS.md) · [copyright](COPYRIGHT.md). those
-same pages open from the app footer without stopping the music
+current release is **0.4.4**. [patch notes](CHANGELOG.md) ·
+[privacy](PRIVACY.md) · [terms](TERMS.md) · [license](LICENSE) ·
+[copyright](COPYRIGHT.md). those same pages open from the app footer without
+stopping the music
 
 ## what it does
 
@@ -112,6 +113,10 @@ phrase data:
 .venv\Scripts\python.exe -m radio.cli reanalyse
 ```
 
+coming from 0.4.2 or older? 0.4.3 adds one package (ytmusicapi, for spotting
+explicit versions), so run the pip install line above again. without it
+everything still works, it just can't tell a clean upload from the explicit one
+
 the browser radio is `.venv\Scripts\python.exe -m radio`, then open the address
 it prints (port `8090` by default)
 
@@ -179,5 +184,26 @@ the browser studio uses WebP sprites cut from the desktop art in
 
 third-party audio code and its licenses are in [vendor/README.md](vendor/README.md)
 
+## legal
+
+the boring but important part. the short version: it's my code, you can look
+at it and run it for yourself, it comes with no warranty, and what you download
+and play with it is on you
+
+- [LICENSE](LICENSE): source available, all rights reserved. look, build, run
+  it for yourself, but no copying, reselling or reuploading without asking
+- [terms](TERMS.md): the no warranty and liability stuff, the flashing lights
+  and volume warnings, and the rules for third party services
+- [privacy](PRIVACY.md): what stays on your machine and what gets sent where
+- [copyright](COPYRIGHT.md): trademarks and how to send a takedown
+- [third party notices](THIRD-PARTY-NOTICES.md): every crate, package and font
+  and its license. it's generated, rerun `tools\third-party-notices.py` after
+  changing dependencies
+- [security](SECURITY.md): report holes privately, not in an issue
+- [NOTICE.md](NOTICE.md): how audio is handled, in plain words
+
+the app asks you to accept the terms the first time you open it (and again if
+they change). License, Notices and the rest are in the footer
+
 ---
-Defalt v0.4.2 · © 2026 Zachary Parker
+Defalt v0.4.4 · © 2026 Zachary Parker

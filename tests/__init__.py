@@ -25,3 +25,14 @@ from radio import config, db  # noqa: E402  (after the .env is switched off)
 config.station.override = config.ConfigFile(_scratch / "overrides.yaml")
 config.station._merged = None
 db._DB_PATH = _scratch / "station.db"
+
+from radio import sourceio  # noqa: E402
+
+
+def _no_youtube_music(payload):
+    # The resolver asks YouTube Music about explicit editions. Offline here,
+    # exactly like a failed lookup; tests that need answers patch this.
+    raise sourceio.SourceError("no YouTube Music in tests")
+
+
+sourceio.ytmusic = _no_youtube_music

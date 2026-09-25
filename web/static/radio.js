@@ -1348,6 +1348,11 @@ document.addEventListener("keydown", (event) => {
 
 /* ── Controls ──────────────────────────────────────────────────────── */
 async function start() {
+  // Nothing plays until the first-run notice has been accepted here.
+  if (globalThis.DefaltLegal && !globalThis.DefaltLegal.accepted()) {
+    globalThis.DefaltLegal.show();
+    return;
+  }
   if (streamMode) {
     // The console mixes; this only plays what it sends. Called inside the
     // tap, which is what lets a phone start audio at all.

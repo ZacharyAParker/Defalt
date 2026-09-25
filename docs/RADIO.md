@@ -133,11 +133,19 @@ apply. Unknown vocal activity never enables this extra effect.
 **Avoid clean/censored song versions** is on by default in Song choice settings.
 Automatic rotation skips tracks labeled clean/censored in their title or album;
 new source searches reject those editions and favor labeled explicit/uncensored
-audio. If needed, a second search looks specifically for explicit audio. Songs
+audio. The clean and explicit releases of a song are usually uploaded with the
+exact same title, so source searches also ask YouTube Music (signed out) which
+releases carry its explicit flag, and take the explicit one when it exists. A
+song with no explicit release keeps its normal source. If YouTube Music doesn't
+answer, a second search looks specifically for explicit audio. Songs
 without edition labels remain eligible, and a radio edit alone is not treated
-as censored. An explicitly requested clean edition is still allowed. Detection
-uses labels, not listening for muted words; existing cached audio and manually
-loaded decks are preserved.
+as censored. An explicitly requested clean edition is still allowed, and exact
+YouTube links always play the linked video. Detection uses labels and that
+flag, not listening for muted words. Cached songs are rechecked in the
+background a couple a minute; one that came from the clean upload is
+re-downloaded from the explicit one when it isn't scheduled, and the old file
+plays until the new one is ready. `python -m radio.cli editions --dry-run`
+lists the affected songs. Manually loaded decks are preserved.
 
 Lyrics currently use embedded text and conservative word/theme cues, not an
 external lyrics service or semantic interpretation. Structure analysis finds

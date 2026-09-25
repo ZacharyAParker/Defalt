@@ -275,6 +275,8 @@
     <button type="button" data-info-page="privacy">Privacy</button>
     <button type="button" data-info-page="terms">Terms</button>
     <button type="button" data-info-page="copyright">Copyright</button>
+    <button type="button" data-info-page="license">License</button>
+    <button type="button" data-info-page="notices">Notices</button>
     <button type="button" id="feedback-open" title="Report a bug or suggestion">Report a bug</button>
   </nav>
 </footer>
@@ -288,11 +290,39 @@
     <button type="button" data-info-page="privacy">Privacy</button>
     <button type="button" data-info-page="terms">Terms</button>
     <button type="button" data-info-page="copyright">Copyright</button>
+    <button type="button" data-info-page="license">License</button>
+    <button type="button" data-info-page="notices">Notices</button>
   </nav>
   <article class="info-window__body" id="info-document" tabindex="0" aria-label="Document"></article>
   <footer class="info-window__foot">
     <span>v{{APP_VERSION}} · © 2026 Zachary Parker</span>
     <a href="https://github.com/ZacharyAParker/Defalt" target="_blank" rel="noopener noreferrer">Repository</a>
+  </footer>
+</dialog>
+<!-- First run, and whenever the terms version changes: nothing plays until
+     this is accepted on this device. -->
+<dialog class="info-window legal-window" id="legal-window" aria-labelledby="legal-title" data-terms-version="{{TERMS_VERSION}}">
+  <header class="info-window__head">
+    <h2 id="legal-title">Before you start</h2>
+  </header>
+  <div class="info-window__body legal-window__body">
+    <p>Defalt is a personal DJ console and radio. By using it you accept the Terms of use, the License and the Privacy policy. It comes with no warranty, and you&rsquo;re responsible for what you download, play and share with it.</p>
+    <p class="legal-window__links">
+      <button type="button" data-info-page="terms">Terms of use</button>
+      <button type="button" data-info-page="license">License</button>
+      <button type="button" data-info-page="privacy">Privacy policy</button>
+    </p>
+    <h3>Flashing lights</h3>
+    <p>The radio booth has lightning, a flickering neon sign and a visualizer that pulses with the music. If you or anyone watching is sensitive to flashing light or has ever had a seizure, turn on Reduced motion. Stop right away if you feel dizzy or unwell.</p>
+    <label class="legal-window__toggle"><input type="checkbox" id="legal-reduced"> Reduced motion (stops the lightning and flicker)</label>
+    <h3>Volume</h3>
+    <p>Start quiet and keep it at a safe level, especially on headphones. Mixes and voices can change loudness suddenly, and the limiter doesn&rsquo;t protect your hearing.</p>
+    <h3>Explicit content</h3>
+    <p>Songs play in their explicit versions, and the hosts roast, swear and joke. What they say, including the fake ads, is generated, can be wrong or offensive, and isn&rsquo;t anyone&rsquo;s real view or endorsement.</p>
+  </div>
+  <footer class="info-window__foot legal-window__foot">
+    <span>Terms version {{TERMS_VERSION}}. If you don&rsquo;t agree, close this page.</span>
+    <button type="button" class="btn btn--primary legal-window__agree" id="legal-agree" autofocus>I agree</button>
   </footer>
 </dialog>
 <dialog class="director-chat" id="director-chat" aria-labelledby="director-chat-heading">
@@ -313,6 +343,7 @@
 <script src="/static/feedback.js?v={{APP_VERSION}}" defer></script>
 <script src="/static/director-chat.js?v={{APP_VERSION}}" defer></script>
 <script src="/static/about.js?v={{APP_VERSION}}" defer></script>
+<script src="/static/legal.js?v={{APP_VERSION}}" defer></script>
 <script src="/static/visualizer.js?v={{APP_VERSION}}" defer></script>
 <script src="/static/stream.js?v={{APP_VERSION}}" defer></script>
 <script src="/static/lyrics.js?v={{APP_VERSION}}" defer></script>

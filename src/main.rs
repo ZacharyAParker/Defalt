@@ -20,6 +20,7 @@ mod pull;
 mod platform;
 mod process;
 mod keys;
+mod legal;
 mod library;
 mod lyrics;
 mod logfile;
@@ -191,6 +192,9 @@ pub struct Defalt {
     pub focus_search: bool,
     pub show_help: bool,
     pub info_page: Option<ui::about::Page>,
+    /// The terms, accepted or not. Until they are, nothing plays and nothing
+    /// is started that talks to the network.
+    pub legal: legal::Acceptance,
     /// A line for the user, and when it stops being worth showing.
     pub notice: Option<(String, std::time::Instant)>,
 
@@ -349,6 +353,7 @@ impl Defalt {
             focus_search: false,
             show_help: false,
             info_page: None,
+            legal: legal::Acceptance::load(&root),
             notice: None,
             splits: [None, None],
             stem_gain: [[1.0; engine::deck::STEMS]; DECKS],
@@ -554,7 +559,7 @@ impl eframe::App for Defalt {
         self.poll_splits();
         self.catalogue.tick();
         self.airtime.catalogue.tick();
-        if self.shot_on_launch.is_none() {
+        if self.shot_on_launch.is_none() && self.legal.accepted() {
             self.tick_station();
             self.remote.tick(&self.root, self.engine.as_ref().map(|e| &e.telemetry), &self.station);
             self.tick_airtime();
@@ -579,6 +584,7 @@ impl eframe::App for Defalt {
         ui::feedback::show(self, ui.ctx());
 
         ui::draw(self, ui);
+        ui::legal::overlay(self, ui.ctx());
 
         // Links clicked anywhere on the panel open through the console's own
         // opener, which starts the browser outside the console's job --
@@ -713,6 +719,49 @@ mod regressions {
             assert!(delays.iter().any(|delay| *delay <= std::time::Duration::from_millis(100)),
                 "background work failed to schedule its next wake");
         }
+    }
+
+    #[test]
+    fn nothing_starts_behind_the_first_run_notice() {
+        let root = std::env::temp_dir().join(format!("defalt-terms-gate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let notice = |app: &mut Defalt| {
+            let ctx = egui::Context::default();
+            ui::theme::apply(&ctx);
+            let mut shown = false;
+            ctx.run_ui(egui::RawInput::default(), |ui| shown = ui::legal::overlay(app, ui.ctx()))
+                .drop_without_applying_deltas();
+            shown
+        };
+
+        let mut app = Defalt::from_root(root.clone(), false);
+        assert!(!app.legal.accepted());
+        assert!(notice(&mut app), "no notice on first launch");
+        let ctx = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        for _ in 0..3 {
+            let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| eframe::App::logic(&mut app, ctx, &mut frame));
+        }
+        app.start_radio();
+        assert!(matches!(app.station.health, station::Health::Off), "the station started before acceptance");
+        assert!(!app.airtime.on, "the radio went on air before acceptance");
+        // A page opened from the notice is read on its own.
+        app.info_page = Some(ui::about::Page::Terms);
+        assert!(!notice(&mut app));
+        app.info_page = None;
+
+        app.legal.accept().unwrap();
+        assert!(!notice(&mut app), "the notice stayed up after agreeing");
+        let mut again = Defalt::from_root(root.clone(), false);
+        assert!(again.legal.accepted(), "asked again for the same terms");
+        assert!(!notice(&mut again));
+
+        // New terms: asked again.
+        std::fs::write(root.join("cache/legal-acceptance.json"), r#"{"terms_version":"2020-01-01","accepted_at":1}"#).unwrap();
+        let mut older = Defalt::from_root(root.clone(), false);
+        assert!(!older.legal.accepted());
+        assert!(notice(&mut older));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

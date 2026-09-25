@@ -8,6 +8,7 @@
     break     write and render one talk break without going on air
     track     resolve, download and analyse a single track
     audit     check cached tracks for live takes and music videos
+    editions  find cached songs that came from a clean upload (--dry-run)
     purge     empty the audio cache
 """
 from __future__ import annotations
@@ -287,6 +288,57 @@ def cmd_audit(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_editions(args: argparse.Namespace) -> int:
+    """Find cached songs that came from the clean upload of an explicit song.
+
+    Asks YouTube Music about every downloaded track (local files and exact
+    links are left out). --dry-run only reports. Without it, each clean one
+    with an explicit release is re-downloaded; the old file stays until the
+    new one is ready. Songs prepared in the last few minutes are skipped,
+    because a running station may be about to play them.
+    """
+    from . import editions
+
+    labels = {"explicit": "explicit", "upgrade": "SWAP for the explicit release",
+              "no-explicit-version": "no explicit version", "unknown": "explicit exists; own flag unknown",
+              "not-found": "not on YouTube Music", "unreachable": "YouTube Music did not answer"}
+    counts: dict[str, int] = {}
+    affected: list[str] = []
+
+    def progress(track: dict[str, Any], result: dict[str, Any]) -> None:
+        status = result["status"]
+        counts[status] = counts.get(status, 0) + 1
+        name = f"{track['artist']} - {track['title']}"
+        line = f"  {name[:52]:54} {labels.get(status, status)}"
+        if status == "upgrade":
+            affected.append(name)
+            reason = f"; {result['reason']}" if result.get("reason") else ""
+            line += f"  ({track['video_id']} -> {result['upgrade']}{reason})"
+            if result.get("swapped") is not None:
+                line += "  swapped" if result["swapped"] else "  swap failed; keeping the old file"
+            elif result.get("deferred"):
+                line += "  skipped for now (in use)"
+        elif status == "unknown":
+            line += f"  (explicit: {result.get('explicit')})"
+        print(line, flush=True)
+
+    tracks = editions.cached(args.limit, unchecked_only=False)
+    if not tracks:
+        print("nothing cached to check")
+        return 0
+    print(f"checking {len(tracks)} cached tracks on YouTube Music"
+          + (" (dry run)" if args.dry_run else "") + "...\n")
+    editions.run_batch(len(tracks), dry_run=args.dry_run, swaps=len(tracks),
+                       unchecked_only=False, progress=progress)
+    print()
+    for status, count in sorted(counts.items(), key=lambda item: -item[1]):
+        print(f"  {count:4}  {labels.get(status, status)}")
+    if affected and args.dry_run:
+        print(f"\n{len(affected)} came from a clean release or a non-release upload while an explicit "
+              "release exists. Re-run without --dry-run to swap them.")
+    return 0
+
+
 def cmd_purge(_args: argparse.Namespace) -> int:
     library.purge_all()
     print("audio cache emptied")
@@ -352,6 +404,12 @@ def main(argv: list[str] | None = None) -> int:
     audit.add_argument("--fix", action="store_true",
                        help="drop tracks from bad sources so they refetch")
     audit.set_defaults(func=cmd_audit)
+
+    editions = subparsers.add_parser("editions",
+                                     help="find cached songs that came from a clean upload")
+    editions.add_argument("--limit", type=int, default=None)
+    editions.add_argument("--dry-run", action="store_true", help="report only; download nothing")
+    editions.set_defaults(func=cmd_editions)
 
     subparsers.add_parser("purge").set_defaults(func=cmd_purge)
 

@@ -1,5 +1,13 @@
 # Patch notes
 
+## 0.4.4 — September 25, 2026
+
+- added the legal stuff. there's a real LICENSE now (source available, all rights reserved), proper terms with the no warranty and liability parts, a security policy and a generated list of every third party package and font. License and Notices sit in the footer next to Terms, and the first time you open the app (or when the terms change) it asks you to accept them and warns about the flashing lights and volume before anything plays
+
+## 0.4.3 — September 25, 2026
+
+- songs stop playing the clean version when there's an explicit one. it checks youtube music's explicit tag now since the clean upload has the exact same title, and songs already downloaded clean get swapped in the background a couple a minute (`python -m radio.cli editions --dry-run` shows which ones)
+
 ## 0.4.2 — September 23, 2026
 
 - korean, japanese, chinese, thai, russian and other non english lyrics and titles actually show up in the console now instead of empty boxes
@@ -176,4 +184,4 @@ Artwork is fetched and cached in the background. Studio animation does not contr
 Earlier development builds used version 0.1.0. The 0.2.0 notes collect the current release changes; they are not a claim that every feature was first written on the release date.
 
 ---
-Defalt v0.4.2 · © 2026 Zachary Parker
+Defalt v0.4.4 · © 2026 Zachary Parker

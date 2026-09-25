@@ -8,12 +8,15 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const COPYRIGHT: &str = "© 2026 Zachary Parker";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Page { Patches, Privacy, Terms, Copyright }
+pub enum Page { Patches, Privacy, Terms, Copyright, License, Notices }
 
 impl Page {
-    pub const ALL: [Self; 4] = [Self::Patches, Self::Privacy, Self::Terms, Self::Copyright];
+    pub const ALL: [Self; 6] = [Self::Patches, Self::Privacy, Self::Terms, Self::Copyright, Self::License, Self::Notices];
     fn label(self) -> &'static str {
-        match self { Self::Patches => "Patches", Self::Privacy => "Privacy", Self::Terms => "Terms", Self::Copyright => "Copyright" }
+        match self {
+            Self::Patches => "Patches", Self::Privacy => "Privacy", Self::Terms => "Terms",
+            Self::Copyright => "Copyright", Self::License => "License", Self::Notices => "Notices",
+        }
     }
     fn content(self) -> &'static str {
         match self {
@@ -21,6 +24,8 @@ impl Page {
             Self::Privacy => include_str!("../../PRIVACY.md"),
             Self::Terms => include_str!("../../TERMS.md"),
             Self::Copyright => include_str!("../../COPYRIGHT.md"),
+            Self::License => include_str!("../../LICENSE"),
+            Self::Notices => include_str!("../../THIRD-PARTY-NOTICES.md"),
         }
     }
     pub fn from_name(name: &str) -> Option<Self> {

@@ -18,6 +18,11 @@ impl Defalt {
         // Capture the real local library without starting playback, network
         // searches, stem separation, or a station just to take a screenshot.
         let posing = self.shot_on_launch.is_some();
+        // Shots pose the panel, not the first-run notice, unless
+        // DEFALT_SHOT_LEGAL asks for the notice itself.
+        if posing && self.frames == 1 {
+            self.legal.pose(std::env::var_os("DEFALT_SHOT_LEGAL").is_some());
+        }
         if posing && self.frames == 5 {
             self.wait_for_library();
             if std::env::var_os("DEFALT_SHOT_EMPTY").is_none() {

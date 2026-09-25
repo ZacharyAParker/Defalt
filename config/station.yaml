@@ -356,6 +356,9 @@ clock:
 selection:
   # Skip labeled censored editions in automatic picks and prefer explicit sources.
   avoid_clean_versions: true
+  # Look cached songs up on YouTube Music in the background, a couple a minute,
+  # and re-download any that came from the clean upload of an explicit song.
+  recheck_cached_editions: true
   # Acoustic, demo, stripped, and other alternate takes require an explicit request.
   prefer_original_recording: true
   avoid_music_videos: true

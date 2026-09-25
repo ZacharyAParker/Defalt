@@ -82,7 +82,7 @@ the original. Every story keeps its source URL.
 | Microsoft Edge TTS or configured OpenRouter speech provider | The written host lines, to synthesise speech | Provider is configurable |
 | Steam Web API | Your SteamID, to read your library and wishlist | Yes |
 | RSS and article publishers | Page/feed requests, IP address, and request headers | Yes |
-| YouTube | Searches, metadata requests, and requests for selected audio | When fetching sources |
+| YouTube and YouTube Music | Searches, metadata requests, and requests for selected audio; YouTube Music gets signed-out artist/title searches to find explicit releases | When fetching sources |
 | Spotify | Search queries, catalog lookups for missing years and genres, and application credentials | Yes |
 | LRCLIB | Artist, title, album and length of songs in your library, to find synced lyrics | Yes — `lyrics.enabled` / Mix settings |
 | Open-Meteo | The latitude and longitude you configure, for weather | Yes — off until a location is set |
@@ -99,8 +99,10 @@ Mono (© IBM Corp.), both under the SIL Open Font License 1.1; the licence texts
 are in `web/static/fonts/`.
 
 The [privacy policy](PRIVACY.md) covers storage, external providers, retention,
-and deletion limits. See the [terms](TERMS.md), [copyright notice](COPYRIGHT.md),
-and [patch notes](CHANGELOG.md) for the rest of the release information.
+and deletion limits. See the [terms](TERMS.md), [license](LICENSE),
+[copyright notice](COPYRIGHT.md), [third-party notices](THIRD-PARTY-NOTICES.md),
+[security policy](SECURITY.md) and [patch notes](CHANGELOG.md) for the rest of
+the release information.
 
 ---
-Defalt v0.4.2 · © 2026 Zachary Parker
+Defalt v0.4.4 · © 2026 Zachary Parker

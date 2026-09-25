@@ -19,6 +19,7 @@ pub mod widgets;
 pub mod visualizer;
 pub mod director_chat;
 pub mod feedback;
+pub mod legal;
 pub mod transition_preview;
 
 use std::cell::RefCell;
@@ -237,7 +238,7 @@ pub fn draw(app: &mut Defalt, ui: &mut Ui) {
 
     notice(app, &ctx);
     help_overlay(app, &ctx);
-    if !reading && app.info_page.is_none() {
+    if !reading && app.info_page.is_none() && app.legal.accepted() {
         crate::keys::handle(app, &ctx);
     }
     about::overlay(app, &ctx);
@@ -1019,7 +1020,7 @@ pub fn hint(response: Response, text: &str) -> Response {
 }
 
 fn help_overlay(app: &mut Defalt, ctx: &egui::Context) {
-    if app.info_page.is_some() { return; }
+    if app.info_page.is_some() || !app.legal.accepted() { return; }
     if ctx.input(|i| i.key_pressed(egui::Key::F1)) && !ctx.text_edit_focused() {
         app.show_help = !app.show_help;
     }
