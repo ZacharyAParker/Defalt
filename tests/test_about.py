@@ -19,8 +19,15 @@ class ReleaseInformation(unittest.TestCase):
             self.assertEqual(set(data['documents']), {'patches', 'privacy', 'terms', 'copyright', 'license', 'notices'})
             for name, text in data['documents'].items():
                 self.assertEqual(text, (about.ROOT / about.DOCUMENTS[name]).read_text(encoding='utf-8'))
-                self.assertIn(f'Defalt v{data["version"]}', text)
-                self.assertIn(data['copyright'], text)
+                if name == 'license':
+                    # Keep the standard MIT file recognizable by license scanners.
+                    # Version and asset scope live in the surrounding notices.
+                    self.assertTrue(text.startswith('MIT License\n'))
+                    self.assertIn('Copyright (c) 2026 Zachary Parker', text)
+                    self.assertIn('LICENSE-SCOPE.md', data['documents']['copyright'])
+                else:
+                    self.assertIn(f'Defalt v{data["version"]}', text)
+                    self.assertIn(data['copyright'], text)
             page = client.get('/')
             self.assertIn(f'Defalt v{data["version"]}', page.get_data(as_text=True))
             self.assertNotIn('{{APP_VERSION}}', page.get_data(as_text=True))
