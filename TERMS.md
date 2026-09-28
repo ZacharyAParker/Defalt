@@ -1,6 +1,6 @@
 # Terms of use
 
-Effective September 25, 2026 (terms version 2026-09-25). Applies to Defalt 0.4.5 as distributed in this repository.
+Effective September 27, 2026 (terms version 2026-09-27). Applies to Defalt 0.4.5 as distributed in this repository.
 
 ## Agreement
 
@@ -12,7 +12,7 @@ You must be old enough to form a binding agreement where you live, or have a par
 
 ## License
 
-Defalt is source-available, not open source. All rights are reserved. The LICENSE file lets you view the source on GitHub and build and run Defalt on devices you own or control, for your own personal, noncommercial use. It doesn't let you copy, modify, redistribute, sublicense or commercially use Defalt without written permission. Read LICENSE for the exact wording; if LICENSE and these terms conflict about software rights, LICENSE controls.
+Original Defalt source code and technical documentation are licensed under MIT (LICENSE). Artwork, music and other creative assets are excluded (LICENSE-SCOPE.md). These terms do not impose additional conditions on, or revoke, rights granted by MIT or a third-party license. The applicable license controls all rights to use, copy, modify, distribute, sublicense or sell the material it covers.
 
 Third-party components keep their own licenses. See THIRD-PARTY-NOTICES.md and vendor/README.md.
 
@@ -37,7 +37,7 @@ When you enable a feature that uses an outside service, you deal with that servi
 
 You are responsible for your accounts, API keys and credentials with those services, and for any charges they bill you. Don't use Defalt to bypass access controls, paywalls, digital rights management, rate limits or technical protection measures, or to infringe anyone's copyright, trademark, privacy or other rights.
 
-Keep it personal. Defalt is not a public streaming, broadcasting or redistribution service. Don't share, upload, sell or publicly perform the audio it caches or plays, and don't run it as a service for other people.
+Defalt grants no rights in the audio it caches or plays. Sharing, uploading, selling, broadcasting or publicly performing that audio requires the necessary rights from its owners. This does not restrict commercial use or distribution of the MIT-licensed code.
 
 ## Remote listening
 
@@ -95,7 +95,7 @@ Those names and logos are trademarks of their respective owners and are used onl
 
 ## Termination
 
-These terms apply for as long as you use Defalt. Your permission to use Defalt ends automatically if you break these terms or the LICENSE. You can stop at any time. When your permission ends or you stop, stop using Defalt and delete your copies of it, and delete cached audio you don't have rights to keep. The sections on your content, no warranty, limitation of liability, indemnification, governing law and general terms survive termination.
+Rights granted under MIT and third-party licenses are governed by those licenses and are not terminated by these terms. Stop using or distributing excluded material if you lack permission, and delete cached audio you have no right to keep. The sections on your content, no warranty, limitation of liability, indemnification, governing law and general terms survive termination to the extent applicable.
 
 ## Governing law and venue
 
@@ -109,7 +109,7 @@ No waiver: if the maintainer doesn't enforce a part of these terms, that isn't a
 
 Entire agreement: these terms, the LICENSE and the privacy policy are the entire agreement between you and the maintainer about Defalt, and replace any earlier terms. Third-party components are governed by their own licenses.
 
-Assignment: you can't transfer your rights under these terms without the maintainer's written permission. The maintainer may transfer them as part of transferring the project.
+Assignment of any separate agreement does not limit the copying, distribution or sublicensing rights granted under MIT or third-party licenses.
 
 ## Changes
 

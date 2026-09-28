@@ -1,51 +1,27 @@
-# Defalt license
+Scope: original source code and technical documentation only. See
+LICENSE-SCOPE.md for excluded creative assets and third-party material.
 
-Copyright (c) 2026 Zachary Parker. All rights reserved.
+MIT License
 
-The radio booth artwork (Mav, Rue, the cat and the studio, including the
-animation frames made from it) is copyright (c) 2026 Mara, all rights
-reserved, and is included with her permission. This license gives you no
-more rights in that artwork than it gives in the rest of the Software.
+Copyright (c) 2026 Zachary Parker
 
-Defalt, including its source code, documentation, artwork, host personas, prompts and other original material in this repository (the "Software"), is proprietary, source-available software. It is not open source, and no open-source license applies to it.
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-## 1. What you may do
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-Subject to this license and the Terms of Use in TERMS.md, the copyright holder grants you a personal, revocable, non-exclusive, non-transferable, non-sublicensable permission to:
-
-- view and read the source code in the Software's public GitHub repository; and
-- download, build and run the Software on devices you own or control, solely for your own personal, noncommercial use as described in TERMS.md.
-
-## 2. What you may not do
-
-Except as expressly permitted above, or with the copyright holder's prior written permission, you may not:
-
-- copy, modify, adapt, translate, merge or create derivative works of the Software, other than the copies needed to build and run it as permitted above;
-- publish, distribute, redistribute, sublicense, sell, rent, lend, host or otherwise make the Software or any part of it available to anyone else;
-- use the Software or any part of it for any commercial purpose, including offering it or its output as a service to others;
-- remove or change any copyright, license, trademark or other notice in the Software.
-
-Viewing or forking the repository as GitHub's own terms allow does not grant any other right under this license.
-
-## 3. Third-party components
-
-Some parts of the Software, and the packages it depends on, are third-party components licensed under their own terms. They are listed in THIRD-PARTY-NOTICES.md and vendor/README.md. Those licenses govern those components, and nothing in this license limits the rights they give you.
-
-## 4. Reserved rights and termination
-
-All rights not expressly granted are reserved. No other license or right is granted, whether by implication, estoppel or otherwise. This permission ends automatically if you break this license or TERMS.md. When it ends, stop using the Software and delete your copies.
-
-## 5. Disclaimer of warranty
-
-THE SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE", WITHOUT WARRANTY OF ANY KIND, EXPRESS, IMPLIED OR STATUTORY, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE AND NON-INFRINGEMENT. THE ENTIRE RISK AS TO THE QUALITY, PERFORMANCE AND USE OF THE SOFTWARE IS WITH YOU.
-
-## 6. Limitation of liability
-
-TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL THE COPYRIGHT HOLDER OR ANY CONTRIBUTOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, INCLUDING ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, PUNITIVE OR CONSEQUENTIAL DAMAGES (INCLUDING LOSS OF DATA, PROFITS OR USE, PERSONAL INJURY, HEARING DAMAGE, EQUIPMENT DAMAGE OR BUSINESS INTERRUPTION), HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE), ARISING IN ANY WAY OUT OF OR IN CONNECTION WITH THE SOFTWARE OR ITS USE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. SOME JURISDICTIONS DO NOT ALLOW THESE EXCLUSIONS OR LIMITATIONS, SO THEY APPLY TO YOU ONLY TO THE EXTENT THE LAW ALLOWS.
-
-## 7. Governing law and contact
-
-This license is governed by the laws of the State of California, USA, as set out in TERMS.md. For permission beyond this license, contact the copyright holder through the Defalt repository on GitHub.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 ---
 Defalt v0.4.5 · © 2026 Zachary Parker

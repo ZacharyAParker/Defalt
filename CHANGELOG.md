@@ -1,5 +1,9 @@
 # Patch notes
 
+## Repository licensing — September 27, 2026
+
+- original code and technical docs are now MIT licensed. art, music, creative assets and third-party material are excluded; see LICENSE-SCOPE.md. terms and copyright notices now match. this does not rebuild or relicense previously downloaded binaries.
+
 ## 0.4.5 — September 25, 2026
 
 - the app opens with the OBBY STUDIO intro now, discord style. a little window in the middle of the screen plays the logo with its whoosh, then the console comes up maximized behind it. click or hit Esc, Space or Enter to skip it. the browser and phone get the same intro (muted). the Startup video setting at the bottom of the Patches/Terms window can make it every launch, once a day (just a quick flash of the logo after the first) or off, and reduced motion only ever shows the still logo

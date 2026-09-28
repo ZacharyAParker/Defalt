@@ -2,9 +2,11 @@
 
 © 2026 Zachary Parker. All rights reserved in original Defalt material, except where a separate license or notice states otherwise.
 
-## Source availability
+## Code license
 
-This repository makes its source available for inspection. It provides no open-source license for original Defalt code, documentation or art. The LICENSE file sets out the limited permission it does give: viewing the source, and building and running Defalt for your own personal, noncommercial use under the terms of use. Rights provided by applicable law and GitHub's platform terms remain unaffected. Contact the maintainer through the Defalt repository for permission beyond those rights.
+Original source code and technical documentation are MIT licensed; see LICENSE.
+Artwork, music and other creative assets are excluded as described in
+LICENSE-SCOPE.md. Third-party material keeps its own terms.
 
 ## Booth artwork
 

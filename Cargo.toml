@@ -5,6 +5,7 @@ edition = "2021"
 rust-version = "1.80"
 description = "Defalt -- a DJ application"
 authors = ["Zachary Parker"]
+license = "MIT"
 publish = false
 
 [build-dependencies]

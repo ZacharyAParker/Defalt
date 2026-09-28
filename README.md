@@ -194,12 +194,12 @@ third-party audio code and its licenses are in [vendor/README.md](vendor/README.
 
 ## legal
 
-the boring but important part. the short version: it's my code, you can look
-at it and run it for yourself, it comes with no warranty, and what you download
-and play with it is on you
+the code and technical docs are MIT licensed. art, music and other creative
+assets are excluded; third-party material keeps its own terms. it comes with
+no warranty, and what you download and play with it is on you
 
-- [LICENSE](LICENSE): source available, all rights reserved. look, build, run
-  it for yourself, but no copying, reselling or reuploading without asking
+- [LICENSE](LICENSE): MIT for code and technical docs. see
+  [license scope](LICENSE-SCOPE.md) for asset exclusions and third-party terms
 - [terms](TERMS.md): the no warranty and liability stuff, the flashing lights
   and volume warnings, and the rules for third party services
 - [privacy](PRIVACY.md): what stays on your machine and what gets sent where
