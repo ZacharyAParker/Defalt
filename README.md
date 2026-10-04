@@ -6,6 +6,12 @@ a DJ app for when i want to mix something myself, and a radio station for when
 i just want to leave music on. two decks, a local library, and two hosts (Mav
 and Rue) who have way too much to say about what i'm listening to
 
+![a quick loop of the decks, the stems, the booth, a couple of transitions and the director chat](docs/media/demo.gif)
+
+and the trailer if you want it with sound. 44 seconds, Mav and Rue open it
+
+https://github.com/user-attachments/assets/9b3f285a-95b7-46ba-bded-1d28734a3318
+
 ![the console: two decks, 3-band waveforms with verse/chorus bands, synced lyrics, channel meters and the library](docs/screenshots/console.webp)
 
 the console is Rust with egui and cpal. the radio brain is Python. it all runs
