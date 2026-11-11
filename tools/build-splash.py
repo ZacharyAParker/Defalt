@@ -1,21 +1,27 @@
 """Build the startup ident from assets/splash-src/Splash.mov.
 
-The source is the OBBY STUDIO ident: 1920x1080, 24 fps, pillarboxed with
-pure black bars either side of the real picture. Everything here starts by
-finding the picture and cropping the bars off.
+The source is the startup video as it was rendered: the OBBY STUDIO logo
+builds itself, then its ring becomes the ring on Defalt's record. Its size
+and frame rate are read off the file. The master before this one was
+pillarboxed, pure black bars either side of the real picture, so everything
+here still starts by finding the picture and cropping off any bars.
 
     assets/splash/frames.bin        the console's frames, lossy WebP, one blob
     assets/splash/sound.wav         the console's sound, 16-bit 48 kHz stereo
     assets/splash/manifest.json     what was built from what, for --check
     web/static/splash/intro.mp4     the browser's intro, H.264 + AAC, faststart
-    web/static/splash/intro-poster.webp   its last frame
+    web/static/splash/intro-poster.webp   its logo frame
+
+The video opens and closes on plain background, so the frame to show when
+only a still is wanted isn't the last one. It's logo_frame in RECIPE: the
+poster is that frame, and the blob carries its number for the console.
 
 The console has no video decoder and doesn't want one, so it gets still
 frames it can decode with the image crate, packed as:
 
     b"DSPL", u32 version, u32 count, u32 width, u32 height, u32 fps_num,
-    u32 fps_den, then count x (u32 offset, u32 length), then the frames.
-    Little-endian, offsets from the start of the blob.
+    u32 fps_den, u32 logo, then count x (u32 offset, u32 length), then the
+    frames. Little-endian, offsets from the start of the blob.
 
 Needs ffmpeg (FFMPEG_BIN, else ffmpeg on PATH) and Pillow. Re-run after
 changing the source or anything in RECIPE:
@@ -29,6 +35,7 @@ reads every output back.
 from __future__ import annotations
 
 import argparse
+import fractions
 import hashlib
 import io
 import json
@@ -49,7 +56,9 @@ WEB = ROOT / "web" / "static" / "splash"
 MANIFEST = NATIVE / "manifest.json"
 
 MAGIC = b"DSPL"
-VERSION = 1
+VERSION = 2
+# Magic, then version, count, width, height, fps_num, fps_den, logo.
+HEADER = struct.Struct("<4s7I")
 
 # Change anything here and the outputs are stale until rebuilt.
 RECIPE = {
@@ -60,6 +69,9 @@ RECIPE = {
     # Where the sound should sit. The source is already about here; this
     # just keeps it there if the source is ever re-exported louder.
     "target_lufs": -16.0,
+    # The frame with the finished Defalt logo on it, counted from 0: what a
+    # launch that only gets a still shows, and the browser's poster.
+    "logo_frame": 206,
     "web_crf": 18,
     "web_audio": "128k",
     "poster_quality": 82,
@@ -82,27 +94,39 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def probe_frame(index: int) -> tuple[int, int, bytes]:
+def source_shape() -> tuple[int, int, tuple[int, int]]:
+    """The source's width, height and frame rate, as ffmpeg reports them."""
+    result = subprocess.run([ffmpeg(), "-hide_banner", "-nostdin", "-i", str(SOURCE)],
+                            capture_output=True, text=True)
+    size = re.search(r"Video:.*?\b(\d{2,5})x(\d{2,5})\b", result.stderr)
+    rate = re.search(r"Video:.*?([\d.]+) fps", result.stderr)
+    if not size or not rate:
+        raise SystemExit("couldn't read the source's size and frame rate")
+    fps = fractions.Fraction(rate.group(1)).limit_denominator(1001)
+    return int(size.group(1)), int(size.group(2)), (fps.numerator, fps.denominator)
+
+
+def probe_frame(index: int, width: int, height: int) -> bytes:
     """One source frame as raw RGB, full size."""
     result = subprocess.run(
         [ffmpeg(), "-hide_banner", "-nostdin", "-loglevel", "error", "-i", str(SOURCE),
          "-vf", f"select=eq(n\\,{index}),format=rgb24", "-frames:v", "1", "-f", "rawvideo", "-"],
         check=True, capture_output=True)
-    width, height = 1920, 1080
     if len(result.stdout) != width * height * 3:
         raise SystemExit(f"unexpected frame size from the source ({len(result.stdout)} bytes)")
-    return width, height, result.stdout
+    return result.stdout
 
 
-def detect_crop() -> tuple[int, int, int, int]:
+def detect_crop(width: int, height: int) -> tuple[int, int, int, int]:
     """The picture inside the pillarbox: (width, height, x, y).
 
     cropdetect doesn't see it, because the ident's background is a dark grey
     rather than black. A column belongs to the picture when it is at least
     half as bright, on average, as the middle of the frame; the one or two
-    columns where the bars blend into it don't make that and are cut.
+    columns where the bars blend into it don't make that and are cut. A
+    source with no bars comes back whole.
     """
-    width, height, rgb = probe_frame(0)
+    rgb = probe_frame(0, width, height)
     means = []
     for x in range(width):
         total = 0
@@ -127,8 +151,10 @@ def loudness(extra: list[str]) -> float:
     return float(found[-1])
 
 
-def pack(frames: list[bytes], width: int, height: int, fps: tuple[int, int]) -> bytes:
-    header = MAGIC + struct.pack("<6I", VERSION, len(frames), width, height, *fps)
+def pack(frames: list[bytes], width: int, height: int, fps: tuple[int, int], logo: int) -> bytes:
+    if not 0 <= logo < len(frames):
+        raise ValueError(f"logo frame {logo} isn't one of the {len(frames)} frames")
+    header = HEADER.pack(MAGIC, VERSION, len(frames), width, height, *fps, logo)
     offset = len(header) + 8 * len(frames)
     index = b""
     for frame in frames:
@@ -140,16 +166,20 @@ def pack(frames: list[bytes], width: int, height: int, fps: tuple[int, int]) -> 
 def unpack(blob: bytes) -> dict:
     if blob[:4] != MAGIC:
         raise ValueError("not a splash blob")
-    version, count, width, height, fps_num, fps_den = struct.unpack_from("<6I", blob, 4)
+    version = struct.unpack_from("<I", blob, 4)[0]
     if version != VERSION:
         raise ValueError(f"blob version {version}")
+    _, _, count, width, height, fps_num, fps_den, logo = HEADER.unpack_from(blob)
+    if logo >= count:
+        raise ValueError(f"logo frame {logo} isn't one of the {count} frames")
     frames = []
     for n in range(count):
-        offset, length = struct.unpack_from("<2I", blob, 28 + 8 * n)
+        offset, length = struct.unpack_from("<2I", blob, HEADER.size + 8 * n)
         if offset + length > len(blob):
             raise ValueError(f"frame {n} runs past the end")
         frames.append(blob[offset:offset + length])
-    return {"count": count, "width": width, "height": height, "fps": [fps_num, fps_den], "frames": frames}
+    return {"count": count, "width": width, "height": height, "fps": [fps_num, fps_den], "logo": logo,
+            "frames": frames}
 
 
 def top_level_atoms(data: bytes) -> list[str]:
@@ -170,10 +200,12 @@ def build() -> None:
 
     if not SOURCE.is_file():
         raise SystemExit(f"missing {SOURCE}")
-    width, height, x, y = detect_crop()
+    full_width, full_height, fps = source_shape()
+    width, height, x, y = detect_crop(full_width, full_height)
     crop = f"crop={width}:{height}:{x}:{y}"
-    # The source is BT.709, limited range, and says so only partly; say it
-    # all, or the conversion to RGB uses BT.601 and the blue shifts.
+    logo = RECIPE["logo_frame"]
+    # The source is BT.709, limited range. Say it all, whatever the file
+    # says, or the conversion to RGB can use BT.601 and the blue shifts.
     to_rgb = "in_color_matrix=bt709:in_range=tv:out_range=pc:flags=lanczos+accurate_rnd+full_chroma_int"
     measured = loudness([])
     gain = round(RECIPE["target_lufs"] - measured, 2)
@@ -186,10 +218,16 @@ def build() -> None:
         run("-loglevel", "error", "-i", str(SOURCE), "-map", "0:v:0",
             "-vf", f"{crop},scale={native_width}:-2:{to_rgb},format=rgb24",
             str(temp / "n%04d.png"))
-        run("-loglevel", "error", "-i", str(SOURCE), "-map", "0:v:0",
-            "-vf", f"{crop},scale={width}:{height}:{to_rgb},format=rgb24",
-            "-update", "1", str(temp / "last.png"))
         names = sorted(temp.glob("n*.png"))
+        if logo >= len(names):
+            raise SystemExit(f"logo_frame is {logo} and the source has {len(names)} frames")
+        run("-loglevel", "error", "-i", str(SOURCE), "-map", "0:v:0",
+            "-vf", f"select=eq(n\\,{logo}),{crop},scale={width}:{height}:{to_rgb},format=rgb24",
+            "-frames:v", "1", "-update", "1", str(temp / "logo.png"))
+        with Image.open(temp / "logo.png") as image:
+            poster = image.convert("RGB")
+        if max(high - low for low, high in poster.getextrema()) < 64:
+            raise SystemExit(f"frame {logo} is plain colour: logo_frame should be the frame with the logo on it")
         frames = []
         for name in names:
             out = io.BytesIO()
@@ -197,9 +235,8 @@ def build() -> None:
                 size = image.size
                 image.convert("RGB").save(out, "WEBP", quality=RECIPE["native_quality"], method=6)
             frames.append(out.getvalue())
-        (NATIVE / "frames.bin").write_bytes(pack(frames, *size, (24, 1)))
-        with Image.open(temp / "last.png") as image:
-            image.convert("RGB").save(WEB / "intro-poster.webp", "WEBP", quality=RECIPE["poster_quality"], method=6)
+        (NATIVE / "frames.bin").write_bytes(pack(frames, *size, fps, logo))
+        poster.save(WEB / "intro-poster.webp", "WEBP", quality=RECIPE["poster_quality"], method=6)
 
     run("-loglevel", "error", "-y", "-i", str(SOURCE), "-map", "0:a:0", "-af", f"volume={gain}dB",
         "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2", "-map_metadata", "-1", "-fflags", "+bitexact",
@@ -223,7 +260,7 @@ def build() -> None:
         "recipe": RECIPE,
         "crop": [width, height, x, y],
         "frames": len(frames),
-        "fps": [24, 1],
+        "fps": list(fps),
         "native_size": list(size),
         "source_lufs": measured,
         "gain_db": gain,
@@ -233,8 +270,8 @@ def build() -> None:
     MANIFEST.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8", newline="\n")
     for key, entry in manifest["outputs"].items():
         print(f"{key:7} {entry['file']:40} {entry['bytes'] / 1e6:6.2f} MB")
-    print(f"crop {width}x{height}+{x}+{y}, {len(frames)} frames at {size[0]}x{size[1]}, "
-          f"sound {measured} LUFS {gain:+} dB")
+    print(f"crop {width}x{height}+{x}+{y}, {len(frames)} frames at {size[0]}x{size[1]} and "
+          f"{fps[0] / fps[1]:g} fps, logo on frame {logo}, sound {measured} LUFS {gain:+} dB")
 
 
 def check() -> list[str]:
@@ -258,7 +295,8 @@ def check() -> list[str]:
         return problems
 
     blob = unpack((NATIVE / "frames.bin").read_bytes())
-    if blob["count"] != manifest["frames"] or [blob["width"], blob["height"]] != manifest["native_size"]:
+    if (blob["count"] != manifest["frames"] or [blob["width"], blob["height"]] != manifest["native_size"]
+            or blob["fps"] != manifest["fps"] or blob["logo"] != manifest["recipe"]["logo_frame"]):
         problems.append("frames.bin disagrees with the manifest")
     if any(frame[:4] != b"RIFF" or frame[8:12] != b"WEBP" for frame in blob["frames"]):
         problems.append("frames.bin holds something that isn't WebP")
@@ -266,8 +304,9 @@ def check() -> list[str]:
         if (sound.getnchannels(), sound.getsampwidth(), sound.getframerate()) != (2, 2, 48000):
             problems.append("sound.wav isn't 16-bit 48 kHz stereo")
         seconds = sound.getnframes() / 48000
-        if abs(seconds - blob["count"] / 24) > 0.05:
-            problems.append(f"sound.wav runs {seconds:.3f} s against {blob['count'] / 24:.3f} s of picture")
+        picture = blob["count"] * blob["fps"][1] / blob["fps"][0]
+        if abs(seconds - picture) > 0.05:
+            problems.append(f"sound.wav runs {seconds:.3f} s against {picture:.3f} s of picture")
     atoms = top_level_atoms((WEB / "intro.mp4").read_bytes())
     if "moov" not in atoms or "mdat" not in atoms or atoms.index("moov") > atoms.index("mdat"):
         problems.append("intro.mp4 isn't faststart")

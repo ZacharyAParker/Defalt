@@ -99,6 +99,9 @@ def configured(plan: Plan) -> Plan:
     plan.eq_strength = float(cfg.get("transitions.eq_strength", 1.0))
     if cfg.get("transitions.echo_enabled", True) and plan.preset in ("melt", "slam"):
         plan.echo_mix = float(cfg.get("transitions.echo_mix", 0.18))
+        if plan.preset == "slam":
+            # The throw is what makes a cut sound meant: it has to be heard.
+            plan.echo_mix = max(plan.echo_mix, 0.4)
     plan.echo_feedback = float(cfg.get("transitions.echo_feedback", 0.30))
     plan.echo_beats = float(cfg.get("transitions.echo_beats", 0.5))
     return plan
@@ -125,9 +128,12 @@ def _volume_curves(mode: str) -> tuple[Callable[[float], float],
 
     if mode == "overlap":
         # Both tracks stay up. Only the EQ separates them, which is why the
-        # presets that use this always pair it with a bass swap.
-        return (lambda x: 1.0 if x < 0.97 else (1.0 - x) / 0.03,
-                lambda x: 1.0 if x > 0.03 else x / 0.03)
+        # presets that use this always pair it with a bass swap. The faders
+        # ease in and out over the first and last stretch rather than
+        # snapping, so the record leaving does not drop out from full level.
+        shoulder = 0.15
+        return (lambda x: 1.0 if x < 1 - shoulder else math.cos((x - 1 + shoulder) / shoulder * math.pi / 2),
+                lambda x: 1.0 if x > shoulder else math.sin(x / shoulder * math.pi / 2))
 
     if mode == "fade_in_fade_out":
         # The old one is most of the way gone before the new one arrives, so
@@ -142,10 +148,15 @@ def _volume_curves(mode: str) -> tuple[Callable[[float], float],
         return (lambda x: 1.0 if x < 0.98 else 0.0, lambda x: x)
 
     if mode == "center_cut":
-        # Both duck toward the middle and swap there. Reads as a deliberate
-        # edit rather than a blend.
-        return (lambda x: max(0.0, 1.0 - x * 2) if x < 0.5 else 0.0,
-                lambda x: 0.0 if x < 0.5 else min(1.0, (x - 0.5) * 2))
+        # A cut on the middle of the window, both records at full level up
+        # to it. The swap is a few percent wide so it does not click; the
+        # echo throw carries the outgoing tail over it. It used to duck both
+        # records to silence and back, which read as a dropout, not an edit.
+        edge = 0.03
+        return (lambda x: 1.0 if x <= 0.5 - edge else (0.0 if x >= 0.5 + edge
+                          else math.cos((x - 0.5 + edge) / (2 * edge) * math.pi / 2)),
+                lambda x: 0.0 if x <= 0.5 - edge else (1.0 if x >= 0.5 + edge
+                          else math.sin((x - 0.5 + edge) / (2 * edge) * math.pi / 2)))
 
     # smooth_crossfade -- equal power, constant perceived loudness.
     return (lambda x: math.cos(x * math.pi / 2),
@@ -158,6 +169,26 @@ def _volume_curves(mode: str) -> tuple[Callable[[float], float],
 KILL_DB = -26.0     # far enough down that a bassline is gone, not quiet
 
 
+def _handover(start: float, end: float) -> tuple[Callable[[float], float],
+                                               Callable[[float], float]]:
+    """One band passed from the outgoing record to the incoming one.
+
+    Power-complementary: cos and sin in amplitude, so the two together hold
+    the band's level all the way through. Two linear ramps in dB meet ten
+    decibels down, and every blend sagged into that hole in the middle.
+    """
+    width = max(1e-6, end - start)
+    floor = 10 ** (KILL_DB / 20)
+
+    def turn(x: float) -> float:
+        return min(1.0, max(0.0, (x - start) / width)) * math.pi / 2
+
+    def db(amplitude: float) -> float:
+        return KILL_DB if amplitude <= floor else 20 * math.log10(amplitude)
+
+    return (lambda x: db(math.cos(turn(x))), lambda x: db(math.sin(turn(x))))
+
+
 def _bass_swap(point: float) -> tuple[Callable[[float], float],
                                       Callable[[float], float]]:
     """Outgoing keeps the low end until `point`, then the incoming takes it.
@@ -167,22 +198,7 @@ def _bass_swap(point: float) -> tuple[Callable[[float], float],
     shelf is audible as a thump.
     """
     ramp = 0.12
-
-    def outgoing(x: float) -> float:
-        if x <= point - ramp:
-            return 0.0
-        if x >= point + ramp:
-            return KILL_DB
-        return KILL_DB * ((x - (point - ramp)) / (2 * ramp))
-
-    def incoming(x: float) -> float:
-        if x <= point - ramp:
-            return KILL_DB
-        if x >= point + ramp:
-            return 0.0
-        return KILL_DB * (1.0 - (x - (point - ramp)) / (2 * ramp))
-
-    return (outgoing, incoming)
+    return _handover(point - ramp, point + ramp)
 
 
 def _eq_curves(mode: str) -> dict[str, tuple[Callable[[float], float],
@@ -200,16 +216,9 @@ def _eq_curves(mode: str) -> dict[str, tuple[Callable[[float], float],
         # makes a long blend sound like one record becoming another rather
         # than two records playing at once.
         def band(point: float):
-            width = 0.45
+            return _handover(point - 0.2, point + 0.2)
 
-            def outgoing(x: float) -> float:
-                return KILL_DB * min(1.0, max(0.0, (x - point + width) / (2 * width)))
-
-            def incoming(x: float) -> float:
-                return KILL_DB * (1.0 - min(1.0, max(0.0, (x - point + width) / (2 * width))))
-            return (outgoing, incoming)
-
-        return {"high": band(0.35), "mid": band(0.5), "low": band(0.7)}
+        return {"high": band(0.3), "mid": band(0.5), "low": band(0.7)}
 
     return {"low": flat, "mid": flat, "high": flat}
 
@@ -252,12 +261,14 @@ def preset_spec(name: str) -> tuple[str, str, tuple[str, ...]]:
         "fade":  ("smooth_crossfade", "center_bass", ()),
         # Overlap, bass swap at the end, low-pass in and high-pass out.
         "rise":  ("overlap", "end_bass_swap", ("lpf_in", "hpf_out")),
-        # Overlap with a smooth three-band fade.
-        "blend": ("smooth_crossfade", "three_band_fade", ()),
+        # Both faders up while the isolators trade the bands over: highs,
+        # then mids, then the bass. The faders only ease in and out at the
+        # edges, so the sum holds level the whole way across.
+        "blend": ("overlap", "three_band_fade", ()),
         # Overlap, bass swap at the centre, low-pass on both sides.
         "wave":  ("overlap", "center_bass", ("lpf_in", "lpf_out")),
         # Fade across, bass swap at the centre, high-pass on both sides.
-        "melt":  ("crossfade", "center_bass", ("hpf_in", "hpf_out")),
+        "melt":  ("smooth_crossfade", "center_bass", ("hpf_in", "hpf_out")),
         # A hard, centred volume swap.
         "slam":  ("center_cut", "none", ()),
     }.get(name, ("smooth_crossfade", "center_bass", ()))
@@ -283,6 +294,44 @@ def tempo_distance(first: float, second: float) -> float:
     return best
 
 
+def grid_bpm(row: Any) -> float:
+    """The record's tempo, from its fitted beat grid when that grid holds.
+
+    The stored `bpm` is an autocorrelation peak at a whole-frame lag, so it
+    moves in steps of 2-5% (a true 120 reads 117.5, 128 and 130 both read
+    129.2). The fitted beat period is good to a few hundredths of a percent.
+    Tempo matching on the coarse value leaves two "matched" records drifting
+    a beat apart over a long blend.
+    """
+    from . import db
+    bpm = float(db.field(row, "bpm") or 0)
+    period = float(db.field(row, "beat_period") or 0)
+    residual = db.field(row, "beat_residual_ms")
+    if not (math.isfinite(period) and period > 0 and residual is not None):
+        return bpm
+    residual = float(residual)
+    fitted = 60.0 / period
+    # The grid was tracked at the detected tempo, so it is the same octave;
+    # anything further off than that is a failed fit, not a refinement.
+    if (math.isfinite(residual) and residual <= GRID_TEMPO_RESIDUAL_MS
+            and (bpm <= 0 or abs(fitted / bpm - 1.0) <= 0.08)):
+        return round(fitted, 3)
+    return bpm
+
+
+def with_grid_tempo(row: dict[str, Any]) -> dict[str, Any]:
+    """A copy of the row whose `bpm` is the grid tempo (see grid_bpm)."""
+    bpm = grid_bpm(row)
+    if not bpm or bpm == row.get("bpm"):
+        return row
+    return {**row, "bpm": bpm}
+
+
+# A grid wandering this much (RMS) is still a far better tempo estimate than
+# the lag-quantized peak: the period is a fit over every beat in the record.
+GRID_TEMPO_RESIDUAL_MS = 60.0
+
+
 def tempo_match(outgoing: Any, incoming: Any) -> tuple[float, str]:
     """Playback rate for the incoming record so its beats keep pace.
 
@@ -300,9 +349,8 @@ def tempo_match(outgoing: Any, incoming: Any) -> tuple[float, str]:
     if not cfg.get("transitions.tempo_match", True):
         return (1.0, "disabled")
 
-    from . import db
-    out_bpm = float(db.field(outgoing, "bpm") or 0)
-    in_bpm = float(db.field(incoming, "bpm") or 0)
+    out_bpm = grid_bpm(outgoing)
+    in_bpm = grid_bpm(incoming)
     if not math.isfinite(out_bpm) or not math.isfinite(in_bpm) or out_bpm <= 0 or in_bpm <= 0:
         return (1.0, "no tempo")
 
@@ -466,8 +514,8 @@ def choose(outgoing: Any, incoming: Any, rng: random.Random | None = None
         volume, eq, effects = preset_spec(forced)
         return configured(Plan(forced, volume, eq, effects, base, "selected transition style"))
 
-    out_bpm = float(db.field(outgoing, "bpm") or 0)
-    in_bpm = float(db.field(incoming, "bpm") or 0)
+    out_bpm = grid_bpm(outgoing)
+    in_bpm = grid_bpm(incoming)
     out_key = db.field(outgoing, "camelot") or ""
     in_key = db.field(incoming, "camelot") or ""
     # Perceived energy (density, pulse, low end), not loudness: a quiet
@@ -503,8 +551,13 @@ def choose(outgoing: Any, incoming: Any, rng: random.Random | None = None
 
     if tempo_ok and tempo_distance(out_bpm, in_bpm) > float(
             cfg.get("transitions.slam_distance", 0.18) or 0.18):
-        name, reason = "slam", f"{out_bpm:.0f} to {in_bpm:.0f}, too far to blend"
-        overlap = short_mix
+        # Too far apart to beatmatch. A plain equal-power fade over the ends
+        # of the two records is what the automix players do here, and in
+        # blind listening it beat both the old fade-through-silence and a
+        # cut. The planner still picks a cut where the cue evidence says a
+        # blend would clash.
+        name, reason = "fade", f"{out_bpm:.0f} to {in_bpm:.0f}, too far to beatmatch; plain fade"
+        overlap = base
     elif close_tempo and harmonic:
         name, reason = "blend", f"{out_key} into {in_key}, tempos within reach"
         overlap = long_mix

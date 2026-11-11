@@ -37,7 +37,7 @@ _FAMILIES = {
 }
 _DEFAULT_SETTINGS = {
     "enabled": True, "genre_weight": .65, "artist_weight": .25,
-    "lyrics_weight": .45, "mix_weight": .35, "energy_weight": .3,
+    "lyrics_weight": .45, "mix_weight": .35, "tempo_weight": 1.2, "energy_weight": .3,
     "energy_direction": "follow", "fatigue_after": 4, "variety_strength": .65,
     "explore_chance": .18, "history_size": 10, "lookahead_enabled": True,
     "lookahead_weight": .3, "lookahead_candidates": 16, "lookahead_depth": 3,
@@ -70,6 +70,7 @@ def snapshot() -> dict:
     values["tempo_match"] = bool(mixing.get("tempo_match", True))
     values["tempo_match_limit"] = mixing.get("tempo_match_limit", .06)
     values["key_shift_tempo_tolerance"] = mixing.get("key_shift_tempo_tolerance", .02)
+    values["beat_max_residual_ms"] = mixing.get("beat_max_residual_ms", 30)
     return values
 
 
@@ -200,6 +201,32 @@ def mix_fit(a: Any, b: Any, settings: dict | None = None) -> float | None:
     if similar is not None:
         values.append(similar)
     return sum(values) / len(values) if values else None
+
+
+def tempo_fit(a: Any, b: Any, settings: dict | None = None) -> float | None:
+    """1 when the pair can be beatmatched, 0 when the join will be a plain fade.
+
+    Only grids the planner will lock count (transitions.beat_max_residual_ms):
+    a pair it cannot lock is a fade whatever its tags say. Half and double
+    time are a match. Past the beatmatch limit the distance no longer
+    matters (a fade from 100 to 130 sounds like a fade from 100 to 160).
+    """
+    settings = settings or {}
+    ceiling = setting("beat_max_residual_ms", 30, 5, 60, settings)
+    tempos = []
+    for track in (a, b):
+        residual = _number(track, "beat_residual_ms")
+        if residual is None or residual > ceiling:
+            return None
+        bpm = transitions.grid_bpm(track)
+        if not bpm or bpm <= 0:
+            return None
+        tempos.append(bpm)
+    limit = setting("tempo_match_limit", .06, 0, .2, settings)
+    if not limit:
+        return None
+    distance = min(abs(tempos[0] / (tempos[1] * factor) - 1) for factor in (.5, 1, 2))
+    return max(0.0, min(1.0, (1.5 * limit - distance) / (.5 * limit)))
 
 
 # --------------------------------------------------------------------------
@@ -373,10 +400,11 @@ def evaluate(track: dict, previous: dict | None, history: list[dict],
         artist = (1.0 if left & right else .5) if left and right else None
         lyric, themes = lyrics_fit(previous, track)
         mix = mix_fit(previous, track, settings)
-        evidence = {"genre": genre, "artist": artist, "lyrics": lyric, "mix": mix}
+        tempo = tempo_fit(previous, track, settings)
+        evidence = {"genre": genre, "artist": artist, "lyrics": lyric, "mix": mix, "tempo": tempo}
         defaults = {"genre": .65, "artist": .25, "lyrics": .45, "mix": .35}
         signal = sum(setting(f"{name}_weight", defaults[name], 0, 2, settings) * (value - .5)
-                     for name, value in evidence.items() if value is not None)
+                     for name, value in evidence.items() if name in defaults and value is not None)
         facts = genre, left, right, lyric, themes, mix, evidence, signal
         if pair_cache is not None:
             pair_cache[pair_key] = facts
@@ -412,6 +440,14 @@ def evaluate(track: dict, previous: dict | None, history: list[dict],
     recent_credits = [artists(str(t.get("artist") or "")) for t in history[-4:]]
     repeat = sum(bool(right & credits) for credits in recent_credits)
     signal -= variety * .2 * repeat
+    # A join the next record can be beatmatched into gets a real lift, and
+    # one that cannot gets nothing taken away. When a host break sits
+    # between the two the speech covers the change, so tempo is no reason
+    # to stay put: that is where the station moves to a new tempo.
+    tempo = evidence.get("tempo")
+    covered = bool(settings.get("break_before"))
+    if tempo and not covered:
+        signal += setting("tempo_weight", 1.2, 0, 2, settings) * tempo
     multiplier = math.exp(max(-1.5, min(1.5, signal)))
     if not explain:
         return {"multiplier": multiplier}
@@ -426,6 +462,10 @@ def evaluate(track: dict, previous: dict | None, history: list[dict],
         reasons.append("shared lyric vocabulary")
     if mix is not None and mix >= .7:
         reasons.append("compatible tempo/key/energy evidence")
+    if tempo and tempo >= .5 and not covered:
+        reasons.append("can be beatmatched")
+    elif covered:
+        reasons.append("host break covers the tempo change")
     if energy is not None and setting("energy_weight", .3, settings=settings) > 0:
         _, direction = energy_target(history, settings)
         reasons.append(f"{direction} energy")
@@ -480,6 +520,12 @@ def lookahead(scored: list[tuple[float, dict]], history: list[dict],
     arc_weight = setting("energy_arc_weight", .4, 0, 2, settings) if arc_level(settings) is not None else 0.0
     levels = [arc_level(settings, position) for position in range(depth + 2)] if arc_weight else []
 
+    # Where the next host break falls along the route: a join with speech
+    # over it does not need the tempos to meet.
+    to_break = settings.get("songs_to_break")
+    plain = {**settings, "break_before": False}
+    covered = {**settings, "break_before": True}
+
     def off_arc(track: dict, position: int) -> float:
         energy = _number(track, "energy")
         level = levels[position] if position < len(levels) else None
@@ -499,8 +545,9 @@ def lookahead(scored: list[tuple[float, dict]], history: list[dict],
                 for following in shortlist:
                     if following["key"] in used or not separated(following, route_context):
                         continue
+                    join = covered if to_break == len(route) + 1 else plain
                     score = math.log(evaluate(following, previous, route_context,
-                                              settings, pair_cache, False)["multiplier"])
+                                              join, pair_cache, False)["multiplier"])
                     score += preference[following["key"]]
                     if arc_weight:
                         score -= arc_weight * off_arc(following, len(route) + 1)

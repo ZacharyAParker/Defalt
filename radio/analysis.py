@@ -56,7 +56,18 @@ MAX_SECONDS = 180
 
 # Bump when the stored descriptors change meaning; older rows are refreshed
 # lazily when prepared (ensure_features) or in bulk (reanalyse).
-FEATURES_VERSION = 1
+# 2: beat grids fitted by grid position, so a dropped beat no longer reads
+# as a loose grid (fit_grid).
+FEATURES_VERSION = 2
+
+# How late the onset envelope reports a transient, in seconds. A frame is
+# timed at its window start, and the flux only peaks once the hit fills the
+# window, so every detected beat came out a constant ~85-95 ms early (measured
+# on click and kick trains at 90-174 BPM). The radio cancelled it by only ever
+# comparing two grids, but the console uses the grid as an absolute anchor
+# for quantize, loops and the beat lines. Stored grids from before this
+# correction are shifted once by db._migrate (user_version 1).
+GRID_LATENCY = 0.088
 
 
 def peak_levels(samples: np.ndarray, sample_rate: int = SAMPLE_RATE) -> dict:
@@ -316,6 +327,15 @@ def detect_beats(spectrum: np.ndarray, bpm: float) -> dict[str, float]:
     grid = fit_grid(beats, fps)
     if grid["beat_period"] <= 0:
         return blank
+    # The tempo the beats were tracked at is a whole-frame estimate, a few
+    # percent off. Tracking again at the fitted tempo stops the tracker
+    # being pulled off the real beats over a long record.
+    refined = grid["beat_period"] * fps
+    if abs(refined / period_frames - 1) > 0.002:
+        again = track_beats(onset, refined)
+        regrid = fit_grid(again, fps)
+        if regrid["beat_period"] > 0 and regrid["beat_inliers"] >= grid["beat_inliers"]:
+            beats, grid = again, regrid
 
     phase, confidence = detect_downbeat(spectrum, beats, onset)
     # The grid offset is the first grid beat; the tracked beat list may
@@ -323,14 +343,30 @@ def detect_beats(spectrum: np.ndarray, bpm: float) -> dict[str, float]:
     first = int(round((beats[0] / fps - grid["beat_offset"]) / grid["beat_period"])) if len(beats) else 0
     downbeat = (phase + first) % 4
 
+    period = grid["beat_period"]
+    offset, shifted_downbeat = shift_grid(grid["beat_offset"],
+                                          grid["beat_offset"] + downbeat * period, period)
     return {
-        "beat_offset": grid["beat_offset"],
-        "beat_period": grid["beat_period"],
+        "beat_offset": offset,
+        "beat_period": period,
         "beat_residual_ms": grid["beat_residual_ms"],
-        "downbeat_offset": round(
-            grid["beat_offset"] + downbeat * grid["beat_period"], 4),
+        "downbeat_offset": shifted_downbeat,
         "downbeat_confidence": confidence,
     }
+
+
+def shift_grid(beat_offset: float, downbeat_offset: float, period: float,
+               latency: float = GRID_LATENCY) -> tuple[float, float]:
+    """A detected grid moved later by the onset latency, kept in range.
+
+    The beat offset stays within one beat and the downbeat within one bar,
+    which is how every reader expects them.
+    """
+    if period <= 0:
+        return beat_offset, downbeat_offset
+    beat = round((beat_offset + latency) % period, 4)
+    downbeat = round((downbeat_offset + latency) % (4 * period), 4)
+    return beat, downbeat
 
 
 def _zscore(values: np.ndarray) -> np.ndarray:
@@ -433,6 +469,10 @@ def track_beats(onset: np.ndarray, period_frames: float,
     return np.array(sorted(beats), dtype=float)
 
 
+# A grid is only a grid if most of the tracked beats sit on it.
+GRID_MIN_INLIERS = 0.75
+
+
 def fit_grid(beats: np.ndarray, fps: float) -> dict[str, float]:
     """Fit a steady grid to a beat sequence, and say how well it fits.
 
@@ -441,25 +481,59 @@ def fit_grid(beats: np.ndarray, fps: float) -> dict[str, float]:
     milliseconds, is the honest confidence measure -- it is literally how far
     the beats wander from a steady pulse, and therefore how far off an
     alignment built on it would be.
+
+    Beats are numbered by where they fall on the grid, not by their order in
+    the list. The tracker drops a beat in a breakdown or adds one in a fill;
+    numbering by order shifted every later beat by one and tilted the whole
+    fit, so a drum machine at a fixed tempo could read 80 ms loose. The
+    tempo comes from a search around the median spacing (which is whole
+    frames, about 1% coarse), then a least-squares fit over the beats on it.
+    Under GRID_MIN_INLIERS of the beats on the grid, there is no grid.
     """
     blank = {"beat_offset": 0.0, "beat_period": 0.0,
-             "beat_residual_ms": 999.0, "beat_count": 0}
+             "beat_residual_ms": 999.0, "beat_count": 0, "beat_inliers": 0.0}
     if len(beats) < 8:
         return blank
-
-    index = np.arange(len(beats))
-    period, offset = np.polyfit(index, beats / fps, 1)
-    if period <= 0:
+    times = beats / fps
+    spacing = float(np.median(np.diff(times)))
+    if spacing <= 0:
         return blank
 
-    predicted = offset + period * index
-    residual = float(np.sqrt(np.mean((beats / fps - predicted) ** 2)) * 1000)
+    best = None
+    for period in spacing * np.linspace(0.96, 1.04, 161):
+        # The phase that puts the most beats on this period, from the
+        # circular mean of where each beat falls within it.
+        phase = np.angle(np.mean(np.exp(2j * np.pi * times / period)))
+        offset = phase / (2 * np.pi) * period
+        error = (times - offset + period / 2) % period - period / 2
+        hits = int(np.sum(np.abs(error) <= 0.1 * period))
+        if best is None or hits > best[0]:
+            best = (hits, period, offset)
+    _, period, offset = best
+
+    for _ in range(4):
+        index = np.round((times - offset) / period)
+        error = times - (offset + period * index)
+        keep = np.abs(error) <= 0.15 * period
+        if keep.sum() < 8:
+            return blank
+        period, offset = np.polyfit(index[keep], times[keep], 1)
+        if period <= 0:
+            return blank
+    index = np.round((times - offset) / period)
+    error = times - (offset + period * index)
+    keep = np.abs(error) <= 0.15 * period
+    inliers = float(keep.mean())
+    residual = float(np.sqrt(np.mean(error[keep] ** 2)) * 1000) if keep.any() else 999.0
+    if inliers < GRID_MIN_INLIERS:
+        residual = 999.0
 
     return {
         "beat_offset": round(float(offset % period), 4),
         "beat_period": round(float(period), 5),
         "beat_residual_ms": round(residual, 1),
         "beat_count": len(beats),
+        "beat_inliers": round(inliers, 3),
     }
 
 
@@ -822,10 +896,10 @@ def profile(path: Path, samples: np.ndarray | None = None,
     return result
 
 
-# Columns refreshed when a stored row predates FEATURES_VERSION. Tempo and the
-# beat grid are unchanged, so they are left alone; key, downbeat and feel are
-# what improved.
+# Columns refreshed when a stored row predates FEATURES_VERSION. The detected
+# tempo is left alone; key, beat grid, downbeat and feel are what improved.
 _REFRESHED = ("key_tonic", "key_mode", "key_confidence", "camelot", "key_alt",
+              "beat_offset", "beat_period", "beat_residual_ms",
               "downbeat_offset", "downbeat_confidence", "energy", "danceability",
               "onset_rate", "embedding", "features_version")
 
@@ -853,6 +927,11 @@ def ensure_features(track: dict[str, Any]) -> dict[str, Any]:
     if not values.get("camelot"):
         # A failed key read must not erase a usable earlier one.
         for name in ("key_tonic", "key_mode", "key_confidence", "camelot", "key_alt"):
+            values.pop(name)
+    if not values.get("beat_period"):
+        # Nor a failed beat track a usable grid.
+        for name in ("beat_offset", "beat_period", "beat_residual_ms",
+                     "downbeat_offset", "downbeat_confidence"):
             values.pop(name)
     db.write(f"UPDATE tracks SET {', '.join(f'{name}=?' for name in values)} WHERE key=?",
              (*values.values(), track["key"]))

@@ -372,6 +372,13 @@ def exit_score(found: list[dict] | None, blend_start: float, beat: float = 0.5) 
     last = last_chorus_end(found)
     here = at(found, blend_start)
     if here and here["label"] == "chorus" and here["end"] - blend_start > bar and blend_start - here["start"] > beat:
+        sung_after = any(s["start"] >= here["end"] - beat and s["label"] in ("verse", "chorus", "bridge")
+                         for s in found)
+        if not sung_after:
+            # The song goes out on its chorus: its repeats are the outro.
+            # Fading over its second half is how it ends on the radio;
+            # refusing that forced the station to leave before the chorus.
+            return 0.4 if blend_start - here["start"] >= (here["end"] - here["start"]) / 2 else -0.3
         return -1.0
     if last is not None and blend_start >= last - beat:
         return 1.0
@@ -432,7 +439,15 @@ def overlay_vocals(profile: dict, spans: list | None) -> dict:
     if not spans or not bins:
         return profile
     out = dict(profile)
-    out["bins"] = [{**b, "vocal": 0.9 if any(float(a) < b["end"] and float(e) > b["at"] for a, e in spans) else 0.05}
-                   for b in bins]
+    # Past the last synced line the lyrics say nothing: transcriptions often
+    # stop before an ad-libbed outro or a last hook. Keep whatever the
+    # acoustic profile measured there rather than calling it instrumental.
+    last = max(float(e) for _, e in spans) + 1.0
+
+    def vocal(b):
+        if any(float(a) < b["end"] and float(e) > b["at"] for a, e in spans):
+            return 0.9
+        return 0.05 if b["at"] < last else b.get("vocal")
+    out["bins"] = [{**b, "vocal": vocal(b)} for b in bins]
     out["vocal_source"] = "synced_lyrics"
     return out

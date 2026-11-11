@@ -106,8 +106,8 @@ class Feel(unittest.TestCase):
                 patch.object(db, "_DB_PATH", Path(folder) / "t.db"), patch.object(db, "_LOCAL", local):
             audio = Path(folder) / "a.opus"
             audio.write_bytes(b"x")
-            db.write("INSERT INTO tracks(key,title,artist,added_at,file,camelot,key_tonic,key_mode) "
-                     "VALUES('k','T','A',0,?,'8A',9,'minor')", (str(audio),))
+            db.write("INSERT INTO tracks(key,title,artist,added_at,file,camelot,key_tonic,key_mode,beat_period,beat_residual_ms) "
+                     "VALUES('k','T','A',0,?,'8A',9,'minor',.5,12)", (str(audio),))
             row = dict(db.one("SELECT * FROM tracks WHERE key='k'"))
             measured = {"features_version": analysis.FEATURES_VERSION, "energy": .7, "danceability": .5,
                         "onset_rate": 3.0, "embedding": "[]", "camelot": "", "key_tonic": -1, "key_mode": "",
@@ -119,10 +119,12 @@ class Feel(unittest.TestCase):
             stored = db.one("SELECT * FROM tracks WHERE key='k'")
             self.assertEqual((stored["energy"], stored["camelot"], stored["key_tonic"], stored["features_version"]),
                              (.7, "8A", 9, analysis.FEATURES_VERSION))
-            with patch.object(analysis, "ensure_features", side_effect=lambda r: {**r, "features_version": 1}):
+            # A failed beat track keeps the grid that was there.
+            self.assertEqual((stored["beat_period"], stored["beat_residual_ms"]), (.5, 12))
+            with patch.object(analysis, "ensure_features", side_effect=lambda r: {**r, "features_version": analysis.FEATURES_VERSION}):
                 self.assertEqual(analysis.reanalyse(), {"updated": 0, "failed": 0, "pending": 0})
             db.write("UPDATE tracks SET features_version=0 WHERE key='k'")
-            with patch.object(analysis, "ensure_features", side_effect=lambda r: {**r, "features_version": 1}):
+            with patch.object(analysis, "ensure_features", side_effect=lambda r: {**r, "features_version": analysis.FEATURES_VERSION}):
                 self.assertEqual(analysis.reanalyse()["updated"], 1)
             local.conn.close()
 

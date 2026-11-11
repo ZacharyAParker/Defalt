@@ -1,5 +1,27 @@
 # Patch notes
 
+## Claude writer — November 11, 2026
+
+- the hosts can write with Claude Code on your own Claude sign-in now. set `provider: claude` under `director_backend` in overrides. it runs with no tools, settings, plugins or mcp servers loaded and only hands back the lines. `claude_model` picks opus, sonnet or haiku. openrouter is still the fallback
+
+## Smoother transitions — October 28, 2026
+
+- blends come in on the intro now instead of on the singer's first line, and they're sized in bars, so two vocals stacking on each other happens a lot less
+- songs close in tempo actually lock their beats now. tempo comes from the beat grid instead of a rounded bpm, and the grid was sitting about 85 ms early, that's fixed. pairs that can't lock get a plain fade instead of two drum kits galloping over each other
+- the eq handoffs don't dip in the middle anymore
+- brakes and spinbacks don't fire over someone singing, and creativity defaults lower
+- the station leans toward a next song it can beatmatch into. right after a host break it doesn't care, the talking covers the tempo change
+- beat grids are fit properly. one missed beat in a breakdown used to make a steady song look loose. songs get measured again the next time they download
+- the first song after startup doesn't start in the past anymore, and the sign-on plays before the music
+- importing your own copy of a blocked song unblocks it
+- source links open without going through cmd
+
+## Startup video — October 4, 2026
+
+- the startup video got rebuilt. the OBBY STUDIO logo builds itself, its ring lifts off and becomes the ring on the Defalt record, and there's one piece of music under both. 7.8 seconds. same skip keys, same Startup video setting. reduced motion and the once a day flash show the Defalt logo
+- the music was played on the GeneralUser GS SoundFont by S. Christian Collins, credited in Notices
+- the browser and phone get the new intro right away. its files carry the video's own revision now, so they don't sit in a cache waiting for the next version number
+
 ## Repository licensing — September 27, 2026
 
 - original code and technical docs are now MIT licensed. art, music, creative assets and third-party material are excluded; see LICENSE-SCOPE.md. terms and copyright notices now match. this does not rebuild or relicense previously downloaded binaries.

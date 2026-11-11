@@ -416,7 +416,11 @@ class Planner(unittest.TestCase):
         unknown = self.refine(outgoing, self.track(self.profile()))
         self.assertEqual(unknown.in_offset, 0)              # never skip an opening on a guess
         lyrical = self.refine(outgoing, self.track(self.profile(), sections, [[6.5, 150]]))
-        self.assertEqual(lyrical.in_offset, 6.5)
+        # A blend comes in on the instrumental intro, under the old record,
+        # and the singer arrives as it finishes: the first line is where a
+        # cut may land, never where a blend starts.
+        self.assertEqual(lyrical.in_offset, 0)
+        self.assertNotEqual(lyrical.plan.preset, "slam")
 
     def test_lyric_vocals_stop_two_singers_stacking(self):
         spans = [[0, 160]]

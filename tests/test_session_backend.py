@@ -227,5 +227,135 @@ PRIVATE_NOT_FOR_MODEL
                                     {'host':'rue','text':'word '*20}]))
 
 
+class ClaudeSessionTests(SessionBackendTests):
+    """The same boundaries, with Claude Code as the signed-in writer."""
+
+    def setUp(self):
+        super().setUp()
+        self.settings['provider'] = 'claude'
+        self.answer = {'response': json.dumps(LINES), 'memory_refs': ['music']}
+
+    def result(self, args, **changes):
+        session = None
+        for flag in ('--session-id', '--resume'):
+            if flag in args:
+                session = args[args.index(flag) + 1]
+        return json.dumps({'type': 'result', 'subtype': 'success', 'is_error': False,
+                           'session_id': session or str(uuid.uuid4()), 'permission_denials': [],
+                           'structured_output': self.answer, **changes})
+
+    def transport(self, args, prompt, cwd, timeout):
+        self.calls.append((args, json.loads(prompt)))
+        return self.result(args)
+
+    def test_live_dialogue_boundary_uses_and_resumes_owned_thread(self):
+        with patch.object(backend, 'run_process', side_effect=self.transport), patch.object(llm, '_openrouter_complete') as fallback:
+            for _ in range(2):
+                result = llm.complete_json('Write dialogue', 'Music break',
+                    purpose='dialogue', validator=valid_dialogue)
+                self.assertEqual(result, LINES)
+        fallback.assert_not_called()
+        first, second = self.calls[0][0], self.calls[1][0]
+        session = first[first.index('--session-id') + 1]
+        self.assertEqual(second[second.index('--resume') + 1], session)
+        self.assertNotIn('--continue', second)
+        self.assertEqual(backend.status()['last_result']['provider'], 'claude')
+        self.assertNotIn('PRIVATE_NOT_FOR_MODEL', json.dumps(self.calls))
+        self.assertNotIn('private-source', json.dumps(self.calls))
+
+    def test_memory_change_starts_fresh_conversation(self):
+        with patch.object(backend, 'run_process', side_effect=self.transport):
+            self.call()
+            self.note.write_text(self.note.read_text().replace('original','studio'))
+            self.call()
+        self.assertNotIn('--resume', self.calls[1][0])
+
+    def test_skip_privacy_change_discards_previous_dialogue_session(self):
+        with patch.object(backend, 'run_process', side_effect=self.transport):
+            with patch.object(config.station, 'get', return_value=False):
+                self.call()
+            with patch.object(config.station, 'get', return_value=True):
+                self.call()
+        self.assertNotIn('--resume', self.calls[1][0])
+
+    def test_utilities_do_not_get_personal_memory(self):
+        self.assertEqual(backend.prepare('music', 'utility'), ([], 'no-memory', None))
+        args = backend.claude_command('claude', self.root, str(uuid.uuid4()), False, 'opus', 'low', False)
+        self.assertIn('--no-session-persistence', args)
+        self.assertNotIn('--session-id', args)
+
+    def test_bad_json_or_unknown_reference_falls_back(self):
+        self.answer = {'response': 'not json', 'memory_refs': ['invented']}
+        with patch.object(backend,'run_process',side_effect=self.transport):
+            self.assertIsNone(self.call())
+        self.assertEqual(backend._LANES['dialogue']['state'],{})
+
+    def test_tool_events_reject_the_turn(self):
+        def bad(args, *rest):
+            self.calls.append((args, None))
+            return self.result(args, permission_denials=[{'tool_name': 'Bash'}])
+        with patch.object(backend,'run_process',side_effect=bad):
+            self.assertIsNone(self.call())
+
+    def test_a_failed_or_mismatched_result_is_not_trusted(self):
+        for changes in ({'is_error': True}, {'subtype': 'error_max_turns'},
+                        {'session_id': str(uuid.uuid4())}, {'structured_output': None}):
+            backend._RETRY_AT = 0
+            with patch.object(backend, 'run_process',
+                              side_effect=lambda args, *rest: self.result(args, **changes)):
+                self.assertIsNone(self.call(), changes)
+
+    def test_plain_prose_gets_one_fresh_format_retry_with_shared_deadline(self):
+        remaining=[]
+        def transport(*args):
+            remaining.append(args[3])
+            self.answer = ({'response':'Sure, doing that now.','memory_refs':['music']}
+                           if not self.calls else {'response': json.dumps(LINES), 'memory_refs': ['music']})
+            return self.transport(*args)
+        with patch.object(backend,'run_process',side_effect=transport):
+            self.assertEqual(json.loads(self.call()),LINES)
+        self.assertEqual(len(self.calls),2)
+        self.assertNotIn('--resume',self.calls[1][0])
+        self.assertIn('format_reminder',self.calls[1][1])
+        self.assertLessEqual(remaining[1],remaining[0])
+        self.assertEqual(backend.status()['last_result']['format_retries'],1)
+
+    def test_format_retry_is_bounded_and_still_rejects_prose(self):
+        self.answer = {'response':'Still prose.','memory_refs':['music']}
+        with patch.object(backend,'run_process',side_effect=self.transport):
+            self.assertIsNone(self.call())
+        self.assertEqual(len(self.calls),2)
+        self.assertEqual(backend._LANES['dialogue']['state'],{})
+
+    def test_spawn_does_not_inherit_app_keys_or_parent_thread(self):
+        with patch.dict(os.environ,{'OPENROUTER_API_KEY':'secret','ANTHROPIC_API_KEY':'secret',
+                                    'CLAUDECODE':'1','CLAUDE_CODE_SESSION_ID':'unrelated'}):
+            env=backend.child_environment()
+            for key in ('OPENROUTER_API_KEY','ANTHROPIC_API_KEY','CLAUDECODE','CLAUDE_CODE_SESSION_ID'):
+                self.assertNotIn(key,env)
+        args=backend.claude_command('claude',self.root,str(uuid.uuid4()),False,'opus','medium',True)
+        self.assertEqual(args[args.index('--tools')+1],'')
+        self.assertEqual(args[args.index('--setting-sources')+1],'')
+        for arg in ['-p','--strict-mcp-config','--json-schema','--system-prompt-file']:
+            self.assertIn(arg,args)
+        self.assertNotIn('--dangerously-skip-permissions',args)
+
+    def test_claude_has_its_own_executable_setting(self):
+        self.patches[1].stop()
+        try:
+            exe = self.root / 'claude.exe'
+            exe.write_text('')
+            self.settings.update(executable=str(self.root / 'codex.exe'), claude_executable=str(exe))
+            self.assertEqual(backend.executable(), str(exe))
+        finally:
+            self.patches[1].start()
+
+    def test_claude_model_is_separate_from_codex_model(self):
+        self.settings.update(model='gpt-5.6-luna', claude_model='sonnet')
+        self.assertEqual(backend.model_name(), 'sonnet')
+        self.settings['provider'] = 'codex'
+        self.assertEqual(backend.model_name(), 'gpt-5.6-luna')
+
+
 if __name__ == '__main__':
     unittest.main()

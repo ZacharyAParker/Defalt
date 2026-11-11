@@ -24,7 +24,7 @@
 <link rel="stylesheet" href="/static/director-chat.css?v={{APP_VERSION}}">
 <link rel="stylesheet" href="/static/feedback.css?v={{APP_VERSION}}">
 <link rel="stylesheet" href="/static/stream.css?v={{APP_VERSION}}">
-<link rel="stylesheet" href="/static/intro.css?v={{APP_VERSION}}">
+<link rel="stylesheet" href="/static/intro.css?v={{APP_VERSION}}-{{SPLASH_REV}}">
 </head>
 <body>
 
@@ -308,8 +308,10 @@
   </footer>
 </dialog>
 <!-- The startup ident. Opened by intro.js after the first-run notice, so it
-     sits on top of it; it never delays the notice or the player. -->
-<dialog class="intro" id="intro" aria-label="Intro" data-video="/static/splash/intro.mp4?v={{APP_VERSION}}" data-poster="/static/splash/intro-poster.webp?v={{APP_VERSION}}">
+     sits on top of it; it never delays the notice or the player. Its files
+     carry the video's own revision as well as the release, so a new video
+     gets past caches without waiting for a new version number. -->
+<dialog class="intro" id="intro" aria-label="Intro" data-video="/static/splash/intro.mp4?v={{APP_VERSION}}-{{SPLASH_REV}}" data-poster="/static/splash/intro-poster.webp?v={{APP_VERSION}}-{{SPLASH_REV}}">
   <video class="intro__video" id="intro-video" muted playsinline preload="none" disablepictureinpicture aria-hidden="true"></video>
   <button type="button" class="intro__skip" id="intro-skip">Skip</button>
 </dialog>
@@ -358,7 +360,7 @@
 <script src="/static/director-chat.js?v={{APP_VERSION}}" defer></script>
 <script src="/static/about.js?v={{APP_VERSION}}" defer></script>
 <script src="/static/legal.js?v={{APP_VERSION}}" defer></script>
-<script src="/static/intro.js?v={{APP_VERSION}}" defer></script>
+<script src="/static/intro.js?v={{APP_VERSION}}-{{SPLASH_REV}}" defer></script>
 <script src="/static/visualizer.js?v={{APP_VERSION}}" defer></script>
 <script src="/static/stream.js?v={{APP_VERSION}}" defer></script>
 <script src="/static/lyrics.js?v={{APP_VERSION}}" defer></script>

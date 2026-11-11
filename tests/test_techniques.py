@@ -193,8 +193,11 @@ class Eligibility(Settings):
         ctx = context(out_vocal=0.7, in_vocal=0.6, stems=False)
         for name in ("echo_out", "echo_freeze", "reverb_wash", "filter_ride"):
             self.assertIn("vocals", techniques.eligible(name, ctx), name)
-        # Moves that never overlap the two records are still fine.
-        self.assertEqual(techniques.eligible("brake", ctx), "")
+        # A brake never stacks them, but it chops a singer mid-word.
+        self.assertIn("mid-vocal", techniques.eligible("brake", ctx))
+        # Only the incoming record singing, on a locked grid: fine.
+        clear = context(out_vocal=0.1, in_vocal=0.6, stems=False, grid=True)
+        self.assertEqual(techniques.eligible("brake", clear), "")
 
     def test_beat_moves_need_a_grid_and_long_blends_need_matched_tempos(self):
         self.assertTrue(techniques.eligible("loop_roll", context(grid=False)))

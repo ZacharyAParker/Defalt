@@ -141,6 +141,14 @@ class TestImporter(DatabaseTest):
         self.peaks = patcher.start()
         self.addCleanup(patcher.stop)
 
+    def test_importing_a_copy_unblocks_a_song_the_resolver_gave_up_on(self):
+        key = db.track_key("Artist", "Song")
+        db.write("INSERT INTO tracks (key, title, artist, blocked, added_at) VALUES (?, 'Song', 'Artist', 1, 0)",
+                 (key,))
+        result = importer.import_file(self.path)
+        self.assertEqual(result["key"], key)
+        self.assertEqual(db.one("SELECT blocked FROM tracks WHERE key=?", (key,))["blocked"], 0)
+
     def test_import_skip_update_and_preserve_cues(self):
         first = importer.import_file(self.path)
         row = db.one('SELECT * FROM tracks WHERE key=?', (first['key'],))

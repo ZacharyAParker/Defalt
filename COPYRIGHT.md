@@ -16,6 +16,8 @@ The radio booth artwork — Mav, Rue, the cat and the studio itself — is © 20
 
 Dependencies, fonts and vendored components retain their own copyrights and licenses. See THIRD-PARTY-NOTICES.md, vendor/README.md and the license files shipped with those components. This notice does not override their terms or claim ownership of their work.
 
+The startup video's music was made with the GeneralUser GS SoundFont by S. Christian Collins, credited in THIRD-PARTY-NOTICES.md with its license. The SoundFont itself is not part of Defalt.
+
 Music, recordings, lyrics, article text, artwork, artist names, trademarks, and other third-party material remain the property of their respective owners. Availability through Defalt does not grant permission to copy, distribute, or commercially use that material. No affiliation or endorsement is implied.
 
 ## Trademarks

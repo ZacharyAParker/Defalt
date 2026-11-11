@@ -8,7 +8,12 @@
 //! can't be seen (see `crate::splash` for why it isn't one window growing).
 //!
 //! One texture, replaced frame by frame from a worker that decodes a couple
-//! of frames ahead, so the ident costs one frame of memory rather than 145.
+//! of frames ahead, so the ident costs one frame of memory rather than a
+//! couple of hundred.
+//!
+//! A launch that only gets a still (a flash, reduced motion) shows the
+//! blob's logo frame, and so does a wait for the console. Never the last
+//! frame: the ident ends on plain background.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
@@ -50,8 +55,10 @@ enum Sound {
 /// own window (sized to match), because eframe can't screenshot a second one.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Pin {
+    /// One frame of the ident, by number.
     Frame(usize),
-    End,
+    /// The still a flash shows: the logo.
+    Logo,
 }
 
 pub struct Splash {
@@ -83,7 +90,7 @@ pub struct Splash {
     /// Click, Esc, Space or Enter in the splash window, since last frame.
     skip: bool,
     pin: Option<Pin>,
-    /// The final logo only: a flash, reduced motion, or a shot of the end.
+    /// The logo only: a flash, reduced motion, or a shot of the still.
     still: bool,
     asked_for_shot: bool,
     /// When the splash window was shown.
@@ -93,13 +100,20 @@ pub struct Splash {
 }
 
 /// A screenshot run that asked for the splash: which moment, if any.
+/// `DEFALT_SHOT_SPLASH=<n>` is frame n of the ident; any word instead of a
+/// number (`logo`, or `end` from when the ident ended on its logo) is the
+/// still.
 fn pin_from_env(last: usize) -> Option<Pin> {
     std::env::var_os("DEFALT_SHOT")?;
     let pin = std::env::var("DEFALT_SHOT_SPLASH").ok()?;
-    Some(match pin.trim().parse::<usize>() {
+    Some(pin_from(&pin, last))
+}
+
+fn pin_from(pin: &str, last: usize) -> Pin {
+    match pin.trim().parse::<usize>() {
         Ok(n) => Pin::Frame(n.min(last)),
-        Err(_) => Pin::End,
-    })
+        Err(_) => Pin::Logo,
+    }
 }
 
 /// Whether this run draws the splash in the console's own window (a
@@ -124,11 +138,15 @@ impl Splash {
             }
         };
         let pin = pin_from_env(frames.last());
-        let length = if plan == Plan::Flash { splash::FLASH } else { frames.seconds() };
-        let still = plan == Plan::Flash || pin == Some(Pin::End);
+        let machine = if plan == Plan::Flash {
+            Machine::flash(splash::FLASH, 0.0)
+        } else {
+            Machine::new(frames.seconds(), frames.logo_at(), 0.0)
+        };
+        let still = plan == Plan::Flash || pin == Some(Pin::Logo);
         let first = match pin {
             Some(Pin::Frame(n)) => n,
-            _ if still => frames.last(),
+            _ if still => frames.logo,
             _ => 0,
         };
         let sound = if sound && plan == Plan::Full && pin.is_none() {
@@ -150,7 +168,7 @@ impl Splash {
         let cloaked = pin.is_none() && console.is_some_and(|hwnd| crate::platform::cloak(hwnd, true));
         Some(Splash {
             frames,
-            machine: Machine::new(length, 0.0),
+            machine,
             clock,
             began: Instant::now(),
             texture: None,
@@ -183,22 +201,39 @@ impl Splash {
         let now = self.now();
         match self.pin {
             Some(Pin::Frame(n)) => (n as f64 + 0.5) / self.frames.fps,
-            Some(Pin::End) => self.frames.seconds(),
+            Some(Pin::Logo) => self.frames.logo_at(),
             None => self.clock.played(now, engine),
         }
     }
 
+    /// The frame to draw: the logo for a still, else wherever the ident has
+    /// got to (which is the logo too, while it waits for the console).
+    fn target(&self, played: f64) -> usize {
+        if self.still { self.frames.logo } else { self.frames.at(self.machine.position(played)) }
+    }
+
     /// Put the frame for this moment on the texture, if it's arrived.
     fn show_frame(&mut self, ctx: &egui::Context, target: usize) {
-        if self.shown.is_none() {
+        let Some(shown) = self.shown else {
             // The first frame is decoded here, so the window never opens
-            // on an empty background.
+            // without its picture.
             if let Some(image) = decode(&self.frames, target) {
                 self.upload(ctx, target, image);
             }
             if self.pin.is_none() && !self.still && target < self.frames.last() {
                 self.decoded = Some(spawn_decoder(self.want.clone(), target + 1, ctx.clone()));
             }
+            return;
+        };
+        if target < shown && self.machine.phase != Phase::Intro {
+            // Back to the logo, to wait on it. The worker only goes
+            // forwards, so this one is decoded here too. (While the ident
+            // is still playing, a clock that slips back a frame just waits
+            // for the picture to come round again.)
+            if let Some(image) = decode(&self.frames, target) {
+                self.upload(ctx, target, image);
+            }
+            self.shown = Some(target);
             return;
         }
         self.want.store(target, Ordering::Relaxed);
@@ -410,7 +445,7 @@ pub fn before(app: &mut Defalt, ctx: &egui::Context) -> bool {
         // window that never shows (it should take a frame or two) doesn't
         // hold the console up for long.
         if splash.visible_at.is_none() && now < 2.0 {
-            let first = if splash.still { splash.frames.last() } else { 0 };
+            let first = splash.target(0.0);
             splash.show_frame(ctx, first);
             if !splash.maximizing {
                 splash.maximizing = true;
@@ -423,7 +458,7 @@ pub fn before(app: &mut Defalt, ctx: &egui::Context) -> bool {
             return true;
         }
         splash.started = true;
-        splash.machine = Machine::new(splash.machine.length(), now);
+        splash.machine.restart(now);
         splash.clock = match splash.clock {
             Clock::Waiting { .. } => Clock::Waiting { since: now },
             _ => Clock::Wall { origin: now },
@@ -452,7 +487,7 @@ pub fn before(app: &mut Defalt, ctx: &egui::Context) -> bool {
     let played = splash.played(engine_time(app));
 
     if splash.pin.is_some() {
-        let target = if splash.still { splash.frames.last() } else { splash.frames.at(played) };
+        let target = splash.target(played);
         splash.show_frame(ctx, target);
         splash.paint(ctx, now);
         splash.screenshot(ctx, target);
@@ -481,7 +516,7 @@ pub fn before(app: &mut Defalt, ctx: &egui::Context) -> bool {
         }
     }
 
-    let target = if splash.still { splash.frames.last() } else { splash.frames.at(splash.machine.position(played)) };
+    let target = splash.target(played);
     splash.show_frame(ctx, target);
     if splash.machine.splash_window() {
         splash.window(ctx, now);
@@ -492,7 +527,7 @@ pub fn before(app: &mut Defalt, ctx: &egui::Context) -> bool {
         // there to hide it.
         ctx.layer_painter(egui::LayerId::background()).rect_filled(ctx.viewport_rect(), 0.0, background());
     }
-    // The ident moves at 24 frames a second; drawing at up to 60 keeps a
+    // The ident moves at 30 frames a second; drawing at up to 60 keeps a
     // new frame from waiting most of a frame to be seen, and the fades smooth.
     ctx.request_repaint_after(std::time::Duration::from_millis(16));
     app.splash = Some(splash);
@@ -577,11 +612,13 @@ mod tests {
         assert_eq!(image.size, [1200, 964]);
         // The clock jumps ahead: the worker follows rather than decoding
         // every frame in between.
-        want.store(100, Ordering::Relaxed);
+        let last = Frames::parse(splash::FRAMES).unwrap().last();
+        let jump = last - 40;
+        want.store(jump, Ordering::Relaxed);
         let got: Vec<usize> = receive.iter().map(|(n, _)| n).collect();
         assert!(got.windows(2).all(|w| w[0] < w[1]), "{got:?}");
-        assert_eq!(*got.last().unwrap(), 144);
-        assert!(got.contains(&100) && got.len() < 60, "{got:?}");
+        assert_eq!(*got.last().unwrap(), last, "all the way to the ident's real end");
+        assert!(got.contains(&jump) && got.len() < 60, "{got:?}");
     }
 
     #[test]
@@ -589,12 +626,82 @@ mod tests {
         assert!(Splash::new(Plan::Skip, true, None).is_none());
         let flash = Splash::new(Plan::Flash, true, None).unwrap();
         assert!(matches!(flash.sound, Sound::Off), "a flash is silent");
-        assert!(flash.still, "a flash is the final logo, not the ident's first second");
+        assert!(flash.still, "a flash is the logo, not the ident's first second");
+        assert_eq!(flash.target(0.0), flash.frames.logo);
+        assert_eq!(flash.target(60.0), flash.frames.logo, "however long it's up");
         assert_eq!(flash.machine.phase, Phase::Intro);
         let full = Splash::new(Plan::Full, false, None).unwrap();
         assert!(!full.still);
         assert!(!full.cloaked, "no window, nothing cloaked");
         assert!(matches!(full.clock, Clock::Wall { .. }), "no sound: the wall clock from the start");
+        // The whole ident follows the clock, through to its last frame.
+        assert_eq!(full.target(0.0), 0);
+        assert_eq!(full.target(full.frames.logo_at()), full.frames.logo);
+        assert_eq!(full.target(full.frames.seconds()), full.frames.last());
+    }
+
+    #[test]
+    fn a_still_is_the_logo_frame() {
+        let mut app = Defalt::from_root(std::env::temp_dir().join("defalt-no-fixture"), false);
+        app.splash = Splash::new(Plan::Flash, false, None);
+        let ctx = egui::Context::default();
+        ctx.run_ui(egui::RawInput::default(), |ui| { before(&mut app, ui.ctx()); }).drop_without_applying_deltas();
+        let splash = app.splash.as_ref().unwrap();
+        assert_eq!(splash.shown, Some(splash.frames.logo), "the logo, not the empty frame the ident ends on");
+        assert!(splash.decoded.is_none(), "one frame, so no worker");
+        // A shot of the still is that frame too, whichever word asks for
+        // it. A number is that frame of the ident.
+        let last = splash.frames.last();
+        assert_eq!(pin_from("logo", last), Pin::Logo);
+        assert_eq!(pin_from("end", last), Pin::Logo);
+        assert_eq!(pin_from(" 89 ", last), Pin::Frame(89));
+        assert_eq!(pin_from("9999", last), Pin::Frame(last));
+    }
+
+    #[test]
+    fn a_wait_for_the_console_goes_back_to_the_logo() {
+        let mut splash = Splash::new(Plan::Full, false, None).unwrap();
+        let ctx = egui::Context::default();
+        let (logo, last) = (splash.frames.logo, splash.frames.last());
+        splash.show_frame(&ctx, last);
+        assert_eq!(splash.shown, Some(last));
+        // While it plays, the picture never steps backwards.
+        splash.show_frame(&ctx, logo);
+        assert_eq!(splash.shown, Some(last));
+        // Waiting, it shows the logo, wherever it had got to.
+        splash.machine.skip(0.0, 0.0, false);
+        assert_eq!(splash.machine.phase, Phase::Hold);
+        assert_eq!(splash.target(splash.frames.seconds()), logo);
+        splash.show_frame(&ctx, logo);
+        assert_eq!(splash.shown, Some(logo));
+    }
+
+    #[test]
+    fn a_skip_while_the_console_loads_waits_on_the_logo() {
+        let mut app = Defalt::from_root(std::env::temp_dir().join("defalt-no-fixture"), false);
+        app.splash = Splash::new(Plan::Full, false, None);
+        let ctx = egui::Context::default();
+        let frame = |app: &mut Defalt| ctx.run_ui(egui::RawInput::default(), |ui| { before(app, ui.ctx()); })
+            .drop_without_applying_deltas();
+        frame(&mut app);
+        let splash = app.splash.as_mut().unwrap();
+        let logo = splash.frames.logo;
+        splash.visible_at = Some(0.0);
+        splash.skip = true;
+        // The library is still loading, so the skip can't go to the console
+        // yet. The worker jumps to the logo; give it a moment to get there.
+        for _ in 0..300 {
+            frame(&mut app);
+            let splash = app.splash.as_ref().unwrap();
+            assert!(splash.shown.is_some_and(|shown| shown <= logo), "{:?} is past the logo", splash.shown);
+            if splash.shown == Some(logo) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let splash = app.splash.as_ref().unwrap();
+        assert_eq!(splash.machine.phase, Phase::Hold);
+        assert_eq!(splash.shown, Some(logo));
     }
 
     #[test]

@@ -200,8 +200,10 @@ def import_file(path: Path | str) -> dict:
     if (stat.st_mtime_ns, stat.st_size) != (after.st_mtime_ns, after.st_size):
         raise OSError("file changed while it was being read; retry the scan")
 
+    # blocked=0: a row the resolver once gave up on (no upload found) is
+    # playable the moment the user has their own copy of it.
     values.update(file=str(path), source="local", import_path=identity,
-                  import_mtime_ns=stat.st_mtime_ns, import_size=stat.st_size)
+                  import_mtime_ns=stat.st_mtime_ns, import_size=stat.st_size, blocked=0)
 
     columns = list(values)
     db.write(

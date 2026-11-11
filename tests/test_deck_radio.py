@@ -56,7 +56,10 @@ class DeckRadio(unittest.TestCase):
         self.assertEqual(a.offset, 20)
         self.assertEqual(a.duration, 100)
         self.assertLess(b.start_at, a.end_at)
-        self.assertEqual(b.meta["transition"]["preset"], "blend")
+        # Compatible keys and tempos, but no beat grid to lock: a blend would
+        # run two unlocked drum kits together, so it airs as a plain fade.
+        self.assertEqual(b.meta["transition"]["preset"], "fade")
+        self.assertIn("beats not locked", b.meta["transition"]["reason"])
         self.assertIn("automation", a.meta)
         self.assertIn("automation", b.meta)
         s._extend()
@@ -114,7 +117,9 @@ class DeckRadio(unittest.TestCase):
 
     def test_big_tempo_jump_outranks_harmonic_key_and_energy(self):
         a, b = dict(self.tracks["a"], bpm=92, lufs=-16), dict(self.tracks["b"], bpm=140, lufs=-12)
-        self.assertEqual(transitions.choose(a, b).preset, "slam")
+        plan = transitions.choose(a, b)
+        self.assertEqual(plan.preset, "fade")
+        self.assertIn("too far to beatmatch", plan.reason)
 
     def test_beat_drift_limits_unsynced_overlap(self):
         plan = transitions.choose(dict(self.tracks["a"], bpm=128), dict(self.tracks["b"], bpm=135))

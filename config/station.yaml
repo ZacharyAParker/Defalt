@@ -115,8 +115,8 @@ transitions:
   exit_search_seconds: 24.0
   max_intro_skip: 8.0
   minimum_play_fraction: 0.65
-  mid_song_cues: true
-  max_entry_skip_fraction: 0.25
+  mid_song_cues: false
+  max_entry_skip_fraction: 0.08
   # Snap cue candidates to eight-bar phrase lines on a trusted bar grid, and
   # prefer blends that start on a phrase of both records.
   phrase_cues: true
@@ -134,7 +134,7 @@ transitions:
   echo_in_blends: true
   feedback_enabled: true
   feedback_max_adjustment: 0.005
-  feedback_tolerance_ms: 30.0
+  feedback_tolerance_ms: 10.0
   # auto  -- pick per pair, from tempo, key and energy (recommended)
   # or force one of: fade, rise, blend, wave, melt, slam
   #
@@ -160,8 +160,8 @@ transitions:
   # octave-invariantly, so a track detected at double time is not treated as
   # a mismatch.
   tempo_tolerance: 0.06
-  # Above this octave-invariant distance the two records will not blend, so
-  # the station cuts instead of pretending. Folding means the scale only runs
+  # Above this octave-invariant distance the two records cannot be
+  # beatmatched, so they get a plain equal-power fade rather than a blend. Folding means the scale only runs
   # to about 0.33, so this is further apart than it looks.
   slam_distance: 0.18
 
@@ -196,6 +196,10 @@ transitions:
   # clashing pair may take a rate up to this much off the exact tempo match
   # when that lands the incoming record in a compatible key.
   key_shift_tempo_tolerance: 0.02
+  # After a tempo match, glide each record back to its own speed (and key)
+  # over this many seconds, so nothing plays detuned for three minutes.
+  tempo_recovery: true
+  recovery_seconds: 30
   # Perceived-energy rise (0..1) that makes the picker reach for "rise".
   rise_energy_step: 0.12
 
@@ -213,7 +217,7 @@ transitions:
   # See docs/TRANSITIONS.md. 0 keeps smooth radio (the presets above only),
   # 1 reaches for an effect most of the time. Speech always wins: a mix a
   # host talks over falls back to its plain blend.
-  creativity: 0.5
+  creativity: 0.15
   # Mixes before the same technique may be picked again.
   technique_memory: 3
   # Switch individual techniques off. Force one with `preset:` above.
@@ -242,14 +246,15 @@ skip:
 
 ducking:
   # How far the music drops (linear gain) while a host talks over it.
-  # Keep the music 20 dB down under normalized host speech.
-  target_gain: 0.10
+  # About 10 dB down: the hosts stay on top and the mix underneath stays
+  # audible, so a transition under a break is still heard.
+  target_gain: 0.30
   # Fast attack, slow release reads as professional.
   # A slow attack just sounds like somebody missed the fader.
   attack: 0.35
   release: 1.2
   # Extra hold after the voice stops before the music climbs back.
-  hold_after: 0.40
+  hold_after: 0.20
   curve: exponential
 
 # ---------------------------------------------------------------------------
@@ -370,6 +375,11 @@ selection:
     artist_weight: 0.25
     lyrics_weight: 0.45
     mix_weight: 0.35
+    # Lift for a next song that can be beatmatched into (trusted beat grids,
+    # tempos within tempo_match_limit, half and double time included). Never
+    # a penalty, and switched off for the song after a host break, so the
+    # speech is where the station changes tempo.
+    tempo_weight: 1.2
     variety_strength: 0.65
     explore_chance: 0.18
     fatigue_after: 4
@@ -590,16 +600,19 @@ requests:
 
   # A topic request is dropped if it has not aired within this long.
   topic_ttl_minutes: 45
-# Text generation. Codex uses the existing local CLI login; OpenRouter remains
-# the fallback. Personal vault paths belong in private overrides.yaml.
+# Text generation. Codex and Claude Code use the existing local CLI sign-in;
+# OpenRouter remains the fallback. Personal vault paths belong in private
+# overrides.yaml.
 director_backend:
-  provider: openrouter       # openrouter | codex
-  model: gpt-5.6-luna
+  provider: openrouter       # openrouter | codex | claude
+  model: gpt-5.6-luna        # codex model
+  claude_model: opus         # claude model: opus | sonnet | haiku or a full id
   reasoning: medium          # low | medium
   utility_reasoning: low     # short request and metadata tasks
   timeout_seconds: 25        # reserves time for the fallback within each request
   memory_vault: ""           # optional curated Obsidian vault; read-only
-  executable: ""             # optional CLI path; otherwise discovered locally
+  executable: ""             # optional Codex CLI path; otherwise discovered locally
+  claude_executable: ""      # optional Claude Code path; otherwise discovered locally
 
 # Listening away from home (docs/REMOTE.md). Only matters when .env names a
 # REMOTE_TUNNEL and Cloudflare Access is configured; the tunnel then runs

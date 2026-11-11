@@ -13,7 +13,8 @@ assert.deepEqual(external, [], 'the page loads nothing from another origin');
 const assets = [...html.matchAll(/(?:href|src)="(\/static\/[^"]+)"/g)].map((m) => m[1]);
 assert.ok(assets.length >= 10);
 for (const asset of assets) {
-  assert.match(asset, /\?v=\{\{APP_VERSION\}\}$/, `${asset} is versioned`);
+  // the intro's files also carry the startup video's own revision
+  assert.match(asset, /\?v=\{\{APP_VERSION\}\}(?:-\{\{SPLASH_REV\}\})?$/, `${asset} is versioned`);
   const file = path.join(root, 'web', asset.replace(/\?.*$/, ''));
   assert.ok(fs.existsSync(file), `${asset} exists`);
 }

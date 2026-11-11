@@ -1,4 +1,5 @@
-"""Headless, bounded Codex text generation. Playback never runs on this worker."""
+"""Headless, bounded text generation through a signed-in Codex or Claude Code
+CLI. Playback never runs on this worker."""
 from __future__ import annotations
 
 import hashlib
@@ -58,19 +59,36 @@ def setting(name: str, default=None):
     return config.station.get('director_backend.' + name, default)
 
 
+SESSION_PROVIDERS = ('codex', 'claude')
+
+
+def provider() -> str:
+    return str(setting('provider', 'openrouter'))
+
+
 def enabled() -> bool:
-    return setting('provider', 'openrouter') == 'codex'
+    return provider() in SESSION_PROVIDERS
+
+
+def model_name() -> str:
+    if provider() == 'claude':
+        return str(setting('claude_model', 'opus'))
+    return str(setting('model', 'gpt-5.6-luna'))
 
 
 def executable() -> str | None:
-    configured = str(setting('executable', '') or '')
+    name = 'claude' if provider() == 'claude' else 'codex'
+    configured = str(setting('claude_executable' if name == 'claude' else 'executable', '') or '')
     if configured:
         return str(Path(configured)) if Path(configured).is_file() else None
-    found = shutil.which('codex')
+    found = shutil.which(name)
     if found:
         return found
-    local = os.environ.get('LOCALAPPDATA')
-    candidate = Path(local) / 'Programs/OpenAI/Codex/bin/codex.exe' if local else None
+    if name == 'claude':
+        candidate = Path.home() / '.local/bin' / ('claude.exe' if os.name == 'nt' else 'claude')
+    else:
+        local = os.environ.get('LOCALAPPDATA')
+        candidate = Path(local) / 'Programs/OpenAI/Codex/bin/codex.exe' if local else None
     return str(candidate) if candidate and candidate.is_file() else None
 
 
@@ -101,7 +119,7 @@ def child_environment() -> dict[str, str]:
     allowed = {'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATH', 'PATHEXT', 'TEMP', 'TMP',
                'USERPROFILE', 'HOME', 'APPDATA', 'LOCALAPPDATA', 'PROGRAMDATA',
                'PROGRAMFILES', 'PROGRAMFILES(X86)', 'HOMEDRIVE', 'HOMEPATH',
-               'CODEX_HOME', 'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'SSL_CERT_FILE'}
+               'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'SSL_CERT_FILE'}
     return {key: value for key, value in os.environ.items() if key.upper() in allowed}
 
 
@@ -154,14 +172,67 @@ def command(exe, work, output, thread_id, model, effort, persistent):
     return args + ['-']
 
 
+def claude_command(exe, work, session_id, resume, model, effort, persistent):
+    """Claude Code in print mode on the user's own sign-in. No settings,
+    hooks, plugins, MCP servers or tools are loaded; the only thing the
+    model can do is return the schema."""
+    args = [exe, '-p', '--output-format', 'json', '--model', model, '--effort', effort,
+            '--tools', '', '--strict-mcp-config', '--setting-sources', '',
+            '--exclude-dynamic-system-prompt-sections',
+            '--system-prompt-file', str(work / 'instructions.txt'),
+            '--json-schema', json.dumps(SCHEMA)]
+    if not persistent:
+        return args + ['--no-session-persistence']
+    return args + (['--resume'] if resume else ['--session-id']) + [str(uuid.UUID(session_id))]
+
+
+def _codex_turn(exe, work, output, thread_id, model, effort, persistent, prompt, remaining):
+    output.unlink(missing_ok=True)
+    stdout = run_process(command(exe, work, output, thread_id, model, effort, persistent),
+                         prompt, work, remaining)
+    events = [json.loads(line) for line in stdout.splitlines() if line.strip()]
+    found_thread = None
+    completed = False
+    for event in events:
+        kind = event.get('type')
+        if kind not in {'thread.started', 'turn.started', 'turn.completed',
+                        'item.started', 'item.updated', 'item.completed'}:
+            raise SessionUnavailable('Session failed or returned an unexpected event')
+        if kind == 'thread.started':
+            found_thread = str(uuid.UUID(event['thread_id']))
+        if kind == 'turn.completed':
+            completed = True
+        if event.get('item', {}).get('type') not in {None, 'agent_message', 'reasoning'}:
+            raise SessionUnavailable('Session attempted tool activity')
+    if not completed or not found_thread or (thread_id and found_thread != thread_id):
+        raise SessionUnavailable('Incomplete or mismatched session')
+    return json.loads(output.read_text(encoding='utf-8')), found_thread
+
+
+def _claude_turn(exe, work, thread_id, model, effort, persistent, prompt, remaining):
+    session_id = thread_id or str(uuid.uuid4())
+    stdout = run_process(claude_command(exe, work, session_id, bool(thread_id), model, effort, persistent),
+                         prompt, work, remaining)
+    result = json.loads(stdout)
+    if (not isinstance(result, dict) or result.get('type') != 'result'
+            or result.get('subtype') != 'success' or result.get('is_error')):
+        raise SessionUnavailable('Session failed or returned an unexpected result')
+    if result.get('permission_denials'):
+        raise SessionUnavailable('Session attempted tool activity')
+    if persistent and result.get('session_id') != session_id:
+        raise SessionUnavailable('Incomplete or mismatched session')
+    return result.get('structured_output'), session_id if persistent else None
+
+
 def complete(system, user, *, purpose, memory, memory_fingerprint, timeout,
              json_mode=False, validator=None, memory_warning=None) -> str | None:
     global _RETRY_AT
     if time.monotonic() < _RETRY_AT:
         return None
     exe = executable()
+    name = provider()
     if not exe:
-        record('unavailable', error='Codex CLI unavailable')
+        record('unavailable', error=('Claude Code' if name == 'claude' else 'Codex CLI') + ' unavailable')
         return None
     purpose = 'dialogue' if purpose == 'dialogue' else 'utility'
     with _GUARD:
@@ -173,7 +244,7 @@ def complete(system, user, *, purpose, memory, memory_fingerprint, timeout,
     started = time.monotonic()
     output = None
     try:
-        model = str(setting('model', 'gpt-5.6-luna'))
+        model = model_name()
         effort = str(setting('reasoning', 'medium') if purpose == 'dialogue'
                      else setting('utility_reasoning', 'low'))
         if effort not in {'low', 'medium'}:
@@ -186,7 +257,7 @@ def complete(system, user, *, purpose, memory, memory_fingerprint, timeout,
         (work / 'schema.json').write_text(json.dumps(SCHEMA), encoding='utf-8')
         (work / 'instructions.txt').write_text(POLICY, encoding='utf-8')
         fingerprint = hashlib.sha256(json.dumps(
-            [model, effort, memory_fingerprint, config.personas(),
+            [name, model, effort, memory_fingerprint, config.personas(),
              bool(config.station.get('learning.ignore_skips', False)), POLICY], sort_keys=True).encode()).hexdigest()
         state = lane['state']
         persistent = purpose == 'dialogue'
@@ -202,26 +273,12 @@ def complete(system, user, *, purpose, memory, memory_fingerprint, timeout,
             remaining = timeout - (time.monotonic() - started)
             if remaining <= 0:
                 raise SessionUnavailable('Session deadline exceeded')
-            output.unlink(missing_ok=True)
-            stdout = run_process(command(exe, work, output, thread_id, model, effort, persistent),
-                                 prompt, work, remaining)
-            events = [json.loads(line) for line in stdout.splitlines() if line.strip()]
-            found_thread = None
-            completed = False
-            for event in events:
-                kind = event.get('type')
-                if kind not in {'thread.started', 'turn.started', 'turn.completed',
-                                'item.started', 'item.updated', 'item.completed'}:
-                    raise SessionUnavailable('Session failed or returned an unexpected event')
-                if kind == 'thread.started':
-                    found_thread = str(uuid.UUID(event['thread_id']))
-                if kind == 'turn.completed':
-                    completed = True
-                if event.get('item', {}).get('type') not in {None, 'agent_message', 'reasoning'}:
-                    raise SessionUnavailable('Session attempted tool activity')
-            if not completed or not found_thread or (thread_id and found_thread != thread_id):
-                raise SessionUnavailable('Incomplete or mismatched session')
-            payload = json.loads(output.read_text(encoding='utf-8'))
+            if name == 'claude':
+                payload, found_thread = _claude_turn(exe, work, thread_id, model, effort,
+                                                     persistent, prompt, remaining)
+            else:
+                payload, found_thread = _codex_turn(exe, work, output, thread_id, model, effort,
+                                                    persistent, prompt, remaining)
             if not isinstance(payload, dict) or set(payload) != {'response', 'memory_refs'}:
                 raise SessionUnavailable('Invalid session output')
             text, refs = payload['response'], payload['memory_refs']
@@ -249,12 +306,12 @@ def complete(system, user, *, purpose, memory, memory_fingerprint, timeout,
         lane['state'] = ({'thread_id': found_thread, 'fingerprint': fingerprint,
                           'turns': state.get('turns', 0) + 1 if resume else 1,
                           'updated': time.time()} if persistent else {})
-        record('codex', elapsed=round(time.monotonic() - started, 2),
+        record(name, elapsed=round(time.monotonic() - started, 2),
                resumed=bool(resume), format_retries=format_attempt, memory_refs=refs, memory_warning=memory_warning)
         return text
     except ContentRejected as exc:
         # A draft that fails the writer's checks says nothing about whether
-        # Codex is healthy. Drop the conversation, but do not bench the
+        # the session is healthy. Drop the conversation, but do not bench the
         # backend for every other purpose.
         lane['state'] = {}
         record('rejected', error=str(exc))
@@ -283,8 +340,8 @@ def record(provider: str, **details):
 def status() -> dict:
     with _GUARD:
         last = dict(_LAST)
-    return {'provider': setting('provider', 'openrouter'),
-            'model': setting('model', 'gpt-5.6-luna'),
+    return {'provider': provider(),
+            'model': model_name(),
             'reasoning': setting('reasoning', 'medium'),
             'available': bool(executable()),
             'memory_enabled': bool(setting('memory_vault', '')),

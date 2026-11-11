@@ -1,10 +1,17 @@
-/* The startup intro: the OBBY STUDIO ident, once per page load, muted.
-   Every visit, once a day (a still of the final logo after the first) or
-   never, from the setting in the reading window's foot. Reduced motion gets
-   the still. It's a modal on top of everything, the first-run notice
-   included, and never holds anything up: the notice and the player start
-   underneath it as if it weren't there. The video isn't cached by the
-   service worker; it's a one-off. */
+/* The startup intro: the OBBY STUDIO logo building itself and handing its
+   ring to Defalt's record, once per page load, muted. Every visit, once a
+   day (a still of the Defalt logo after the first) or never, from the
+   setting in the reading window's foot. Reduced motion gets the still. It's
+   a modal on top of everything, the first-run notice included, and never
+   holds anything up: the notice and the player start underneath it as if it
+   weren't there. The video isn't cached by the service worker; it's a
+   one-off.
+
+   The video opens on the intro's plain ground and fades itself back to it,
+   so there's nothing to see in its first or last frame. The still is the
+   poster, which tools/build-splash.py cuts from the frame with the logo on
+   it, and it's only put up when the still is what's wanted: over the whole
+   video it would show the ending before the start. */
 (() => {
   "use strict";
   const dialog = document.getElementById("intro");
@@ -16,9 +23,12 @@
   const MODE = "defalt.intro.mode";
   const DAY = "defalt.intro.day";
   const MODES = ["every", "daily", "off"];
-  const STILL_MS = 1000;      // the final logo, on later visits the same day
-  const REDUCED_MS = 800;     // the final logo, with reduced motion
-  const LONGEST_MS = 9000;    // a video that never ends still ends
+  const STILL_MS = 1000;      // the logo, on later visits the same day
+  const REDUCED_MS = 800;     // the logo, with reduced motion
+  // A video that never ends still ends: its 7.8 seconds and a few more to
+  // get it loaded and started. The video's own "ended" is what normally
+  // closes it, after its last frame.
+  const LONGEST_MS = 11000;
   const FADE_MS = 260;
 
   function get(key) { try { return localStorage.getItem(key); } catch { return null; } }
@@ -80,13 +90,13 @@
 
   function still(ms) {
     video.removeAttribute("src");
+    video.poster = dialog.dataset.poster || "";
     timer = setTimeout(finish, ms);
   }
 
   function start() {
     const chosen = plan();
     if (chosen === "skip") return chosen;
-    video.poster = dialog.dataset.poster || "";
     video.muted = true;
     video.playsInline = true;
     dialog.showModal();

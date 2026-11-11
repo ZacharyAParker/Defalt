@@ -86,9 +86,11 @@ class SmartCuePlanner(unittest.TestCase):
         self.assertGreaterEqual(50 + choice.out_duration - choice.plan.overlap, 165)
         self.assertLessEqual(choice.plan.overlap, 5)
 
-    def test_two_singing_tracks_choose_a_shorter_cut(self):
+    def test_two_singing_tracks_choose_a_cut(self):
         choice = self.refine(self.track(self.profile(vocal=1)), self.track(self.profile(vocal=1)))
-        self.assertEqual(choice.plan.preset, "slam")
+        # A cut, or a fade shorter than the planned eight seconds, so the two
+        # singers are together as briefly as the candidates allow.
+        self.assertIn(choice.plan.preset, ("slam", "fade"))
         self.assertLess(choice.plan.overlap, 8)
 
     def test_candidate_search_never_expands_an_existing_drift_limit(self):
@@ -118,7 +120,16 @@ class SmartCuePlanner(unittest.TestCase):
             schedule = timeline.Schedule()
             schedule.add_music("a", a)
             incoming = schedule.add_music("b", b)
-            self.assertGreaterEqual(incoming.meta["transition"]["overlap"], 3, preset)
+            transition = incoming.meta["transition"]
+            if preset == "auto":
+                # Two singers from the first second: no blend can avoid the
+                # clash, so the join is a cut or a quick fade, short enough
+                # that the two are barely heard together.
+                self.assertIn(transition["base"], ("slam", "fade"), preset)
+                self.assertLessEqual(transition["overlap"], 1.0, preset)
+            else:
+                # A forced style is still honoured at a real length.
+                self.assertGreaterEqual(transition["overlap"], 3, preset)
 
     def test_unknown_vocals_do_not_invent_a_clash_or_skip_an_opening(self):
         choice = self.refine(self.track(self.profile()), self.track(self.profile(entries=(4,))))

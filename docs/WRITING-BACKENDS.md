@@ -1,6 +1,6 @@
 # Writing backends
 
-Defalt can write host dialogue and process text requests through OpenRouter or a locally signed-in Codex CLI. Speech synthesis has its own provider settings. Changing the writer does not change voices, deck playback, or transition timing.
+Defalt can write host dialogue and process text requests through OpenRouter, a locally signed-in Codex CLI, or a locally signed-in Claude Code. Speech synthesis has its own provider settings. Changing the writer does not change voices, deck playback, or transition timing.
 
 OpenRouter remains the default for new installations. To use Codex, install its CLI, sign in, and add this block to the private `config/overrides.yaml`:
 
@@ -14,6 +14,20 @@ director_backend:
   memory_vault: ""
   executable: ""
 ```
+
+To use Claude Code on your own Claude subscription instead, install it, run `claude` once to sign in, and set:
+
+```yaml
+director_backend:
+  provider: claude
+  claude_model: opus        # or sonnet / haiku
+  reasoning: medium
+  utility_reasoning: low
+  timeout_seconds: 25
+  claude_executable: ""    # only if claude can't be found automatically
+```
+
+Claude Code runs in print mode with no tools, settings, hooks, plugins or MCP servers loaded, and it only returns the station's answer shape. An `ANTHROPIC_API_KEY` in the radio's environment is not passed through, so it always uses your sign-in. Dialogue sessions are saved as normal Claude Code conversations under the radio's cache folder so they can be resumed; utility tasks are not saved.
 
 Set `memory_vault` to the optional curated vault path. Set `executable` only if the CLI cannot be found automatically. Both settings may contain local paths and should stay out of shared configuration. Keep the existing OpenRouter key configured for fallback. Set `provider: openrouter` to return to that writer.
 

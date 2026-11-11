@@ -217,7 +217,9 @@ def brake(ctx: Context) -> dict:
     """Tape-stop the outgoing record over a beat or two; the next slams in on
     the one."""
     b, one, rate = ctx.b, ctx.one, ctx.out_rate
-    length = 2 * b if b < 0.5 else b
+    # A full bar: a one-beat stop reads as a stutter, not a turntable
+    # powering down.
+    length = 4 * b
     start = one - length
     curve = [(start + length * x, rate * (1 - x) ** 1.6) for x in (0, 0.25, 0.5, 0.75)]
     out = {"rate": _points(*curve, (one, 0.0), (ctx.overlap - 0.01, 0.0), (ctx.overlap, rate)),
@@ -385,10 +387,10 @@ TECHNIQUES: dict[str, Technique] = {t.name: t for t in (
               loop_roll, needs_grid=True, needs_tempo=True, lead_beats=8, weight=0.9),
     Technique("brake", "Brake",
               "a brake: the old record slowed to a stop like a turntable powering down",
-              brake, needs_tempo=True, lead_beats=2, weight=0.7),
+              brake, needs_tempo=True, lead_beats=4, weight=0.25),
     Technique("spinback", "Spinback",
               "a spinback: the old record was spun backwards out of the mix",
-              spinback, needs_tempo=True, lead_beats=1.5, weight=0.45),
+              spinback, needs_tempo=True, lead_beats=1.5, weight=0.15),
     Technique("echo_freeze", "Echo freeze",
               "an echo freeze: the old record's last beat froze and was filtered away",
               echo_freeze, needs_tempo=True, stacks=True, lead_beats=1.5, min_tail_beats=2.5, weight=0.8),
@@ -456,6 +458,12 @@ def eligible(name: str, ctx: Context) -> str:
         return "not enough of the outgoing record before the drop"
     if technique.min_tail_beats and ctx.overlap - ctx.one < technique.min_tail_beats * b:
         return "overlap too short"
+    if name in CUTS_ON_THE_ONE and not ctx.grid:
+        # Without a locked grid `one` is just the start of the overlap, so
+        # the stop, roll or gate lands wherever that is: off the beat.
+        return "needs the incoming downbeat"
+    if name in MANGLES_OUTGOING and ctx.out_vocal is not None and ctx.out_vocal > 0.3:
+        return "the outgoing record is mid-vocal"
     if name == "acapella_intro" and ctx.harmonic is not True:
         return "a vocal over another record needs compatible keys"
     if name == "acapella_intro" and ctx.in_vocal is not None and ctx.in_vocal < 0.2:
@@ -468,6 +476,13 @@ def eligible(name: str, ctx: Context) -> str:
             return "both records have vocals here"
     return ""
 
+
+# Moves that end the outgoing record on a hit and slam the new one in: they
+# only sound meant when that hit is the incoming downbeat.
+CUTS_ON_THE_ONE = ("brake", "spinback", "loop_roll", "silence_punch", "drop_swap")
+# Moves that stop, reverse, stutter or gate the outgoing record. Over a
+# singer that is a lyric chopped mid-word.
+MANGLES_OUTGOING = ("brake", "spinback", "loop_roll", "silence_punch")
 
 ELECTRONIC = ("house", "techno", "edm", "electronic", "dance", "trance", "dubstep", "drum and bass",
               "dnb", "garage", "hip hop", "hip-hop", "rap", "trap", "breakbeat", "electro", "disco")
@@ -489,7 +504,7 @@ def suitability(name: str, ctx: Context) -> float:
                    "filter_ride": 1.1, "loop_roll": 0.4, "silence_punch": 0.5,
                    "drop_swap": 0.6}.get(name, 1.0)
     if ctx.tempo_known and not ctx.matched:      # a big tempo gap: cut, don't blend
-        weight *= {"brake": 2.0, "spinback": 1.6, "echo_out": 1.8, "drop_swap": 1.5,
+        weight *= {"brake": 1.1, "spinback": 1.1, "echo_out": 1.8, "drop_swap": 1.3,
                    "echo_freeze": 1.5, "reverb_wash": 1.2}.get(name, 1.0)
     if ctx.harmonic is False:                    # clashing keys: short tails, clean cuts
         weight *= {"echo_out": 0.7, "echo_freeze": 0.6, "reverb_wash": 0.7, "filter_ride": 0.6,
@@ -506,6 +521,10 @@ def suitability(name: str, ctx: Context) -> float:
         weight *= {"echo_out": 0.9, "reverb_wash": 1.0, "filter_ride": 0.8}.get(name, 0.55)
     if ctx.danceability is not None and ctx.danceability > 0.6 and name in ("loop_roll", "drop_swap"):
         weight *= 1.2
+    if ctx.danceability is not None and ctx.danceability < 0.5 and name in ("brake", "spinback"):
+        # Genre tags are mostly missing; how danceable the record measures
+        # is the evidence that is actually there. A ballad never gets one.
+        weight = 0.0
     if technique.stacks and (ctx.out_vocal is None or ctx.in_vocal is None):
         weight *= 0.7          # unknown vocals: prefer moves that never overlap
     return max(0.0, weight)

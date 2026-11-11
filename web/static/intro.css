@@ -1,5 +1,6 @@
-/* The startup intro: the OBBY STUDIO ident over the ident's own cool dark,
-   not the page's warm black, so the video's edges disappear into it. */
+/* The startup intro over its own cool dark, not the page's warm black. The
+   video opens and closes on exactly this colour, so its edges and its ends
+   disappear into it. */
 .intro {
   --intro-ground: #14181e;
   --intro-text: #9aa8bc;   /* 7.3:1 on the ground */

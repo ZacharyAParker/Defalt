@@ -32,6 +32,9 @@ class ReleaseInformation(unittest.TestCase):
             self.assertIn(f'Defalt v{data["version"]}', page.get_data(as_text=True))
             self.assertNotIn('{{APP_VERSION}}', page.get_data(as_text=True))
             self.assertNotIn('{{TERMS_VERSION}}', page.get_data(as_text=True))
+            self.assertNotIn('{{SPLASH_REV}}', page.get_data(as_text=True))
+            self.assertRegex(page.get_data(as_text=True),
+                             rf'/static/splash/intro\.mp4\?v={re.escape(data["version"])}-[0-9a-f]{{8}}"')
             self.assertIn(f'data-terms-version="{data["terms_version"]}"', page.get_data(as_text=True))
             self.assertEqual(page.headers['Cache-Control'], 'no-store')
 

@@ -26,15 +26,41 @@ pub fn background(program: impl AsRef<OsStr>) -> Command {
     command
 }
 
+/// A link fit to hand to the shell: http(s) only, and nothing a command line
+/// could read as syntax or split on. Links come from article fetches that
+/// follow redirects, so they are not ours to trust.
+pub fn safe_url(url: &str) -> Option<&str> {
+    let url = url.trim();
+    let lower = url.get(..8).unwrap_or(url).to_ascii_lowercase();
+    if !(lower.starts_with("https://") || lower.starts_with("http://")) {
+        return None;
+    }
+    if url.chars().any(|c| c.is_whitespace() || c.is_control() || c == '"') {
+        return None;
+    }
+    Some(url)
+}
+
 /// Open a page in the browser. The browser is not ours: it leaves the
 /// console's job, or closing the console would close it too.
+///
+/// It goes through `url.dll`, never `cmd /C start`: cmd reads `&`, `|`, `^`
+/// and `%VAR%` in the link as its own syntax, which cut ordinary query
+/// strings short and let a crafted link run a command.
 pub fn open_url(url: &str) {
+    let Some(url) = safe_url(url) else {
+        crate::logfile::log!("process: refused to open a link that is not a plain http(s) URL");
+        return;
+    };
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         use windows_sys::Win32::System::Threading::{CREATE_BREAKAWAY_FROM_JOB, CREATE_NO_WINDOW};
         let spawn = |flags: u32| {
-            Command::new("cmd").args(["/C", "start", "", url]).creation_flags(flags).spawn()
+            Command::new("rundll32")
+                .args(["url.dll,FileProtocolHandler", url])
+                .creation_flags(flags)
+                .spawn()
         };
         // Breaking away is refused inside a job that does not allow it (a
         // console started from some other tool's job); then it is only
@@ -192,5 +218,25 @@ mod tests {
         let began = std::time::Instant::now();
         let _ = child.wait();
         assert!(began.elapsed().as_secs() < 10);
+    }
+}
+
+#[cfg(test)]
+mod url_tests {
+    use super::safe_url;
+
+    #[test]
+    fn plain_links_pass_whole() {
+        let link = "https://example.com/a?b=1&utm_source=x&c=%20";
+        assert_eq!(safe_url(link), Some(link));
+        assert_eq!(safe_url("HTTP://Example.com"), Some("HTTP://Example.com"));
+    }
+
+    #[test]
+    fn anything_else_is_refused() {
+        for bad in ["file:///C:/Windows/system32/calc.exe", "javascript:alert(1)",
+                    "https://a.com/\"&calc", "https://a.com/x y", "https://a.com/\nx", "https://a.com/\tx", "calc.exe", ""] {
+            assert_eq!(safe_url(bad), None, "{bad}");
+        }
     }
 }

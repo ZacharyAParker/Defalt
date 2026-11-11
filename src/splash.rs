@@ -1,5 +1,7 @@
-//! The startup ident: the OBBY STUDIO logo in a small borderless window,
-//! then the console, maximized, coming up out of the ident's background.
+//! The startup ident in a small borderless window: the OBBY STUDIO logo
+//! builds itself, its ring lifts off and becomes the ring on Defalt's
+//! record, and DEFALT lights up under it. Then the console, maximized,
+//! coming up out of the ident's background.
 //!
 //! Two windows, not one that resizes. The console's window is made at its
 //! full size from the start and kept cloaked (drawn, but not shown) while
@@ -17,7 +19,13 @@
 //!
 //! The frames come from tools/build-splash.py: still WebP frames rather than
 //! a video, because the image crate can read those and nothing here wants a
-//! video decoder for six seconds of logo.
+//! video decoder for eight seconds of logos.
+//!
+//! The ident opens on its plain background and fades itself back to it, so
+//! its last frame has nothing on it. The frame with the finished Defalt logo
+//! is numbered in the blob (`Frames::logo`), and that's the one shown
+//! whenever a still is wanted: a flash, reduced motion, a wait for the
+//! console.
 
 use std::path::Path;
 
@@ -27,18 +35,19 @@ pub const FRAMES: &[u8] = include_bytes!("../assets/splash/frames.bin");
 pub const SOUND: &[u8] = include_bytes!("../assets/splash/sound.wav");
 
 /// The window the ident plays in, in points. The picture is 5:4-ish
-/// (1344x1080 once the pillarbox is cropped off) and its frames are 1.5x
-/// this, so a 150% screen gets them pixel for pixel.
+/// (1200x964) and its frames are 1.5x this, so a 150% screen gets them
+/// pixel for pixel.
 pub const WIDTH: f32 = 800.0;
 
-/// The ident's own background, sampled from its edges. Both windows are this
-/// colour at the moment one replaces the other.
+/// The ident's own background: it opens on it and fades itself back to it.
+/// Both windows are this colour at the moment one replaces the other.
 pub const BACKGROUND: [u8; 3] = [20, 24, 30];
 
-/// How long the final logo shows on a launch that doesn't get the whole
-/// ident (once a day, after the first; or reduced motion).
+/// How long the logo shows on a launch that doesn't get the whole ident
+/// (once a day, after the first; or reduced motion).
 pub const FLASH: f64 = 1.0;
-/// The ident fading into its background before the console comes up.
+/// The picture fading into the background before the console comes up, when
+/// the ident didn't get to fade itself out: a flash, a skip, or a wait.
 pub const OUTRO: f64 = 0.18;
 /// The sound fading when the ident is skipped.
 pub const SKIP_FADE: f64 = 0.15;
@@ -50,7 +59,7 @@ pub const GROW_WAIT: f64 = 0.8;
 pub const SETTLE_FRAMES: u32 = 2;
 /// The cover lifting off the console.
 pub const REVEAL: f64 = 0.25;
-/// How long the final logo waits for the console to be ready before it goes
+/// How long the logo waits for the console to be ready before it goes
 /// anyway. Nothing on the list takes this long unless something is wrong,
 /// and a wrong thing is better seen in the console than behind a logo.
 pub const HOLD_MAX: f64 = 4.0;
@@ -146,7 +155,7 @@ pub fn reduced_motion(root: &Path) -> bool {
 pub enum Plan {
     /// The whole ident, with its sound if that's on.
     Full,
-    /// The final logo, still, for about a second. Silent.
+    /// The logo, still, for about a second. Silent.
     Flash,
     /// Straight to the console.
     Skip,
@@ -175,8 +184,14 @@ pub struct Frames {
     pub width: u32,
     pub height: u32,
     pub fps: f64,
+    /// The frame with the finished logo on it: the still. Not the last
+    /// frame, which is the plain background the ident fades back to.
+    pub logo: usize,
     index: Vec<(usize, usize)>,
 }
+
+/// The blob's header: its four letters, then seven words. The index follows.
+const HEADER: usize = 32;
 
 impl Frames {
     pub fn parse(blob: &'static [u8]) -> Result<Frames, String> {
@@ -188,24 +203,29 @@ impl Frames {
         if blob.get(..4) != Some(b"DSPL".as_slice()) {
             return Err("not a splash blob".into());
         }
-        if word(4)? != 1 {
+        if word(4)? != 2 {
             return Err(format!("splash blob version {}", word(4)?));
         }
         let count = word(8)? as usize;
         let (width, height) = (word(12)?, word(16)?);
         let (num, den) = (word(20)?, word(24)?);
+        let logo = word(28)? as usize;
         if count == 0 || width == 0 || height == 0 || num == 0 || den == 0 {
             return Err("the splash blob is empty".into());
         }
+        if logo >= count {
+            return Err(format!("the splash blob's logo is frame {logo} of {count}"));
+        }
         let mut index = Vec::with_capacity(count);
         for n in 0..count {
-            let (offset, length) = (word(28 + 8 * n)? as usize, word(32 + 8 * n)? as usize);
+            let at = HEADER + 8 * n;
+            let (offset, length) = (word(at)? as usize, word(at + 4)? as usize);
             if offset.checked_add(length).is_none_or(|end| end > blob.len()) {
                 return Err(format!("splash frame {n} runs past the end"));
             }
             index.push((offset, length));
         }
-        Ok(Frames { blob, count, width, height, fps: num as f64 / den as f64, index })
+        Ok(Frames { blob, count, width, height, fps: num as f64 / den as f64, logo, index })
     }
 
     pub fn bytes(&self, n: usize) -> &'static [u8] {
@@ -219,6 +239,11 @@ impl Frames {
 
     pub fn last(&self) -> usize {
         self.count - 1
+    }
+
+    /// How far into the ident its logo is up: the middle of that frame.
+    pub fn logo_at(&self) -> f64 {
+        (self.logo as f64 + 0.5) / self.fps
     }
 
     /// The frame showing `seconds` into the ident.
@@ -320,12 +345,12 @@ pub fn engine_seconds(now: u64, start: u64, rate: u32) -> f64 {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Phase {
-    /// The ident playing (or the final logo, for a flash).
+    /// The ident playing (or the logo, for a flash).
     Intro,
-    /// Finished, and waiting on the console: the final logo and a line
-    /// saying what it's waiting for.
+    /// Waiting on the console: the logo and a line saying what it's
+    /// waiting for.
     Hold,
-    /// The ident fading into its background.
+    /// The picture fading into the background.
     Outro,
     /// The console uncloaked under the splash, both all background.
     Grow,
@@ -350,6 +375,10 @@ pub struct Machine {
     since: f64,
     /// Seconds the intro runs: the ident, or a flash.
     length: f64,
+    /// Seconds in, the logo is up. The ident plays on past it and fades
+    /// itself out; a flash is the logo all the way, so for a flash this is
+    /// `length`.
+    logo: f64,
     grown_frames: u32,
     pub skipped: bool,
     /// Held on the moment it was skipped or finished, so a fade is a fade of
@@ -358,18 +387,25 @@ pub struct Machine {
 }
 
 impl Machine {
-    pub fn new(length: f64, now: f64) -> Machine {
-        Machine { phase: Phase::Intro, since: now, length, grown_frames: 0, skipped: false, frozen: None }
+    /// The whole ident: `length` seconds, its logo up `logo` seconds in.
+    pub fn new(length: f64, logo: f64, now: f64) -> Machine {
+        let logo = logo.min(length);
+        Machine { phase: Phase::Intro, since: now, length, logo, grown_frames: 0, skipped: false, frozen: None }
+    }
+
+    /// The logo on its own, for `length` seconds.
+    pub fn flash(length: f64, now: f64) -> Machine {
+        Machine::new(length, length, now)
+    }
+
+    /// The same intro from the top, starting now.
+    pub fn restart(&mut self, now: f64) {
+        *self = Machine::new(self.length, self.logo, now);
     }
 
     fn enter(&mut self, phase: Phase, now: f64) {
         self.phase = phase;
         self.since = now;
-    }
-
-    /// Seconds the intro runs.
-    pub fn length(&self) -> f64 {
-        self.length
     }
 
     /// Seconds in the current phase.
@@ -397,8 +433,8 @@ impl Machine {
             self.frozen.get_or_insert(played.clamp(0.0, self.length));
             self.enter(Phase::Outro, now);
         } else {
-            // Not ready: skip to the final logo and wait there.
-            self.frozen = Some(self.length);
+            // Not ready: skip to the logo and wait there.
+            self.frozen = Some(self.logo);
             self.enter(Phase::Hold, now);
         }
         actions
@@ -409,9 +445,22 @@ impl Machine {
     pub fn step(&mut self, now: f64, played: f64, ready: bool, grown: bool) -> Vec<Action> {
         let elapsed = self.elapsed(now);
         match self.phase {
+            // The console isn't ready and the logo is up: wait here. The
+            // ident's own ending is an empty window, and that's no place to
+            // wait.
+            Phase::Intro if !ready && played >= self.logo => {
+                self.frozen = Some(self.logo);
+                self.enter(Phase::Hold, now);
+            }
             Phase::Intro if played >= self.length => {
                 self.frozen = Some(self.length);
-                self.enter(if ready { Phase::Outro } else { Phase::Hold }, now);
+                if self.logo < self.length {
+                    // The ident played to its end and faded itself out:
+                    // there's nothing left on screen to fade.
+                    self.enter(Phase::Grow, now);
+                    return vec![Action::Grow];
+                }
+                self.enter(Phase::Outro, now);
             }
             Phase::Hold if ready || elapsed >= HOLD_MAX => self.enter(Phase::Outro, now),
             Phase::Outro if elapsed >= OUTRO => {
@@ -489,14 +538,26 @@ pub fn centre(size: [f32; 2], console: Option<egui::Rect>, monitor: Option<egui:
 mod tests {
     use super::*;
 
+    /// How far a decoded pixel may be from the colour it was rendered as.
+    const TOLERANCE: i32 = 4;
+
+    fn decoded(frames: &Frames, n: usize) -> image::RgbImage {
+        image::load_from_memory_with_format(frames.bytes(n), image::ImageFormat::WebP).unwrap().to_rgb8()
+    }
+
+    fn is_background(pixel: [u8; 3]) -> bool {
+        pixel.iter().zip(BACKGROUND).all(|(got, want)| (*got as i32 - want as i32).abs() <= TOLERANCE)
+    }
+
     #[test]
     fn the_blob_parses_and_has_the_whole_ident() {
         let frames = Frames::parse(FRAMES).unwrap();
-        assert_eq!(frames.count, 145);
+        assert_eq!(frames.count, 234);
         assert_eq!((frames.width, frames.height), (1200, 964));
-        assert_eq!(frames.fps, 24.0);
-        assert!((frames.seconds() - 6.0417).abs() < 0.001);
-        for n in [0, 72, frames.last()] {
+        assert_eq!(frames.fps, 30.0);
+        assert!((frames.seconds() - 7.8).abs() < 0.001);
+        assert_eq!(frames.last(), 233);
+        for n in [0, 117, frames.logo, frames.last()] {
             let bytes = frames.bytes(n);
             assert_eq!(&bytes[..4], b"RIFF");
             assert_eq!(&bytes[8..12], b"WEBP");
@@ -507,15 +568,55 @@ mod tests {
     }
 
     #[test]
+    fn the_blob_and_the_manifest_tell_the_same_story() {
+        // tools/build-splash.py writes both. The console only reads the
+        // blob, so this is what keeps the logo frame it holds on the one
+        // the tool was told about (and the browser's poster was cut from).
+        let manifest: serde_json::Value =
+            serde_json::from_str(include_str!("../assets/splash/manifest.json")).unwrap();
+        let frames = Frames::parse(FRAMES).unwrap();
+        assert_eq!(manifest["recipe"]["logo_frame"].as_u64(), Some(frames.logo as u64));
+        assert_eq!(manifest["frames"].as_u64(), Some(frames.count as u64));
+        assert_eq!(manifest["native_size"], serde_json::json!([frames.width, frames.height]));
+        let fps = manifest["fps"][0].as_f64().unwrap() / manifest["fps"][1].as_f64().unwrap();
+        assert_eq!(fps, frames.fps);
+        assert_eq!(manifest["outputs"]["frames"]["bytes"].as_u64(), Some(FRAMES.len() as u64));
+    }
+
+    #[test]
     fn a_frame_decodes_to_its_size() {
         let frames = Frames::parse(FRAMES).unwrap();
-        let image = image::load_from_memory_with_format(frames.bytes(frames.last()), image::ImageFormat::WebP)
-            .unwrap();
+        let image = decoded(&frames, frames.logo);
         assert_eq!((image.width(), image.height()), (1200, 964));
         // The corner is the ident's background.
-        let corner = image.to_rgb8().get_pixel(4, 4).0;
-        for (got, want) in corner.iter().zip(BACKGROUND) {
-            assert!((*got as i32 - want as i32).abs() <= 4, "{corner:?}");
+        let corner = image.get_pixel(4, 4).0;
+        assert!(is_background(corner), "{corner:?}");
+    }
+
+    #[test]
+    fn the_logo_frame_has_the_logo_on_it() {
+        let frames = Frames::parse(FRAMES).unwrap();
+        assert_eq!(frames.logo, 206);
+        assert!(frames.logo < frames.last(), "the ident plays on past its logo");
+        assert_eq!(frames.at(frames.logo_at()), frames.logo);
+        let image = decoded(&frames, frames.logo);
+        // Not a plain frame: a good share of it is something other than
+        // background, and some of that is the lit lettering.
+        let drawn = image.pixels().filter(|pixel| !is_background(pixel.0)).count();
+        let total = (image.width() * image.height()) as usize;
+        assert!(drawn > total / 20, "{drawn} of {total} pixels drawn");
+        assert!(image.pixels().any(|pixel| pixel.0.iter().all(|v| *v > 200)), "nothing bright on it");
+    }
+
+    #[test]
+    fn it_opens_and_closes_on_plain_background() {
+        // The window opens on the first frame and hands over to the console
+        // on the last: both have to be the one colour, all over.
+        let frames = Frames::parse(FRAMES).unwrap();
+        for n in [0, frames.last()] {
+            let image = decoded(&frames, n);
+            let off = image.pixels().find(|pixel| !is_background(pixel.0));
+            assert!(off.is_none(), "frame {n} has {:?} on it", off.map(|pixel| pixel.0));
         }
     }
 
@@ -530,24 +631,39 @@ mod tests {
     #[test]
     fn a_damaged_blob_is_refused() {
         assert!(Frames::parse(b"nope").is_err());
-        let short: &'static [u8] = &FRAMES[..40];
+        let short: &'static [u8] = &FRAMES[..HEADER + 8];
         assert!(Frames::parse(short).is_err());
-        let mut lying = FRAMES[..28 + 8].to_vec();
+        // One frame, which it says is longer than the blob.
+        let mut lying = FRAMES[..HEADER + 8].to_vec();
         lying[8..12].copy_from_slice(&1u32.to_le_bytes());
         lying[28..32].copy_from_slice(&0u32.to_le_bytes());
-        lying[32..36].copy_from_slice(&1_000u32.to_le_bytes());
+        lying[HEADER..HEADER + 4].copy_from_slice(&0u32.to_le_bytes());
+        lying[HEADER + 4..HEADER + 8].copy_from_slice(&1_000u32.to_le_bytes());
         let lying: &'static [u8] = Box::leak(lying.into_boxed_slice());
-        assert!(Frames::parse(lying).is_err());
+        assert_eq!(Frames::parse(lying).err().as_deref(), Some("splash frame 0 runs past the end"));
+        // A logo that isn't one of its frames.
+        let mut lost = FRAMES[..HEADER + 8].to_vec();
+        lost[8..12].copy_from_slice(&1u32.to_le_bytes());
+        lost[28..32].copy_from_slice(&1u32.to_le_bytes());
+        lost[HEADER..HEADER + 4].copy_from_slice(&0u32.to_le_bytes());
+        lost[HEADER + 4..HEADER + 8].copy_from_slice(&8u32.to_le_bytes());
+        let lost: &'static [u8] = Box::leak(lost.into_boxed_slice());
+        assert_eq!(Frames::parse(lost).err().as_deref(), Some("the splash blob's logo is frame 1 of 1"));
+        // Last release's blob, which had no logo in it.
+        let mut old = FRAMES[..HEADER + 8].to_vec();
+        old[4..8].copy_from_slice(&1u32.to_le_bytes());
+        let old: &'static [u8] = Box::leak(old.into_boxed_slice());
+        assert_eq!(Frames::parse(old).err().as_deref(), Some("splash blob version 1"));
     }
 
     #[test]
     fn frames_follow_the_clock() {
-        assert_eq!(frame_index(-0.5, 24.0, 145), 0);
-        assert_eq!(frame_index(0.0, 24.0, 145), 0);
-        assert_eq!(frame_index(0.0417, 24.0, 145), 1);
-        assert_eq!(frame_index(3.0, 24.0, 145), 72);
-        assert_eq!(frame_index(60.0, 24.0, 145), 144);
-        assert_eq!(frame_index(f64::NAN, 24.0, 145), 0);
+        assert_eq!(frame_index(-0.5, 30.0, 234), 0);
+        assert_eq!(frame_index(0.0, 30.0, 234), 0);
+        assert_eq!(frame_index(0.0334, 30.0, 234), 1);
+        assert_eq!(frame_index(3.0, 30.0, 234), 90);
+        assert_eq!(frame_index(60.0, 30.0, 234), 233);
+        assert_eq!(frame_index(f64::NAN, 30.0, 234), 0);
         assert_eq!(engine_seconds(48_000 + 24_000, 48_000, 48_000), 0.5);
         assert!(engine_seconds(47_000, 48_000, 48_000) < 0.0, "before the start is before the start");
         assert_eq!(engine_seconds(10, 0, 0), 0.0);
@@ -598,34 +714,93 @@ mod tests {
         log
     }
 
+    /// The ident's own numbers: 7.8 s, the logo up 6.88 s in.
+    const LENGTH: f64 = 7.8;
+    const LOGO: f64 = 6.88;
+
     #[test]
     fn plays_then_grows_then_reveals() {
-        let mut machine = Machine::new(6.04, 0.0);
+        let mut machine = Machine::new(LENGTH, LOGO, 0.0);
         assert!(machine.owns_window() && machine.splash_window());
         let log = run(&mut machine, 1.0, 0.0, None);
         let grow = log.iter().find(|(a, _)| *a == Action::Grow).unwrap().1;
-        assert!((grow - (6.04 + OUTRO)).abs() < 0.05, "grew at {grow}");
+        assert!((grow - LENGTH).abs() < 0.02, "grew at {grow}");
         let finish = log.iter().find(|(a, _)| *a == Action::Finish).unwrap().1;
         assert!(finish - grow < SETTLE_FRAMES as f64 / 60.0 + REVEAL + 0.1, "{finish}");
         assert!(!log.iter().any(|(a, _)| *a == Action::FadeSound), "nothing was skipped");
     }
 
     #[test]
-    fn a_slow_start_holds_on_the_final_logo() {
-        let mut machine = Machine::new(6.04, 0.0);
+    fn the_ident_plays_to_its_own_end_and_hands_straight_over() {
+        // It fades itself to background, so there's no second fade after it
+        // and no wait on an empty window: the console is asked for on the
+        // step the last frame is done.
+        let mut machine = Machine::new(LENGTH, LOGO, 0.0);
         let mut now = 0.0;
-        while now < 7.0 {
+        while now < LENGTH - 0.01 {
+            assert!(machine.step(now, now, true, false).is_empty());
+            assert_eq!(machine.phase, Phase::Intro, "still playing at {now}");
+            assert_eq!(machine.position(now), now, "and not held anywhere");
+            now += 1.0 / 60.0;
+        }
+        assert_eq!(machine.step(LENGTH, LENGTH, true, false), vec![Action::Grow]);
+        assert_eq!(machine.phase, Phase::Grow);
+        assert_eq!(machine.position(LENGTH + 1.0), LENGTH, "on its last frame");
+        assert_eq!(machine.picture(LENGTH), 0.0);
+
+        // A console that was slow but made it before the logo doesn't
+        // change any of that.
+        let mut machine = Machine::new(LENGTH, LOGO, 0.0);
+        let log = run(&mut machine, LOGO - 0.1, 0.0, None);
+        let grow = log.iter().find(|(a, _)| *a == Action::Grow).unwrap().1;
+        assert!((grow - LENGTH).abs() < 0.02, "grew at {grow}");
+    }
+
+    #[test]
+    fn a_flash_fades_its_logo_out() {
+        // The logo on its own has nothing to fade it but the outro.
+        let mut machine = Machine::flash(FLASH, 0.0);
+        machine.step(FLASH, FLASH, true, false);
+        assert_eq!(machine.phase, Phase::Outro);
+        let mut machine = Machine::flash(FLASH, 0.0);
+        let log = run(&mut machine, 0.0, 0.0, None);
+        let grow = log.iter().find(|(a, _)| *a == Action::Grow).unwrap().1;
+        assert!((grow - (FLASH + OUTRO)).abs() < 0.05, "grew at {grow}");
+        // Not ready after its second: it stays up.
+        let mut machine = Machine::flash(FLASH, 0.0);
+        machine.step(FLASH, FLASH, false, false);
+        assert_eq!(machine.phase, Phase::Hold);
+        assert_eq!(machine.picture(FLASH + 0.5), 1.0);
+    }
+
+    #[test]
+    fn a_slow_start_holds_on_the_logo() {
+        let mut machine = Machine::new(LENGTH, LOGO, 0.0);
+        let mut now = 0.0;
+        while now < LOGO + 0.05 {
+            machine.step(now, now, false, false);
+            now += 1.0 / 60.0;
+        }
+        // It stopped at the logo rather than playing on to the empty frames
+        // after it and waiting there.
+        assert_eq!(machine.phase, Phase::Hold);
+        while now < LENGTH + 1.0 {
             machine.step(now, now, false, false);
             now += 1.0 / 60.0;
         }
         assert_eq!(machine.phase, Phase::Hold);
-        assert_eq!(machine.position(now), 6.04, "held on the last frame");
+        assert_eq!(machine.position(now), LOGO, "held on the logo");
         assert_eq!(machine.picture(now), 1.0);
         machine.step(now, now, true, false);
         assert_eq!(machine.phase, Phase::Outro);
+        assert_eq!(machine.position(now), LOGO, "and it's the logo that fades");
 
         // And never for ever.
-        let mut machine = Machine::new(1.0, 0.0);
+        let mut machine = Machine::new(LENGTH, LOGO, 0.0);
+        let log = run(&mut machine, f64::INFINITY, 0.0, None);
+        let grow = log.iter().find(|(a, _)| *a == Action::Grow).unwrap().1;
+        assert!((grow - (LOGO + HOLD_MAX + OUTRO)).abs() < 0.05, "{grow}");
+        let mut machine = Machine::flash(1.0, 0.0);
         let log = run(&mut machine, f64::INFINITY, 0.0, None);
         let grow = log.iter().find(|(a, _)| *a == Action::Grow).unwrap().1;
         assert!((grow - (1.0 + HOLD_MAX + OUTRO)).abs() < 0.05, "{grow}");
@@ -633,7 +808,7 @@ mod tests {
 
     #[test]
     fn a_skip_fades_the_sound_and_goes() {
-        let mut machine = Machine::new(6.04, 0.0);
+        let mut machine = Machine::new(LENGTH, LOGO, 0.0);
         let log = run(&mut machine, 0.0, 0.0, Some(2.0));
         assert_eq!(log[0].0, Action::FadeSound);
         assert!((log[0].1 - 2.0).abs() < 0.02);
@@ -641,12 +816,12 @@ mod tests {
         assert!((grow - (2.0 + OUTRO)).abs() < 0.05, "{grow}");
         assert!(machine.skipped);
 
-        // Skipped while the console is still loading: the final logo, then
-        // on as soon as it's ready.
-        let mut machine = Machine::new(6.04, 0.0);
+        // Skipped while the console is still loading: the logo, then on as
+        // soon as it's ready.
+        let mut machine = Machine::new(LENGTH, LOGO, 0.0);
         assert_eq!(machine.skip(1.0, 1.0, false), vec![Action::FadeSound]);
         assert_eq!(machine.phase, Phase::Hold);
-        assert_eq!(machine.position(1.0), 6.04);
+        assert_eq!(machine.position(1.0), LOGO, "the logo, not the empty frame the ident ends on");
         assert!(machine.skip(1.5, 1.5, false).is_empty(), "the sound fades once");
         machine.step(2.0, 2.0, true, false);
         assert_eq!(machine.phase, Phase::Outro);
@@ -656,12 +831,12 @@ mod tests {
 
     #[test]
     fn the_cover_waits_for_the_window_to_grow() {
-        let mut machine = Machine::new(0.5, 0.0);
+        let mut machine = Machine::flash(0.5, 0.0);
         let log = run(&mut machine, 0.0, 1.2, None);
         let finish = log.iter().find(|(a, _)| *a == Action::Finish).unwrap().1;
         assert!(finish >= 1.2 + REVEAL - 0.02, "revealed before the window grew: {finish}");
         // A window that never says it grew is revealed anyway.
-        let mut machine = Machine::new(0.5, 0.0);
+        let mut machine = Machine::flash(0.5, 0.0);
         let log = run(&mut machine, 0.0, f64::INFINITY, None);
         let grow = log.iter().find(|(a, _)| *a == Action::Grow).unwrap().1;
         let finish = log.iter().find(|(a, _)| *a == Action::Finish).unwrap().1;
@@ -670,7 +845,7 @@ mod tests {
 
     #[test]
     fn the_fades_run_the_right_way() {
-        let mut machine = Machine::new(1.0, 0.0);
+        let mut machine = Machine::flash(1.0, 0.0);
         assert_eq!((machine.picture(0.5), machine.cover(0.5)), (1.0, 1.0));
         machine.step(1.0, 1.0, true, false);
         assert_eq!(machine.phase, Phase::Outro);

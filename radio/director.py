@@ -360,6 +360,15 @@ class Station:
             # Songs since the last host break by the time this pick airs, so
             # the energy arc can build across a run of music.
             since_break = getattr(self, "_songs_since_break", 0) + len(queued)
+            # Whether a break will sit just before this pick, and if not how
+            # many songs later it comes. Breaks among the queued songs reset
+            # the count; their gaps are not rolled yet, so assume this one's.
+            gap = getattr(self, "_break_after", 3)
+            count = getattr(self, "_songs_since_break", 0)
+            for _ in queued:
+                count = 0 if count >= gap else count
+                count += 1
+            to_break = 0 if count >= gap else gap - count
         exclude.discard(None)
         context = []
         # Recent history and the live schedule overlap. Keep the latest
@@ -372,7 +381,8 @@ class Station:
         context = context[-int(max(2, min(30, config.station.get(
             "selection.compatibility.history_size", 10)))):]
         return (taste.pick_next(exclude, previous=context[-1] if context else None,
-                                history=context, break_position=since_break), False)
+                                history=context, break_position=since_break,
+                                songs_to_break=to_break), False)
 
     def _lineup_target(self) -> int:
         return max(1, int(config.station.get("selection.prefetch_depth", 5) or 5))
@@ -854,6 +864,11 @@ class Station:
         # A dry break needs its airtime reserved before the music is placed.
         if placement == "dry" and previous is not None and speech_length > 0:
             self.schedule.cursor = previous.end_at + 0.6 + speech_length + 0.6
+        elif previous is None and speech_length > 0:
+            # The first record of a fresh station: the sign-on goes first, in
+            # the clear, and the music starts after it rather than under it.
+            self.schedule.cursor = max(self.schedule.cursor,
+                                       self.clock.now() + 1.0 + speech_length + 0.6)
 
         music = self.schedule.add_music(
             url, track, dry_before=(placement == "dry" and previous is not None),

@@ -150,6 +150,20 @@ class TestSchedule(unittest.TestCase):
         self.assertAlmostEqual(item.duration, 151.5, places=1)
 
 
+class TestColdStart(unittest.TestCase):
+    """The clock runs from the first listener, long before the first record."""
+
+    def test_the_first_record_never_starts_in_the_past(self):
+        s = T.Schedule()
+        first = s.add_music("/a", TestSchedule.track(None, "a"), earliest_start=42.0)
+        self.assertGreaterEqual(first.start_at, 42.0)
+
+    def test_a_sign_on_finishes_before_the_first_record(self):
+        start = T.break_start("dry", music_start=60.0, intro=12.0, safety=0.6,
+                              speech_length=8.0)
+        self.assertAlmostEqual(start + 8.0, 60.0 - 0.6, places=3)
+
+
 class TestBreakPlacement(unittest.TestCase):
     """Back-timing: the last word should land as the vocal starts."""
 

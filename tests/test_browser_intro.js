@@ -6,11 +6,11 @@ const assert = require('node:assert/strict');
 const { read, element } = require('./browser_harness');
 
 const html = read('web/index.html');
-assert.match(html, /<script src="\/static\/legal\.js\?v=\{\{APP_VERSION\}\}" defer><\/script>\s*\n<script src="\/static\/intro\.js\?v=\{\{APP_VERSION\}\}" defer><\/script>/,
+assert.match(html, /<script src="\/static\/legal\.js\?v=\{\{APP_VERSION\}\}" defer><\/script>\s*\n<script src="\/static\/intro\.js\?v=\{\{APP_VERSION\}\}-\{\{SPLASH_REV\}\}" defer><\/script>/,
   'the intro opens after the notice, so it sits on top of it');
 const markup = html.split('id="intro"')[1].split('</dialog>')[0];
-assert.match(markup, /data-video="\/static\/splash\/intro\.mp4\?v=\{\{APP_VERSION\}\}"/);
-assert.match(markup, /data-poster="\/static\/splash\/intro-poster\.webp\?v=\{\{APP_VERSION\}\}"/);
+assert.match(markup, /data-video="\/static\/splash\/intro\.mp4\?v=\{\{APP_VERSION\}\}-\{\{SPLASH_REV\}\}"/);
+assert.match(markup, /data-poster="\/static\/splash\/intro-poster\.webp\?v=\{\{APP_VERSION\}\}-\{\{SPLASH_REV\}\}"/);
 assert.match(markup, /<video[^>]* muted playsinline preload="none"/, 'muted, inline, and nothing fetched unless it plays');
 assert.match(html, /<select id="intro-mode">/);
 
@@ -74,9 +74,16 @@ function page({stored = {}, reducedPreference = false, boothReduced = false, pla
   assert.equal(first.video.muted, true);
   assert.equal(first.video.playsInline, true);
   assert.equal(first.video.src, '/static/splash/intro.mp4?v=1');
-  assert.equal(first.video.poster, '/static/splash/intro-poster.webp?v=1');
+  assert.ok(!first.video.poster, 'no still over the moving one: the poster is the logo it ends up at, and the video opens on plain colour');
   assert.equal(first.video.played, 1);
   assert.ok(first.body.has('intro-playing'));
+  // The backstop for a video that never ends leaves this one room to play
+  // to its own end: its length, from the build's manifest, and a few
+  // seconds to get loaded and going.
+  const built = JSON.parse(read('assets/splash/manifest.json'));
+  const length = 1000 * built.frames * built.fps[1] / built.fps[0];
+  assert.equal(first.timers.length, 1);
+  assert.ok(first.timers[0].ms >= length + 3000, `${first.timers[0].ms} ms for a ${length} ms video`);
   first.video.handlers.ended();
   assert.ok(first.dialog.classList.contains('intro--out'), 'it fades');
   first.run();
@@ -118,7 +125,7 @@ function page({stored = {}, reducedPreference = false, boothReduced = false, pla
   assert.equal(daily.context.DefaltIntro.started, 'full');
   const day = daily.saved.get('defalt.intro.day');
   assert.equal(day, daily.context.DefaltIntro.today());
-  // ...then the final logo for a second on later visits that day.
+  // ...then the logo for a second on later visits that day.
   const later = page({stored: {'defalt.intro.mode': 'daily', 'defalt.intro.day': day}});
   assert.equal(later.context.DefaltIntro.started, 'still');
   assert.equal(later.dialog.open, true);
@@ -142,15 +149,27 @@ function page({stored = {}, reducedPreference = false, boothReduced = false, pla
     const still = page(options);
     assert.equal(still.context.DefaltIntro.started, 'still');
     assert.equal(still.video.played, 0, 'no motion');
+    assert.equal(still.video.poster, '/static/splash/intro-poster.webp?v=1', 'the logo');
     assert.equal(still.timers[0].ms, 800);
   }
 
-  // Autoplay refused: the still instead of a stuck black screen.
+  // Autoplay refused: the still instead of a stuck empty screen.
   const refused = page({playRejects: true});
   await new Promise(resolve => setImmediate(resolve));
   const pending = refused.timers.filter(t => !t.cleared);
   assert.equal(pending.length, 1);
   assert.equal(pending[0].ms, 800);
+  assert.equal(refused.video.src, '');
+  assert.equal(refused.video.poster, '/static/splash/intro-poster.webp?v=1');
+
+  // A video that won't load: the still too.
+  const broken = page();
+  broken.video.handlers.error();
+  const left = broken.timers.filter(t => !t.cleared);
+  assert.equal(left.length, 1);
+  assert.equal(left[0].ms, 800);
+  assert.equal(broken.video.src, '');
+  assert.equal(broken.video.poster, '/static/splash/intro-poster.webp?v=1');
 
   // The setting.
   const setting = page();

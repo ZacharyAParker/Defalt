@@ -150,11 +150,26 @@ def guard_request():
     return None
 
 
+def _splash_rev() -> str:
+    """A short name for the startup video that is built in right now.
+
+    The intro's files are cached for good under their ?v=, so they carry this
+    next to the release: swap the video and browsers fetch the new one, even
+    when the version number hasn't moved.
+    """
+    try:
+        manifest = json.loads((config.ROOT / "assets" / "splash" / "manifest.json").read_text(encoding="utf-8"))
+        return str(manifest["source"]["sha256"])[:8]
+    except (OSError, ValueError, KeyError, TypeError):
+        return "0"
+
+
 @app.get("/")
 def index():
     """The same page the desktop app serves, for running this in a browser."""
     html = (config.ROOT / "web" / "index.html").read_text(encoding="utf-8")
     html = html.replace("{{APP_VERSION}}", about.VERSION).replace("{{TERMS_VERSION}}", about.TERMS_VERSION)
+    html = html.replace("{{SPLASH_REV}}", _splash_rev())
     return Response(html, mimetype="text/html",
                     headers={"Cache-Control": "no-store"})
 

@@ -98,6 +98,10 @@ The browser player bundles Archivo (© The Archivo Project Authors) and IBM Plex
 Mono (© IBM Corp.), both under the SIL Open Font License 1.1; the licence texts
 are in `web/static/fonts/`.
 
+The startup video's music was made with the GeneralUser GS SoundFont by
+S. Christian Collins, under that SoundFont's own licence; the licence text is in
+`assets/splash-src/`. Defalt includes the finished recording, not the SoundFont.
+
 The [privacy policy](PRIVACY.md) covers storage, external providers, retention,
 and deletion limits. See the [terms](TERMS.md), [license](LICENSE),
 [copyright notice](COPYRIGHT.md), [third-party notices](THIRD-PARTY-NOTICES.md),

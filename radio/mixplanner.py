@@ -63,6 +63,24 @@ def _safe_entry(profile, offset, cue, spans=None):
             or (energy is not None and energy < 0.025))
 
 
+def _singing(spans, profile, start, end, *, unknown: bool) -> bool:
+    """Is anyone singing in [start, end] of a record?
+
+    Synced lyrics are exact while they last, but files often stop before the
+    record does (an ad-libbed outro, a last hook left untranscribed), so past
+    the last synced line the acoustic estimate decides. `unknown` is the
+    answer when there is no evidence at all.
+    """
+    last = max((_number(b) for _, b in spans), default=None) if spans else None
+    if last is not None and end <= last + 1.0:
+        sung = lyric_sections.vocal_fraction(spans, start, end)
+        return unknown if sung is None else sung > 0.05
+    if last is not None and start <= last + 1.0 and lyric_sections.vocal_fraction(spans, start, last):
+        return True
+    vocal = _window(profile, max(start, (last or start)), end, "vocal") if end > start else None
+    return unknown if vocal is None else vocal >= 0.15
+
+
 def _options():
     defaults = {"overlap_scoring": True, "vocal_collision_weight": 1.0,
                 "energy_dip_weight": 0.6, "bass_collision_weight": 0.5,
@@ -173,8 +191,14 @@ def refine(outgoing: dict, incoming: dict, plan: transitions.Plan, *,
         at = line + plan.overlap * out_rate
         if earliest_exit <= at < out_end and all(abs(at - other) > 0.25 for other, _ in exits):
             exits.append((at, 0.5))
-    lyric_entries = [{"at": at, "score": 0.5} for at in lyric_sections.entry_points(in_sections)]
+    # A sung section start is where a cut can land, never where a blend
+    # begins: a blend that opens on the first line puts a new singer on top
+    # of the old record. Blends come in on the instrumental run before it.
+    lyric_entries = [{"at": at, "score": 0.5, "cut_only": True}
+                     for at in lyric_sections.entry_points(in_sections)]
     in_spans = lyric_sections.lyric_map(incoming).get("vocal_spans") or []
+    out_spans = lyric_sections.lyric_map(outgoing).get("vocal_spans") or []
+    cut_entries: set[float] = set()
     for point in in_profile.get("entries", []) + lyric_entries:
         at = _number(point.get("at"), -1)
         if in_offset < at <= min(in_end - 10 * in_rate, in_offset + max_skip):
@@ -191,6 +215,8 @@ def refine(outgoing: dict, incoming: dict, plan: transitions.Plan, *,
                 if (snapped is not None and in_offset < snapped <= min(in_end - 10 * in_rate, in_offset + max_skip)
                         and _safe_entry(in_profile, in_offset, snapped, in_spans)):
                     at = snapped
+                if point.get("cut_only"):
+                    cut_entries.add(at)
                 entries.append((at, quality))
     # Bound work even for a damaged cache. Prefer strong nearby evidence.
     exits = exits[:1] + sorted(exits[1:], key=lambda p: (-p[1], -p[0]))[:5]
@@ -219,41 +245,78 @@ def refine(outgoing: dict, incoming: dict, plan: transitions.Plan, *,
         intro = incoming.get("intro_sec")
     out_beat = _number(outgoing.get("beat_period"), 0.5) or 0.5
     in_beat = _number(incoming.get("beat_period"), 0.5) or 0.5
+    # Blend lengths a DJ would pick: whole bars of the outgoing record (8, 4
+    # or 2) when its grid is real, else fractions of the planned length.
+    # Longest first, so a tie keeps the longer blend.
+    lengths = [plan.overlap]
+    if not forced:
+        grid_ok = (_number(outgoing.get("beat_period")) > 0
+                   and _number(outgoing.get("beat_residual_ms"), 999) <= 60)
+        if grid_ok:
+            bar = 4 * out_beat / max(out_rate, 1e-6)
+            lengths += [bars * bar for bars in (8, 4, 2) if bars * bar < plan.overlap - 0.05]
+        else:
+            lengths += [plan.overlap * scale
+                        for scale in ((0.75, 0.5) if options["overlap_scoring"] else (0.5,))]
+    last_chorus_start = max((s["start"] for s in out_sections if s["label"] == "chorus"), default=None)
     best = None
     count = 0
     for end, exit_quality in exits:
         out_length = wall_at(end)
         for cue, entry_quality in entries:
             in_length = (in_end - cue) / in_rate
-            for scale in ((1.0,) if forced else ((1.0, 0.75, 0.5, 0.25) if options["overlap_scoring"] else (1.0, 0.5))):
+            for requested in lengths:
                 # The compatibility planner already bounded beat drift and
                 # the intro. Acoustic evidence may shorten that limit, never
                 # expand it into a blend whose drums will drift apart.
-                overlap = min(plan.overlap * scale, min(out_length, in_length) * fraction)
+                overlap = min(requested, min(out_length, in_length) * fraction)
+                cut_only = cue in cut_entries
                 effective_minimum = min(minimum, min(out_length, in_length) * fraction)
                 if mid_song and out_end - out_offset >= out_full * min_play:
                     majority_at = wall_at(out_offset + out_full * min_play)
                     overlap = min(overlap, max(0.0, out_length - majority_at))
                     effective_minimum = min(effective_minimum, max(0.0, out_length - majority_at))
-                # Respect a measured/overridden vocal entry after moving a cue.
-                if not forced and intro is not None and cue <= _number(intro):
-                    overlap = min(overlap, max(minimum, (_number(intro) - cue) / in_rate))
+                # When does the incoming singer arrive? The measured or
+                # overridden intro at the opening; this cue's own evidence
+                # at a deeper entry.
+                voice_gap = None
+                first_sung = min((_number(a) for a, b in in_spans if _number(b) > cue + 0.25),
+                                 default=None) if in_spans else None
+                if not forced and first_sung is not None:
+                    # Synced lyrics say exactly when the singing starts.
+                    voice_gap = max(0.0, first_sung - cue) / in_rate
+                elif not forced and intro is not None and cue <= _number(intro):
+                    voice_gap = (_number(intro) - cue) / in_rate
                 elif not forced and cue > in_offset:
-                    # At a deeper entry the original opening's vocal timestamp
-                    # is no longer relevant. Use this cue's measured local gap.
                     vocals = [structure.at(in_profile, cue + i * 0.5).get("vocal")
                               for i in range(int(overlap * in_rate / 0.5) + 1)]
                     first_voice = next((i for i, v in enumerate(vocals) if v is not None and v > 0.2), None)
                     if first_voice is not None:
-                        overlap = min(overlap, max(minimum, first_voice * 0.5 / in_rate))
+                        voice_gap = first_voice * 0.5 / in_rate
                     elif any(v is None for v in vocals):
-                        overlap = min(overlap, max(minimum, 2.0))
+                        voice_gap = 2.0
+                if voice_gap is not None and voice_gap < overlap:
+                    # The new singer would arrive inside the blend. Over an
+                    # instrumental tail that is how DJs do it; over a singer
+                    # it is a clash. Then finish the blend as the voice comes
+                    # in, and when there is no room for a real blend, cut.
+                    # A breath between lines is not an instrumental; any sung
+                    # line in the tail counts.
+                    singing = _singing(out_spans, out_profile, source_at(out_length - overlap), end,
+                                       unknown=True)
+                    if singing:
+                        if voice_gap >= minimum:
+                            overlap = voice_gap
+                        else:
+                            cut_only = True
+                            overlap = min(overlap, max(0.4, 2 * voice_gap))
                 if mid_song and end < out_end - 0.01:
                     # The majority must be heard BEFORE fading starts, using
                     # full-file source time. Intro and outro cuts share a budget.
                     if source_at(out_length - overlap) - out_offset < out_full * min_play:
                         continue
-                if overlap < max(0.15, effective_minimum) or out_start + out_length - overlap < earliest_start:
+                if (overlap < max(0.15, 0.0 if cut_only else effective_minimum)
+                        or out_start + out_length - overlap < earliest_start):
                     continue
                 if out_start + out_length < protected_until:
                     continue
@@ -264,15 +327,31 @@ def refine(outgoing: dict, incoming: dict, plan: transitions.Plan, *,
                 in_vocal = _window(in_profile, cue, cue + overlap * in_rate, "vocal")
                 out_bass = _window(out_profile, out_local, end, "bass")
                 in_bass = _window(in_profile, cue, cue + overlap * in_rate, "bass")
-                for preset in presets:
-                    candidate = replace(templates[preset], overlap=overlap)
+                quick = None
+                if cut_only and "fade" in templates and cue not in cut_entries:
+                    # When a cut would chop a singer too, the least bad join
+                    # is a quick fade finishing as the new voice comes in.
+                    quick = min(overlap, max(1.0, voice_gap or 0.0))
+                for preset in ((("slam",) if "slam" in templates else ()) + (("fade",) if quick else ())
+                               if cut_only else presets):
+                    candidate = replace(templates[preset],
+                                        overlap=quick if cut_only and preset == "fade" else overlap)
+                    span = candidate.overlap
                     # Start from compatibility-based preference. Structural
                     # evidence can outweigh it, but random stylistic churn cannot.
                     score = 0.35 if preset == plan.preset else 0.0
                     score += 0.35 * (exit_quality + entry_quality)
                     score -= 0.5 * (out_end - end) / max(1, max_early * out_rate)
                     score -= 0.35 * (cue - in_offset) / max(1, max_skip)
-                    score -= 0.6 * abs(scale - 1.0)
+                    # Every second of blend given up costs: a shorter mix
+                    # always looks safer to the risk terms below, and left
+                    # alone that collapses every join to the minimum.
+                    score -= 0.12 * max(0.0, plan.overlap - span)
+                    if (last_chorus_start is not None and end < out_end - 0.01
+                            and out_local < last_chorus_start - out_beat):
+                        # Leaving before the final chorus cuts the part of the
+                        # song people wait for.
+                        score -= 0.6
                     if phrase_weight:
                         # Start the blend on a phrase line of the outgoing
                         # record and bring the incoming one in on its own:
@@ -293,15 +372,22 @@ def refine(outgoing: dict, incoming: dict, plan: transitions.Plan, *,
                             adapt(preview, out_profile, in_profile, end, cue, out_rate, in_rate,
                                   options=options)
                         risk = overlap_risk(preview, out_profile, in_profile,
-                            lambda t: source_at(out_length - overlap + t), cue, in_rate)
+                            lambda t: source_at(out_length - span + t), cue, in_rate)
                         for field, setting in (("vocal", "vocal_collision_weight"),
                                                ("bass", "bass_collision_weight"),
                                                ("dip", "energy_dip_weight")):
                             if risk[field] is not None:
-                                score -= risk[field] * max(0, min(2, _number(options[setting]))) * (2 if field == "vocal" else 1)
+                                # Two singers at once is worse the longer it
+                                # lasts, so that counts in total. Bass and level
+                                # dips count per second (scaled to a typical
+                                # blend): otherwise every blend looks safer the
+                                # shorter it is and they all collapse.
+                                per_second = risk[field] / max(1.0, span) * 4.0
+                                amount = max(risk[field], per_second) if field == "vocal" else per_second
+                                score -= amount * max(0, min(2, _number(options[setting]))) * (2 if field == "vocal" else 1)
                     elif out_vocal is not None and in_vocal is not None:
                         collision = out_vocal * in_vocal
-                        score -= collision * overlap * (0.1 if preset == "slam" else 0.7)
+                        score -= collision * span * (0.1 if preset == "slam" else 0.7)
                     if not options["overlap_scoring"] and out_bass is not None and in_bass is not None and candidate.eq == "none":
                         score -= out_bass * in_bass * (0.1 if preset == "slam" else 0.8)
                     # A long unmatched drum blend remains unsafe even if both
@@ -310,8 +396,23 @@ def refine(outgoing: dict, incoming: dict, plan: transitions.Plan, *,
                                                      _number(incoming.get("bpm")) * in_rate)
                     if gap > 0.06 and preset in ("blend", "wave", "rise"):
                         score -= 2.0
+                    start_cue, start_length = cue, in_length
+                    if preset == "slam":
+                        # A cut keeps the incoming record silent until the
+                        # swap in the middle of its window. On a sung entry,
+                        # start it half a window early so the swap lands on
+                        # the first word instead of swallowing it.
+                        if cue in cut_entries:
+                            start_cue = max(in_offset, cue - span / 2 * in_rate)
+                            start_length = (in_end - start_cue) / in_rate
+                        swap = source_at(out_length - span / 2)
+                        if _singing(out_spans, out_profile, swap - 0.75 * out_rate,
+                                    swap + 0.75 * out_rate, unknown=bool(out_spans)):
+                            # The swap would chop the outgoing singer off
+                            # mid-line (a breath between words still counts).
+                            continue
                     count += 1
-                    choice = Choice(candidate, out_length, cue, in_length, score)
+                    choice = Choice(candidate, out_length, start_cue, start_length, score)
                     if best is None or score > best.score + 1e-6:
                         best = choice
     if best is None:

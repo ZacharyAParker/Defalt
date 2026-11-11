@@ -70,9 +70,10 @@ stopping the music
   home screen that streams the console's real mix. see [Remote listening](docs/REMOTE.md)
 - **Report a bug** (F8) saves what you saw, the station state and the logs from
   around that moment into `reports/`. see [Feedback](docs/FEEDBACK.md)
-- it opens with the OBBY STUDIO intro in a little window, then the console comes up
-  behind it. click to skip, or set it to once a day or off under Startup video
-  in the Patches window
+- it opens with a startup video in a little window: the OBBY STUDIO logo builds
+  itself and its ring becomes the ring on the Defalt record, then the console
+  comes up behind it. click to skip, or set it to once a day or off under
+  Startup video in the Patches window
 
 the hosts need a language model and text to speech. the decks don't need
 either. Spotify is only used for search and metadata, it's never the audio
@@ -197,6 +198,8 @@ third-party audio code and its licenses are in [vendor/README.md](vendor/README.
 
 - the booth art is by **Mara**: Mav, Rue, the cat and the whole studio. the
   animation frames are made from her drawings
+- the startup music was played on the **GeneralUser GS** SoundFont by
+  S. Christian Collins. its license is in `assets/splash-src/`
 
 ## legal
 

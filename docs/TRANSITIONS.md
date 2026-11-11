@@ -25,13 +25,17 @@ What they sound like:
   bassline at a time.
 - **rise** — the new record arrives muffled and opens up while the old one
   thins out and keeps its low end until the last moment. Good for stepping up.
-- **blend** — highs hand over first, mids next, lows last. Over nine seconds
-  it reads as one record *becoming* another rather than two playing at once.
+- **blend** — both faders up while the isolators hand the highs over first,
+  then the mids, then the bass. Each band's handover is power-complementary,
+  so the sum holds level the whole way. It needs the beats locked: a blend,
+  wave or rise whose beats could not be aligned airs as a plain fade.
 - **wave** — both tracks low-passed through the middle, so the mix goes
   underwater and surfaces again on the new track.
 - **melt** — both high-passed, so the bottom drops out through the middle and
   comes back. The opposite feel to wave.
-- **slam** — no blend at all. For pairs that were never going to mix.
+- **slam** — a cut in the middle of the window with an audible echo throw.
+  Used where a blend would put two singers on top of each other, and never
+  while the outgoing record is mid-line.
 
 ## How `auto` picks the base
 
@@ -40,7 +44,8 @@ tempo close AND keys compatible  ->  blend   (long, 1.5× overlap)
 tempo close, keys clash          ->  wave
 keys compatible, tempo apart     ->  melt
 stepping up in loudness          ->  rise
-tempo far apart                  ->  slam    (short, 0.55× overlap)
+tempo far apart                  ->  fade    (plain equal-power fade; the cue
+                                             planner may make it a cut)
 nothing to go on                 ->  fade
 ```
 
@@ -67,7 +72,7 @@ or should not play, the base blend is what airs.
 |---|---|---|
 | **echo_out** | The outgoing record's last beat is caught in the echo (3/4-beat delay), the fader closes on the incoming one, and the repeats ring over the drop while a high-pass thins them away. Four beats of tail, two with clashing keys. | a tempo |
 | **loop_roll** | Rolls on the outgoing record halving towards the incoming downbeat -- 4, 2, 1, then ½ beat (2, 1, ½, ¼ when there is less room) -- with a high-pass rising and the bass leaving. Hard cut on the one. | aligned grids |
-| **brake** | Tape stop: the outgoing record slows to nothing over one or two beats and the next one slams in on the one. | a tempo |
+| **brake** | Tape stop: the outgoing record slows to nothing over a bar and the next one slams in on the one. Never over a singer, and rare. | a tempo, aligned grids |
 | **spinback** | A backwards burst on the outgoing record, smeared into the reverb, then the drop. | a tempo |
 | **echo_freeze** | The last beat is frozen in the echo (feedback ~1, send closed) and filtered away under the incoming record. | a tempo |
 | **reverb_wash** | The outgoing record washes into reverb as a high-pass climbs; the incoming one emerges from under a low-pass. The dry records trade at equal power. | -- |
@@ -333,7 +338,7 @@ the difference.
 | `hpf_ceiling_hz` | 900 | How far a high-pass climbs |
 | `long_multiplier` | 1.5 | Overlap for a matched pair |
 | `short_multiplier` | 0.55 | Overlap for a mismatched one |
-| `creativity` | 0.5 | 0 smooth radio (presets only) .. 1 show-off DJ |
+| `creativity` | 0.15 | 0 smooth radio (presets only) .. 1 show-off DJ |
 | `technique_memory` | 3 | Mixes before a technique may repeat |
 | `allow_<technique>` | true | Switch one technique off |
 | `hosts.transition_note_chance` | 0.3 | How often a break hears about a flashy mix |
@@ -342,7 +347,7 @@ All of these are in the Mix settings, under **Transitions** (the host note
 under **Hosts and speech**); the browser's Board has the picker (presets and
 techniques) and a Creativity fader. `transitions.creativity` missing from a
 configuration means 0, the smooth radio that configuration was written for;
-the shipped `station.yaml` sets 0.5.
+the shipped `station.yaml` sets 0.15.
 
 `crossfade.duration` is still the base length everything scales from, and
 `crossfade.max_fraction_of_track` still caps it against the shorter record.

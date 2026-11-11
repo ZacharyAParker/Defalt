@@ -28,7 +28,7 @@ When you enable a feature that uses an outside service, you deal with that servi
 - Spotify (catalog search, metadata and artwork)
 - Apple Music and iTunes charts, and Kworb (public chart pages)
 - Steam (library, wishlist and news)
-- OpenRouter and the language-model and voice providers it routes to, the Codex CLI and its provider, and Microsoft Edge text-to-speech
+- OpenRouter and the language-model and voice providers it routes to, the Codex CLI and its provider, Claude Code and Anthropic, and Microsoft Edge text-to-speech
 - Wikipedia (song background)
 - LRCLIB (synced lyrics)
 - Open-Meteo (weather)
@@ -89,7 +89,7 @@ To the extent permitted by applicable law, you agree to defend, indemnify and ho
 
 ## Third-party services and trademarks
 
-Defalt is an independent personal project. It is not affiliated with, sponsored by or endorsed by YouTube, Google, Spotify, Apple, Valve (Steam), OpenRouter, OpenAI, Microsoft, the Wikimedia Foundation (Wikipedia), LRCLIB, Open-Meteo, Cloudflare, Kworb, Obsidian, or any artist, label, publisher, game studio or other company named in the app, its documentation or its generated content. The same goes for DJ software such as djay, rekordbox and Serato, which the documentation mentions only for comparison.
+Defalt is an independent personal project. It is not affiliated with, sponsored by or endorsed by YouTube, Google, Spotify, Apple, Valve (Steam), OpenRouter, OpenAI, Anthropic, Microsoft, the Wikimedia Foundation (Wikipedia), LRCLIB, Open-Meteo, Cloudflare, Kworb, Obsidian, or any artist, label, publisher, game studio or other company named in the app, its documentation or its generated content. The same goes for DJ software such as djay, rekordbox and Serato, which the documentation mentions only for comparison.
 
 Those names and logos are trademarks of their respective owners and are used only to identify the services Defalt works with. Defalt doesn't control third-party services and isn't responsible for their availability, content, pricing, accuracy or changes to their terms.
 

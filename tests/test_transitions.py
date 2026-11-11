@@ -77,10 +77,13 @@ class TestChoosing(StationDefaults):
         plan = transitions.choose(self.track(128, "8A"), self.track(129, "3B"))
         self.assertEqual(plan.preset, "wave")
 
-    def test_a_big_tempo_jump_gets_a_short_hard_transition(self):
+    def test_a_big_tempo_jump_gets_a_plain_fade_not_a_blend(self):
+        # Too far apart to beatmatch: no beat-locked blend and no fade through
+        # silence. A plain equal-power fade, which the cue planner may still
+        # turn into a cut where a blend would clash.
         plan = transitions.choose(self.track(92, "8A"), self.track(140, "3B"))
-        self.assertEqual(plan.preset, "slam")
-        self.assertLess(plan.overlap, 6.0)
+        self.assertEqual(plan.preset, "fade")
+        self.assertIn("too far to beatmatch", plan.reason)
 
     def test_no_analysis_still_produces_a_usable_plan(self):
         plan = transitions.choose(self.track(0, ""), self.track(0, ""))
@@ -121,13 +124,15 @@ class TestRendering(unittest.TestCase):
         """Two basslines at once is the ugliest thing a crossfade can do."""
         for preset in ("fade", "rise", "wave", "melt"):
             outgoing, incoming = self.render(preset)
-            for moment in (0.5, 1.5, 3.0, 4.5, 5.5):
+            for moment in (0.5, 1.5, 2.6, 3.0, 3.4, 4.5, 5.5):
                 out_low = value_at(outgoing.low, moment)
                 in_low = value_at(incoming.low, moment)
-                both_up = out_low > -6 and in_low > -6
-                self.assertFalse(both_up,
-                                 f"{preset} at {moment}s: both basses up "
-                                 f"({out_low:.1f} / {in_low:.1f} dB)")
+                # The swap is power-complementary: at the crossover each is
+                # 3 dB down, so together they are one bassline, never two.
+                power = 10 ** (out_low / 10) + 10 ** (in_low / 10)
+                self.assertLessEqual(power, 1.05,
+                                     f"{preset} at {moment}s: both basses up "
+                                     f"({out_low:.1f} / {in_low:.1f} dB)")
 
     def test_the_bass_swap_lands_where_the_preset_says(self):
         _, fade_in = self.render("fade")

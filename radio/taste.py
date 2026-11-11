@@ -302,12 +302,15 @@ def recording_ids(track):
 def pick_next(exclude_keys: set[str] | None = None,
               previous: dict[str, Any] | None = None,
               history: list[dict[str, Any]] | None = None,
-              break_position: int | None = None) -> dict[str, Any] | None:
+              break_position: int | None = None,
+              songs_to_break: int | None = None) -> dict[str, Any] | None:
     """Choose the next track. Weighted sampling, not argmax -- a station that
     always plays its single favourite song is not a station.
 
     `break_position` is how many songs will have played since the last host
     break when this one airs; the set-level energy arc builds across it.
+    `songs_to_break` is how far away the next break is: 0 when it airs just
+    before this pick, n when it comes before the nth song after it.
 
     Everything per-candidate is read up front (affinity, daypart, recording
     identities) so a pass is a handful of queries, not several per track.
@@ -339,6 +342,9 @@ def pick_next(exclude_keys: set[str] | None = None,
     selection_settings = compatibility.snapshot()
     if break_position is not None:
         selection_settings["break_position"] = int(break_position)
+    if songs_to_break is not None:
+        selection_settings["songs_to_break"] = int(songs_to_break)
+        selection_settings["break_before"] = int(songs_to_break) == 0
     listening_vibe = vibe.for_selection()
     weights = cfg.get("selection.weights", {}) or {}
     w_affinity, w_fresh, w_daypart, w_seed, w_explore = (

@@ -101,6 +101,7 @@ FIELDS = [
     ("selection.compatibility.artist_weight", "Artist connection", 0.25, [0.0, 1.0]),
     ("selection.compatibility.lyrics_weight", "Lyrical connection when text is available", 0.45, [0.0, 1.0]),
     ("selection.compatibility.mix_weight", "Tempo, key and level compatibility", 0.35, [0.0, 1.0]),
+    ("selection.compatibility.tempo_weight", "Prefer songs the next one can be beatmatched into", 1.2, [0.0, 2.0]),
     ("selection.compatibility.variety_strength", "Encourage a change after similar songs", 0.65, [0.0, 1.0]),
     ("selection.compatibility.explore_chance", "Chance to explore outside the current vibe", 0.18, [0.0, 1.0]),
     ("selection.compatibility.fatigue_after", "Ease similarity after this many songs", 4, [2, 12]),

@@ -283,7 +283,31 @@ def _migrate(conn: sqlite3.Connection) -> None:
         # those are left unknown rather than guessed.
         conn.execute("UPDATE tracks SET source_lufs=lufs, applied_gain_db=0 "
                      "WHERE source='local' AND lufs IS NOT NULL AND source_lufs IS NULL")
+    _shift_old_grids(conn)
     sync_norms(conn)
+
+
+def _shift_old_grids(conn: sqlite3.Connection) -> None:
+    """Move beat grids measured before the onset-latency fix onto the beat.
+
+    Grids stored before analysis.GRID_LATENCY were all ~88 ms early. Every
+    stored grid is shifted once, together, so a corrected record and an old
+    one never get aligned against each other. user_version records it.
+    """
+    if conn.execute("PRAGMA user_version").fetchone()[0] >= 1:
+        return
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(tracks)").fetchall()}
+    if {"beat_offset", "beat_period", "downbeat_offset"} <= columns:
+        from .analysis import shift_grid
+        rows = conn.execute("SELECT key, beat_offset, beat_period, downbeat_offset FROM tracks "
+                            "WHERE beat_period > 0").fetchall()
+        updates = []
+        for key, beat, period, downbeat in rows:
+            beat = float(beat or 0.0)
+            downbeat = float(downbeat if downbeat is not None else beat)
+            updates.append((*shift_grid(beat, downbeat, float(period)), key))
+        conn.executemany("UPDATE tracks SET beat_offset=?, downbeat_offset=? WHERE key=?", updates)
+    conn.execute("PRAGMA user_version = 1")
 
 
 def sync_norms(conn: sqlite3.Connection | None = None) -> int:

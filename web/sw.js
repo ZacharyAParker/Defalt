@@ -23,8 +23,9 @@ const SHELL = [
   "/static/icons/icon-192.png",
 ];
 const LIVE = ["/api/", "/listen", "/media/", "/stream", "/sw.js"];
-/* Static, but not the shell: the startup intro is a megabyte played once
-   per load, fetched in ranges. The browser's own cache is enough for it. */
+/* Static, but not the shell: the startup intro is over half a megabyte
+   played once per load, fetched in ranges. The browser's own cache is
+   enough for it. */
 const UNCACHED = ["/static/splash/"];
 
 /* What to do with a request: "page" (network first, the cached shell when

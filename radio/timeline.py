@@ -492,6 +492,52 @@ class Schedule:
         return dropped
 
     # -- placement -------------------------------------------------------
+    @staticmethod
+    def _aligned_shift(nudge: float, overlap: float, overlap_cap: float, start: float,
+                       previous: Item, previous_rate: float, phase_shift: float,
+                       out_row: dict[str, Any], track: dict[str, Any], offset: float,
+                       rate: float) -> float | None:
+        """How far to move the incoming start so the beats, and if possible
+        the bars, of the two records coincide; None when nothing fits.
+
+        `nudge` puts the beats together within half a beat either way. Any
+        whole number of beats on top keeps them together, so the choice
+        among those is the one that also puts the incoming downbeat on an
+        outgoing downbeat, then the smallest move. Lengthening is allowed up
+        to the cap the overlap was sized under; it used to be folded into a
+        shortening, which the minimum length then refused at a 3 s blend.
+        """
+        beat = float(out_row.get("beat_period") or 0)
+        if beat <= 0:
+            return None
+        minimum = transitions.minimum_overlap(overlap)
+        bar = 4 * beat
+        in_down = track.get("downbeat_offset")
+        out_down = previous.meta.get("downbeat_offset")
+        phase = None
+        if in_down is not None and out_down is not None:
+            # Both downbeats in wall seconds: the outgoing one relative to its
+            # item start, the incoming one relative to where it starts now.
+            out_phase = (float(out_down) - previous.offset - phase_shift) / (previous_rate or 1.0)
+            in_phase = (float(in_down) - offset) / (rate or 1.0)
+            phase = (start - previous.start_at) + in_phase - out_phase
+        best = None
+        for steps in range(-4, 5):
+            shift = nudge + steps * beat
+            length = overlap - shift
+            if length < minimum - 1e-6 or length > max(overlap, overlap_cap) + 1e-6:
+                continue
+            if abs(shift) > max(bar, overlap * 0.5):
+                continue
+            off_bar = 0.0
+            if phase is not None:
+                error = (phase + shift) % bar
+                off_bar = min(error, bar - error)
+            rank = (round(off_bar / beat), abs(shift))
+            if best is None or rank < best[0]:
+                best = (rank, shift)
+        return None if best is None else round(best[1], 4)
+
     def crossfade_for(self, outgoing: Item | None, incoming_duration: float) -> float:
         cfg = config.station
         length = float(cfg.get("crossfade.duration", 6.0) or 0.0)
@@ -518,6 +564,9 @@ class Schedule:
             if outro > offset and duration - outro > 2.0:
                 duration = min(duration, outro + 1.5)
         duration -= offset
+        # Tempo from the fitted beat grid, not the coarse detected BPM, for
+        # every decision below and for the record this one hands on to.
+        track = transitions.with_grid_tempo(track)
         effective_track = dict(track)
         intro = track.get("intro_override")
         if intro is None:
@@ -531,6 +580,8 @@ class Schedule:
         out_row = dict(self._last_row or {})
         previous_curve = []
         previous_rate = 1.0
+        phase_shift = 0.0
+        overlap_cap = 0.0
         if previous is not None:
             previous_curve = previous.meta.get("rate_curve") or []
             initial = previous.meta.get("playback_rate", 1.0)
@@ -611,11 +662,12 @@ class Schedule:
             # until the exact recovery curve is known below.
             incoming_cap_duration = (min(duration, duration * rate)
                                      if cfg.get("transitions.tempo_recovery", False) else duration)
-            plan.overlap = max(0.0, min(plan.overlap,
-                                        min(previous.duration, incoming_cap_duration) * cap,
-                                        previous.end_at - earliest_start))
+            overlap_cap = max(0.0, min(min(previous.duration, incoming_cap_duration) * cap,
+                                       previous.end_at - earliest_start))
             if previous_curve:
-                plan.overlap = min(plan.overlap, max(0.0, previous.duration - previous_curve[-1][0]))
+                overlap_cap = min(overlap_cap, max(0.0, previous.duration - previous_curve[-1][0]))
+            plan.overlap = max(0.0, min(plan.overlap, overlap_cap))
+            if previous_curve:
                 plan.reason += "; stable tail after tempo recovery"
             overlap = plan.overlap
             phrase_beats = int(cfg.get("transitions.phrase_beats", 4) or 0)
@@ -632,25 +684,34 @@ class Schedule:
 
         beats_aligned = False
         if previous is None:
-            start = max(self.cursor, 0.0)
+            # The clock runs from the first listener, well before the first
+            # record is downloaded and placed; never start it in the past.
+            start = max(self.cursor, earliest_start, 0.0)
             fade_in = 0.35
         elif overlap > 0:
             start = previous.end_at - overlap
             if trusted_grids:
                 in_grid = dict(track, beat_offset=float(track.get("beat_offset") or 0) - offset)
                 nudge, why = transitions.beat_nudge(out_row, in_grid, start - previous.start_at, overlap, rate)
-                # Never lengthen past the intro/track cap chosen above.
-                if nudge < 0:
-                    nudge += out_row["beat_period"]
-                aligned = (not why and nudge <= overlap * 0.25
-                           and overlap - nudge >= transitions.minimum_overlap(overlap))
+                shift = None if why else self._aligned_shift(
+                    nudge, overlap, overlap_cap, start, previous, previous_rate, phase_shift,
+                    out_row, track, offset, rate)
+                aligned = shift is not None
                 if aligned:
-                    start += nudge
+                    start += shift
                     beats_aligned = True
                 overlap = previous.end_at - start
                 plan.overlap = overlap
                 if aligned:
                     plan.reason += "; beats aligned"
+            if not beats_aligned and plan.preset in ("blend", "wave", "rise"):
+                # These keep both records up through the middle: with the
+                # beats not locked that is two drum kits galloping. A plain
+                # equal-power fade is what a DJ does with an unlocked pair.
+                plan.preset = "fade"
+                plan.volume, plan.eq, plan.effects = transitions.preset_spec("fade")
+                transitions.configured(plan)
+                plan.reason += "; beats not locked, plain fade"
                 if abs(rate - 1) > 0.00001:
                     plan.reason += f"; pitch {(rate - 1) * 100:+.1f}%"
             fade_in = overlap
@@ -1138,7 +1199,10 @@ def break_start(placement: str, *, music_start: float, intro: float,
         return max(start, floor)
 
     if placement == "dry":
-        return (previous_end + 0.6) if previous_end is not None else music_start
+        if previous_end is not None:
+            return previous_end + 0.6
+        # Nothing on air yet (a sign-on): talk in the clear, then the music.
+        return music_start - 0.6 - speech_length
 
     # bridge / over_intro
     start = post - speech_length

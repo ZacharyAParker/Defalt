@@ -39,6 +39,17 @@ class TestBeatTracking(unittest.TestCase):
             self.assertAlmostEqual(found, 60.0 / bpm, places=2,
                                    msg=f"{bpm} BPM")
 
+    def test_the_grid_sits_on_the_beats(self):
+        """Phase, not just period: the console quantizes to this absolute time."""
+        for bpm in (90.0, 120.0, 140.0, 174.0):
+            grid = self.grid(bpm)
+            period = grid["beat_period"]
+            # click_track's first click is at 0.1 s.
+            error = ((grid["beat_offset"] - 0.1 + period / 2) % period) - period / 2
+            self.assertLess(abs(error), 0.015, f"{bpm} BPM grid is {error * 1000:.0f} ms off")
+            bar_error = ((grid["downbeat_offset"] - 0.1 + period / 2) % period) - period / 2
+            self.assertLess(abs(bar_error), 0.015, f"{bpm} BPM downbeat is off the beat")
+
     def test_a_steady_grid_has_a_small_residual(self):
         """Residual is the confidence measure, so it has to mean something."""
         self.assertLess(self.grid(120.0)["beat_residual_ms"], 30)
@@ -138,6 +149,64 @@ class TestBeatNudge(StationDefaults):
             self.assertEqual(why, "disabled")
         finally:
             config.station.set("transitions.beat_align", True)
+
+
+class TestGridTempo(unittest.TestCase):
+    def test_a_good_grid_replaces_the_coarse_bpm(self):
+        row = {"bpm": 117.5, "beat_period": 0.5, "beat_residual_ms": 12.0}
+        self.assertEqual(transitions.grid_bpm(row), 120.0)
+
+    def test_a_failed_or_missing_grid_keeps_the_detected_bpm(self):
+        for row in ({"bpm": 117.5, "beat_period": 0.0, "beat_residual_ms": 999.0},
+                    {"bpm": 117.5, "beat_period": 0.5, "beat_residual_ms": 250.0},
+                    {"bpm": 117.5, "beat_period": 0.25, "beat_residual_ms": 10.0},
+                    {"bpm": 117.5}):
+            self.assertEqual(transitions.grid_bpm(row), 117.5, row)
+
+    def test_matched_grids_need_no_pitch(self):
+        """Two true 120s that the lag search read as 117.5 and 123."""
+        out = {"bpm": 117.5, "beat_period": 0.5, "beat_residual_ms": 10.0}
+        inc = {"bpm": 123.0, "beat_period": 0.5, "beat_residual_ms": 10.0}
+        rate, why = transitions.tempo_match(out, inc)
+        self.assertEqual((rate, why), (1.0, ""))
+
+
+class TestGridFit(unittest.TestCase):
+    FPS = 100.0
+
+    def test_dropped_and_doubled_beats_do_not_loosen_the_grid(self):
+        """A steady 120 with two beats missed in a breakdown and one extra in
+        a fill. Numbering beats by their order read this as 250 ms loose."""
+        beats = [0.31 + 0.5 * n for n in range(200) if n not in (50, 51, 120)]
+        beats.append(0.31 + 0.5 * 80 + 0.25)
+        grid = analysis.fit_grid(np.array(sorted(beats)) * self.FPS, self.FPS)
+        self.assertAlmostEqual(grid["beat_period"], 0.5, places=4)
+        self.assertAlmostEqual(grid["beat_offset"], 0.31, places=3)
+        self.assertLess(grid["beat_residual_ms"], 5)
+        self.assertGreater(grid["beat_inliers"], 0.99)
+
+    def test_beats_that_mostly_miss_any_grid_are_not_a_grid(self):
+        rng = np.random.default_rng(3)
+        beats = np.cumsum(rng.uniform(0.35, 0.65, 200))
+        grid = analysis.fit_grid(beats * self.FPS, self.FPS)
+        self.assertEqual(grid["beat_residual_ms"], 999.0)
+
+
+class TestGridShiftMigration(unittest.TestCase):
+    def test_old_grids_move_once(self):
+        import sqlite3
+        from radio import db
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE tracks (key TEXT, beat_offset REAL, beat_period REAL, downbeat_offset REAL)")
+        conn.execute("INSERT INTO tracks VALUES ('a', 0.45, 0.5, 1.95), ('b', 0, 0, 0)")
+        db._shift_old_grids(conn)
+        db._shift_old_grids(conn)
+        rows = dict((k, (b, d)) for k, b, d in conn.execute("SELECT key, beat_offset, downbeat_offset FROM tracks"))
+        latency = analysis.GRID_LATENCY
+        self.assertAlmostEqual(rows["a"][0], (0.45 + latency) % 0.5, places=4)
+        self.assertAlmostEqual(rows["a"][1], (1.95 + latency) % 2.0, places=4)
+        self.assertEqual(rows["b"], (0, 0))
+        self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 1)
 
 
 if __name__ == "__main__":

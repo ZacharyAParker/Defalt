@@ -58,6 +58,31 @@ class CompatibilityTests(unittest.TestCase):
         self.assertGreater(before[0], before[1])
         self.assertGreater(after[1], after[0])
 
+    def test_tempo_fit_counts_only_pairs_that_can_be_beatmatched(self):
+        def gridded(key, bpm, residual=20.0):
+            return record(key, bpm=bpm, beat_period=60.0 / bpm, beat_residual_ms=residual)
+        current = gridded("a", 120)
+        self.assertEqual(compatibility.tempo_fit(current, gridded("near", 123)), 1)
+        self.assertEqual(compatibility.tempo_fit(current, gridded("half", 61)), 1)
+        self.assertEqual(compatibility.tempo_fit(current, gridded("far", 140)), 0)
+        # A grid too loose to lock is no evidence either way.
+        self.assertIsNone(compatibility.tempo_fit(current, gridded("loose", 121, residual=45)))
+        self.assertIsNone(compatibility.tempo_fit(current, record("tagged", bpm=121)))
+
+    def test_beatmatchable_next_song_is_preferred_unless_a_break_covers_the_join(self):
+        def gridded(key, bpm):
+            return record(key, bpm=bpm, beat_period=60.0 / bpm, beat_residual_ms=20.0)
+        current, near, far = gridded("a", 120), gridded("b", 122), gridded("c", 150)
+        settings = compatibility.snapshot()
+        lift = (compatibility.evaluate(near, current, [current], settings)["multiplier"]
+                / compatibility.evaluate(far, current, [current], settings)["multiplier"])
+        self.assertGreater(lift, 2.5)
+        self.assertIn("can be beatmatched",
+                      compatibility.evaluate(near, current, [current], settings)["reason"])
+        covered = {**settings, "break_before": True}
+        self.assertAlmostEqual(compatibility.evaluate(near, current, [current], covered)["multiplier"],
+                               compatibility.evaluate(far, current, [current], covered)["multiplier"])
+
     def test_artist_credit_bridge_and_repetition_are_separate_signals(self):
         current = record("a", artist="Kendrick Lamar feat. SZA")
         matching = record("b", artist="SZA")
